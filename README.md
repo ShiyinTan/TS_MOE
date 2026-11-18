@@ -170,6 +170,7 @@ python examples/make_demo.py --data-root data
 python -m tsmoe prepare --data-root data --city demo --out runs/demo/cache
 # train / evaluate 默认 --device auto（GPU 可用则走 CUDA）
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model --epochs 1 --dim 16 --heads 2 --layers 1
+# 评估结果默认写入 <checkpoint 目录>/eval_<split>/{metrics.json,report.txt}
 python -m tsmoe evaluate --cache runs/demo/cache --checkpoint runs/demo/model/best.pt
 # 等价显式写法：在上述两条命令末尾加 --device cuda 或 --device cuda:0
 ```
@@ -218,8 +219,11 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
 
 ```bash
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
+# 默认写出 runs/tokyo/model/eval_test/{metrics.json,report.txt}；也可用 --out / --output
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
-  --split test --output runs/tokyo/test.json --device cuda
+  --split test --device cuda
+python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
+  --split test --out runs/tokyo/eval_test --output runs/tokyo/test.json --device cuda
 ```
 
 省略 `--device` 时默认为 `auto`。其它城市把 `--city` / 路径里的 `tokyo` 换成对应前缀即可；`download_city.py` 支持：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
@@ -245,8 +249,8 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 命令 | 作用 |
 | --- | --- |
 | `prepare` | 读 CSV → 样本、折外量化器、逐 POI SURD 表 → 写入 `--out` 缓存 |
-| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt` |
-| `evaluate` | 对训练目录内全部 POI 精确打分，输出 Recall / NDCG / MRR @1/5/10 |
+| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `eval_validation/` |
+| `evaluate` | 全目录精确排名；终端表格 + `metrics.json` / `report.txt`（Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20） |
 | `inspect` | 查看某 POI 的 26 维 SURD；可选某训练前缀的簇与联合计数 |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
 | `explain` | 审计一个候选的先验、路由与得分贡献 |
@@ -286,7 +290,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128（可按显存下调） |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。评估对训练出现过的全部 POI 分块打分；JSON 含 `all_targets` 与 `known_only` 两种分母及覆盖率。并列得分按目录行升序排名。一次预测一个正确目标，故此处 Recall@K = Hit@K。Ctrl+C 在当前 step 边界退出（再按一次强制）。
+训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。最佳验证指标另存 `eval_validation/{metrics.json,report.txt}`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。评估对训练出现过的全部 POI 分块打分；默认结果目录为 `<checkpoint 所在目录>/eval_<split>/`（可用 `evaluate --out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、分组、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
 
 ---
 

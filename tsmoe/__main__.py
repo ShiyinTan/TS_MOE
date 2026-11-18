@@ -58,8 +58,10 @@ def main():
     t.add_argument("--seed", type=int, default=42)
     t.set_defaults(func=train)
 
-    e = commands.add_parser("evaluate", help="exact ranking over every training POI")
+    e = commands.add_parser("evaluate", help="exact ranking over every training POI; write metrics.json + report.txt")
     e.set_defaults(func=evaluate_cli)
+    e.add_argument("--out", help="directory for metrics.json and report.txt "
+                   "(default: <checkpoint-dir>/eval_<split>)")
     x = commands.add_parser("explain", help="audit one candidate's prior, router and score contributions")
     x.add_argument("--sample-index", type=int, default=0)
     x.add_argument("--poi-id", type=int, help="external venue_id; default is the true POI or top prediction for OOV")
@@ -72,7 +74,7 @@ def main():
         parser.add_argument("--split", choices=("validation", "test"), default="test")
     for parser in (e, x, r):
         parser.add_argument("--checkpoint", required=True)
-        parser.add_argument("--output", help="JSON output path; defaults to stdout")
+        parser.add_argument("--output", help="optional extra JSON path (evaluate also writes --out/metrics.json)")
     for parser in (t, e, x, r):
         parser.add_argument("--cache", required=True)
         parser.add_argument("--device", default="auto", help="auto, cpu, cuda, cuda:0, or mps")

@@ -6,6 +6,7 @@ import random
 import tempfile
 from collections import Counter, defaultdict
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -16,6 +17,9 @@ from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable, gather_fold_priors
+
+# Cutoffs used for Acc/Hit/Recall/NDCG/MRR/MAP tables (next-POI papers often include @20).
+METRIC_KS = (1, 5, 10, 20)
 
 
 def load_file(path):
@@ -124,17 +128,162 @@ def ranks_of(scores, target):
 
 
 def metric_row(ranks):
+    """Aggregate ranks into ranking metrics.
+
+    Single correct next-POI target ⇒ Acc@K = Hit@K = Recall@K, and MAP@K = MRR@K
+    (AP of one relevant item is 1/rank when rank ≤ K). Unknown / out-of-catalog
+    targets use rank sentinel 0 and contribute 0 to hit-based metrics under the
+    all_targets denominator; known_only drops them first.
+    """
     ranks = torch.as_tensor(ranks)
     known = ranks > 0
-    out = dict(samples=len(ranks), known_targets=int(known.sum()),
-               coverage=float(known.double().mean()) if len(ranks) else None)
-    for k in (1, 5, 10):
+    n = len(ranks)
+    known_ranks = ranks[known].double()
+    out = dict(samples=n, known_targets=int(known.sum()),
+               coverage=float(known.double().mean()) if n else None)
+    if known_ranks.numel():
+        out["mean_rank"] = float(known_ranks.mean())
+        out["median_rank"] = float(known_ranks.median())
+        # Full MRR (no K cutoff) over the same denominator as @K metrics.
+        recip = torch.zeros(n, dtype=torch.float64)
+        recip[known] = 1.0 / known_ranks
+        out["MRR"] = float(recip.mean()) if n else None
+    else:
+        out["mean_rank"] = out["median_rank"] = out["MRR"] = None
+    for k in METRIC_KS:
         hit = known & (ranks <= k)
         discount = ranks[hit].double()
-        for label, total in (("Recall", float(hit.sum())), ("NDCG", (1 / (1 + discount).log2()).sum().item()),
-                             ("MRR", (1 / discount).sum().item())):
-            out[f"{label}@{k}"] = total / len(ranks) if len(ranks) else None
+        recall = float(hit.sum()) / n if n else None
+        ndcg = ((1 / (1 + discount).log2()).sum().item() / n) if n else None
+        mrr_at = ((1 / discount).sum().item() / n) if n else None
+        out[f"Recall@{k}"] = recall
+        out[f"Hit@{k}"] = recall
+        out[f"Acc@{k}"] = recall
+        out[f"NDCG@{k}"] = ndcg
+        out[f"MRR@{k}"] = mrr_at
+        out[f"MAP@{k}"] = mrr_at  # single relevant ⇒ MAP@K == MRR@K
     return out
+
+
+def _fmt(value, width=8):
+    if value is None:
+        return f"{'—':>{width}}"
+    if isinstance(value, float):
+        return f"{value:{width}.4f}"
+    return f"{value:>{width}}"
+
+
+def format_metric_block(row, title):
+    """Compact human-readable table for one metric_row dict."""
+    lines = [title,
+             f"  samples={row['samples']}  known={row['known_targets']}  "
+             f"coverage={_fmt(row['coverage']).strip()}  "
+             f"mean_rank={_fmt(row['mean_rank']).strip()}  "
+             f"median_rank={_fmt(row['median_rank']).strip()}  "
+             f"MRR={_fmt(row['MRR']).strip()}"]
+    header = f"  {'metric':<8}" + "".join(f"{'@' + str(k):>8}" for k in METRIC_KS)
+    lines.append(header)
+    for name in ("Acc", "Recall", "Hit", "NDCG", "MRR", "MAP"):
+        # Acc/Hit/Recall share values; still print Acc + NDCG + MRR as the main trio,
+        # and MAP once (aliases documented in README).
+        if name in ("Recall", "Hit"):
+            continue
+        cells = "".join(_fmt(row.get(f"{name}@{k}")) for k in METRIC_KS)
+        label = "Acc/Hit" if name == "Acc" else name
+        lines.append(f"  {label:<8}{cells}")
+    return "\n".join(lines)
+
+
+def format_eval_report(payload, group_keys=None):
+    """Terminal / report.txt text: overview + main tables + short group summary."""
+    lines = ["=== Evaluation ==="]
+    for key in ("split", "device", "cache", "cache_id", "checkpoint", "catalog_size",
+                "target_mode", "timestamp_utc"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            lines.append(f"  {key}={value}")
+    lines.append("")
+    lines.append(format_metric_block(payload["all_targets"], "all_targets (OOV / unknown → miss)"))
+    lines.append("")
+    lines.append(format_metric_block(payload["known_only"], "known_only (in-catalog targets)"))
+    groups = payload.get("groups") or {}
+    if groups:
+        keys = group_keys or sorted(groups)
+        lines.append("")
+        lines.append("groups (Acc@10 / NDCG@10 / MRR / n_known)")
+        for key in keys:
+            row = groups[key]
+            lines.append(
+                f"  {key:<28}"
+                f"Acc@10={_fmt(row.get('Acc@10')).strip()}  "
+                f"NDCG@10={_fmt(row.get('NDCG@10')).strip()}  "
+                f"MRR={_fmt(row.get('MRR')).strip()}  "
+                f"known={row['known_targets']}/{row['samples']}")
+    return "\n".join(lines) + "\n"
+
+
+def print_eval_tables(payload):
+    """Print a tqdm-friendly summary (plain lines, no JSON dump)."""
+    text = format_eval_report(payload)
+    print(text, end="", flush=True)
+
+
+def resolve_eval_out(args):
+    """Directory for metrics.json / report.txt; default beside the checkpoint."""
+    if getattr(args, "out", None):
+        return Path(args.out)
+    # Sibling of the train --out directory that holds best.pt.
+    return Path(args.checkpoint).resolve().parent / f"eval_{args.split}"
+
+
+def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, checkpoint=None):
+    settings = {key: value for key, value in vars(args).items()
+                if isinstance(value, (str, float, int, bool))}
+    ckpt_path = checkpoint_path or getattr(args, "checkpoint", None)
+    ckpt = checkpoint
+    if ckpt is None and ckpt_path and Path(ckpt_path).is_file():
+        ckpt = load_file(ckpt_path)
+    ckpt = ckpt or {}
+    return dict(
+        timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        split=getattr(args, "split", None),
+        catalog_size=len(cache.pois),
+        target_mode=cache.cfg["eval_targets"],
+        cache=str(Path(args.cache).resolve()),
+        cache_id=cache.id,
+        checkpoint=str(Path(ckpt_path).resolve()) if ckpt_path else None,
+        device=str(device),
+        cuda_available=torch.cuda.is_available(),
+        model_config=ckpt.get("config"),
+        training_args=ckpt.get("training_args"),
+        checkpoint_epoch=ckpt.get("epoch"),
+        checkpoint_validation_ndcg10=ckpt.get("validation_ndcg10"),
+        cli=settings,
+        metric_ks=list(METRIC_KS),
+        metric_notes=("Acc@K=Hit@K=Recall@K and MAP@K=MRR@K for single next-POI target; "
+                      "rank ties break by lower catalog row index; "
+                      "unknown targets use rank 0 and count as misses under all_targets."),
+        **metrics,
+    )
+
+
+def save_eval_results(payload, out_dir, legacy_output=None):
+    """Write metrics.json + report.txt under out_dir; optionally mirror JSON to --output."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    metrics_path = out / "metrics.json"
+    report_path = out / "report.txt"
+    dump_json(payload, metrics_path)
+    report_path.write_text(format_eval_report(payload), encoding="utf-8")
+    print(f"Wrote {metrics_path}", flush=True)
+    print(f"Wrote {report_path}", flush=True)
+    if legacy_output:
+        legacy = Path(legacy_output)
+        if legacy.resolve() != metrics_path.resolve():
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            dump_json(payload, legacy)
+            print(f"Wrote {legacy}", flush=True)
+    return metrics_path, report_path
 
 
 @torch.inference_mode()
@@ -197,7 +346,7 @@ def train(args):
     final = cache.table("final", device)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    best, history = -math.inf, []
+    best, history, best_metrics = -math.inf, [], None
     settings = {key: value for key, value in vars(args).items() if isinstance(value, (str, float, int, bool))}
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     for epoch in epoch_bar:
@@ -230,11 +379,23 @@ def train(args):
         history.append(record)
         if score > best:
             best = score
+            best_metrics = metrics
             save_checkpoint(dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
                                  epoch=epoch, validation_ndcg10=score, training_args=settings), out / "best.pt")
         dump_json({"training_args": settings, "epochs": history}, out / "history.json")
-        epoch_bar.set_postfix(loss=f"{record['loss']:.5f}", ndcg10=f"{score:.6f}")
-        print(f"epoch={epoch} loss={record['loss']:.5f} validation NDCG@10={score:.6f}", flush=True)
+        row = metrics["all_targets"]
+        epoch_bar.set_postfix(loss=f"{record['loss']:.5f}", ndcg10=f"{score:.6f}",
+                              acc10=f"{row['Acc@10']:.4f}")
+        print(f"epoch={epoch} loss={record['loss']:.5f}  "
+              f"val Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f} "
+              f"MRR={row['MRR']:.4f}", flush=True)
+    if best_metrics is not None:
+        payload = build_eval_payload(args, cache, best_metrics, device,
+                                     checkpoint_path=out / "best.pt")
+        payload["split"] = "validation"
+        payload["selection"] = "best_checkpoint_by_NDCG@10"
+        print_eval_tables(payload)
+        save_eval_results(payload, out / "eval_validation")
 
 
 def load_model(args):
@@ -245,7 +406,7 @@ def load_model(args):
     model = cache.model(ModelConfig(**checkpoint["config"])).to(device)
     model.load_state_dict(checkpoint["weights"])
     print(f"model_param_device={next(model.parameters()).device}", flush=True)
-    return cache, model.eval(), cache.table("final", device)
+    return cache, model.eval(), cache.table("final", device), checkpoint
 
 
 def report(value, dest):
@@ -259,19 +420,23 @@ def report(value, dest):
 
 def evaluate_cli(args):
     install_interrupt_handler()
-    cache, model, table = load_model(args)
+    cache, model, table, checkpoint = load_model(args)
+    device = table.routing_prior.device
     training = cache.split("train")
     category_frequency = Counter(training["C"].tolist())
     metrics = evaluate(model, table, cache.split(args.split), cache, args.eval_batch_size,
                        args.chunk, category_frequency, desc=f"eval {args.split}")
-    report(dict(split=args.split, catalog_size=len(cache.pois), target_mode=cache.cfg["eval_targets"],
-                cache_id=cache.id, **metrics), args.output)
+    payload = build_eval_payload(args, cache, metrics, device,
+                                 checkpoint_path=args.checkpoint, checkpoint=checkpoint)
+    print_eval_tables(payload)
+    out_dir = resolve_eval_out(args)
+    save_eval_results(payload, out_dir, legacy_output=args.output)
 
 
 @torch.inference_mode()
 def explain(args):
     install_interrupt_handler()
-    cache, model, table = load_model(args)
+    cache, model, table, _ = load_model(args)
     data = cache.split(args.split)
     i = args.sample_index
     if not 0 <= i < len(data["end"]):
@@ -320,7 +485,7 @@ def explain(args):
 @torch.inference_mode()
 def recommend(args):
     install_interrupt_handler()
-    cache, model, table = load_model(args)
+    cache, model, table, _ = load_model(args)
     groups, _ = read_split(args.history)
     cats = Categories.from_manifest(cache.meta["preprocessing"])
     data = build_split(groups, cats, cache.pois, cache.meta["cat_vocab"], cache.cfg["max_length"], "predict")
