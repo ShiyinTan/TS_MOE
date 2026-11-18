@@ -18,6 +18,9 @@ import tempfile
 
 import torch
 from torch import nn
+from tqdm.auto import tqdm
+
+from .runtime import check_interrupt
 
 
 SOURCE_ORDER = ("P", "C", "T", "L")
@@ -165,7 +168,9 @@ def build_offline_surd(q_states, target_rows, poi_ids, *, sample_weight=None,
     raw = torch.zeros(V, 26, dtype=DTYPE)
     near_tie = torch.zeros(V, dtype=torch.bool)
     zero_tol = atol + rtol * specific.abs().amax(dim=1).clamp_min(1.0)
-    for row in torch.nonzero(observed, as_tuple=False).flatten().tolist():
+    observed_rows = torch.nonzero(observed, as_tuple=False).flatten().tolist()
+    for row in tqdm(observed_rows, desc="SURD per POI", leave=False, dynamic_ncols=True):
+        check_interrupt()
         raw[row] = surd_event_torch(specific[row], atol, rtol)
         if specific[row].max() > -target_probability[row].log2() + zero_tol[row]:
             raise ArithmeticError("event-information upper bound failed")

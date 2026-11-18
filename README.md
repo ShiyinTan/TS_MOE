@@ -4,15 +4,15 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 算法设计见仓库根目录 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
 
-**依赖只有 Python 标准库 + PyTorch**（`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：请在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
+**依赖是 Python 标准库 + NumPy + tqdm + PyTorch**（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：请在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-面向 **NVIDIA GPU 服务器**：用 conda 建 Python 环境，再用 **pip 的 CUDA 12.4 轮子**装 PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（检测到 CUDA 时用 GPU）。东京连通性烟雾曾在 CPU 上跑通；GPU 上用同一 CLI，换 `--device` 即可。
+面向 **NVIDIA GPU 服务器**：用 conda 建 Python 环境，再用 **pip** 装 NumPy、tqdm 与 **CUDA 12.4 轮子**的 PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（检测到 CUDA 时用 GPU）；训练开始会打印 `Using device=...`。东京连通性烟雾曾在 CPU 上跑通；GPU 上用同一 CLI，换 `--device` 即可。进度条默认开启（`tqdm`；无 TTY 时仍会按行刷新）。
 
 ---
 
 ## 1. 用 Conda 创建 CUDA 环境（推荐）
 
-需要已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。`environment.yml` 只创建 **Python 3.12 + pip**；随后从 PyTorch 官方 cu124 索引安装 GPU 轮子（**无需**本机再装完整 CUDA Toolkit）。
+需要已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。`environment.yml` 创建 **Python 3.12 + pip + NumPy + tqdm**；随后从 PyTorch 官方 cu124 索引安装 GPU 轮子（**无需**本机再装完整 CUDA Toolkit）。
 
 为何不用 `conda install pytorch pytorch-cuda`：conda 版 `libtorch_cpu.so` 动态链接 MKL / `intel-openmp`，solver 若拉到不兼容的 MKL（常见于 2024.1+ / 2025.x）会在 `import torch` 时报 `undefined symbol: iJIT_NotifyEvent`。官方 **pip CUDA 轮子静态链接 MKL**，可避开该冲突。
 
@@ -22,14 +22,17 @@ cd TS_MOE   # 仓库根目录
 conda env create -f environment.yml
 conda activate tsmoe
 
+# NumPy + tqdm（PyPI；与 requirements.txt 一致）。已有 env 缺依赖时可单独跑。
+python -m pip install "numpy>=1.26,<3" "tqdm>=4.66,<5"
+
 # CUDA 12.4 构建；与 requirements.txt 的版本范围一致
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
 
 # 确认：应打印 True，且 device 为 cuda:0（或同类）
-python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
+python -c "import numpy, tqdm, torch; print(numpy.__version__, tqdm.__version__, torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
 ```
 
-之后若只改了 `environment.yml`（Python / pip）：
+之后若只改了 `environment.yml`（Python / pip / NumPy / tqdm）：
 
 ```bash
 conda env update -f environment.yml --prune
@@ -77,7 +80,9 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available()); pr
 ```bash
 conda activate tsmoe
 
-# 默认 --device auto：有 CUDA 则用 GPU
+# --cache 须先由 prepare 写出（含 manifest.json），例如：
+#   python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
+# 默认 --device auto：有 CUDA 则用 GPU；启动应看到 Using device=cuda ... gpu='...'
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --split test
 
@@ -85,6 +90,8 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --device cuda:0
 ```
+
+用 `nvidia-smi` 对照进程 GPU 占用；日志里找 `Using device=cuda` / `model_param_device=cuda:...`。若 `--device auto` 静默落到 CPU，会打印 `WARNING: --device auto fell back to CPU...`。训练 / 评估过程中 **Ctrl+C** 会在当前 step 结束后干净退出（再按一次强制退出）。
 
 显存紧张时可减小 `--eval-batch-size` / `--chunk`（评估）或 `--batch-size` / `--negatives`（训练）；这些标志已存在于 CLI。
 
@@ -94,6 +101,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 
 ```bash
 conda activate tsmoe
+python -m pip install "numpy>=1.26,<3" "tqdm>=4.66,<5"
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cpu
 ```
 
@@ -104,11 +112,12 @@ python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/w
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install "numpy>=1.26,<3" "tqdm>=4.66,<5"
 # 与上文 conda 路径相同的 CUDA 12.4 轮子；其它版本见 pytorch.org
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
 ```
 
-`requirements.txt` 仅声明版本范围 `torch>=2.4,<3`，不锁定 CUDA/CPU 轮子；GPU 服务器请用上面的 cu124 索引。
+`requirements.txt` 声明 `numpy>=1.26,<3`、`tqdm>=4.66,<5` 与 `torch>=2.4,<3`，不锁定 CUDA/CPU 轮子；GPU 服务器请用上面的 cu124 索引装 torch。
 
 ---
 
@@ -273,11 +282,11 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 | `train --lambda-prior`、`--lambda-surd`、`--lambda-balance` | 0.1、0.05、0.001 |
 | `train --negatives` | 每例 63 个均匀负例；`-1` 为全目录 |
 | `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督（结构仍保留） |
-| `--device`（仅 train / evaluate / explain / recommend） | 默认 `auto`：`cuda.is_available()` 则为 CUDA，否则 CPU；也可 `cpu`、`cuda`、`cuda:0`、`mps` |
+| `--device`（仅 train / evaluate / explain / recommend） | 默认 `auto`：`cuda.is_available()` 则为 CUDA，否则 CPU（并 WARNING）；也可 `cpu`、`cuda`、`cuda:0`、`mps`；启动打印 `Using device=...` |
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128（可按显存下调） |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。评估对训练出现过的全部 POI 分块打分；JSON 含 `all_targets` 与 `known_only` 两种分母及覆盖率。并列得分按目录行升序排名。一次预测一个正确目标，故此处 Recall@K = Hit@K。
+训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。评估对训练出现过的全部 POI 分块打分；JSON 含 `all_targets` 与 `known_only` 两种分母及覆盖率。并列得分按目录行升序排名。一次预测一个正确目标，故此处 Recall@K = Hit@K。Ctrl+C 在当前 step 边界退出（再按一次强制）。
 
 ---
 
@@ -319,8 +328,8 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 
 | 路径 | 内容 |
 | --- | --- |
-| `environment.yml` | Conda 环境骨架（Python 3.12 + pip；torch 用 pip cu124 安装） |
-| `requirements.txt` | pip 版本约束（仅 `torch`；CUDA 轮子见上文索引 URL） |
+| `environment.yml` | Conda 环境骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124 安装） |
+| `requirements.txt` | pip 版本约束（`numpy`、`tqdm`、`torch`；CUDA 轮子见上文索引 URL） |
 | `examples/download_city.py` | 从 Hugging Face 拉取某城市三个 `*_checkins_*.csv` |
 | `examples/make_demo.py` | 合成 demo CSV（无需下载） |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列（不 import torch） |
