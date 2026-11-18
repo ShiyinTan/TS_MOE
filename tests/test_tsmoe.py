@@ -14,7 +14,9 @@ import torch
 from examples.make_demo import generate
 from tsmoe.__main__ import main
 from tsmoe.data import Categories, build_split, make_batch, read_split
-from tsmoe.engine import Cache, candidates, metric_row, ranks_of
+from tsmoe.engine import (
+    Cache, GROUP_LABELS, PRIMARY_METRICS, candidates, format_eval_report, metric_row, ranks_of,
+)
 from tsmoe.model import ModelConfig, TSMoE, objective
 from tsmoe.quantizer import BasicSourceQuantizer
 from tsmoe.surd import _self_test
@@ -138,6 +140,31 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(row["MAP@5"], row["MRR@5"])
         self.assertAlmostEqual(row["mean_rank"], 2.5)
         self.assertAlmostEqual(row["MRR"], (1 + 0.25) / 3)
+        # Acc@1 is always computed (primary metric); only rank-1 hits.
+        self.assertEqual(row["Acc@1"], 1 / 3)
+        self.assertEqual(row["NDCG@1"], 1 / 3)
+
+    def test_eval_report_leads_with_acc1_and_group_labels(self):
+        all_row = metric_row([1, 2, 0])
+        known = metric_row([1, 2])
+        head = metric_row([1, 1])
+        tail = metric_row([2, 0])
+        payload = dict(
+            split="test",
+            all_targets=all_row,
+            known_only=known,
+            groups={"poi/head_10_plus": head, "poi/tail_1_2": tail},
+        )
+        text = format_eval_report(payload)
+        self.assertIn("summary  Acc@1=", text)
+        self.assertIn("primary  Acc@1=", text)
+        self.assertIn("NDCG@1=", text)
+        self.assertIn("groups — Acc@1 / NDCG@1 / MRR", text)
+        self.assertIn(GROUP_LABELS["poi/head_10_plus"], text)
+        self.assertIn(GROUP_LABELS["poi/tail_1_2"], text)
+        # Group summary must not fall back to @10-only headlines.
+        self.assertNotIn("groups (Acc@10", text)
+        self.assertEqual(PRIMARY_METRICS, ("Acc@1", "NDCG@1", "MRR"))
 
     def test_entire_cli(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -169,21 +196,43 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(train_test["selection"], "best_checkpoint_by_NDCG@10")
             self.assertTrue((run / "eval_test" / "report.txt").is_file())
             self.assertTrue((run / "eval_validation" / "metrics.json").is_file())
+            self.assertIn("Acc@1", train_test["all_targets"])
             self.assertIn("Acc@10", train_test["all_targets"])
+            self.assertEqual(train_test["primary_metrics"], ["Acc@1", "NDCG@1", "MRR"])
+            self.assertIn("group_notes", train_test)
+            self.assertTrue(train_test.get("groups"))
+            self.assertIn("poi/head_10_plus", train_test["group_labels"])
             self.assertIn("device", train_test)
             self.assertIn("timestamp_utc", train_test)
+            val_metrics = json.loads((run / "eval_validation" / "metrics.json").read_text())
+            self.assertIn("Acc@1", val_metrics["all_targets"])
+            self.assertTrue(val_metrics.get("groups"))
+            val_report = (run / "eval_validation" / "report.txt").read_text()
+            self.assertIn("summary  Acc@1=", val_report)
+            self.assertIn("groups — Acc@1 / NDCG@1 / MRR", val_report)
+            test_report = (run / "eval_test" / "report.txt").read_text()
+            self.assertIn("summary  Acc@1=", test_report)
             common = ["--cache", cache_path, "--checkpoint", run / "best.pt", "--device", "cpu"]
             run_cli("evaluate", *common, "--output", root / "evaluation.json", "--chunk", 3)
             metrics = json.loads((root / "evaluation.json").read_text())
             self.assertLess(metrics["all_targets"]["coverage"], 1)
             self.assertEqual(metrics["known_only"]["coverage"], 1)
+            self.assertIn("Acc@1", metrics["all_targets"])
             self.assertIn("Acc@10", metrics["all_targets"])
             self.assertIn("MAP@20", metrics["all_targets"])
             self.assertEqual(metrics["all_targets"]["Acc@10"], metrics["all_targets"]["Recall@10"])
+            self.assertEqual(metrics["primary_metrics"], ["Acc@1", "NDCG@1", "MRR"])
+            self.assertTrue(metrics.get("groups"))
             # Default persistence beside checkpoint + optional --output mirror.
             saved = json.loads((run / "eval_test" / "metrics.json").read_text())
             self.assertEqual(saved["cache_id"], metrics["cache_id"])
             self.assertTrue((run / "eval_test" / "report.txt").is_file())
+            eval_report = (run / "eval_test" / "report.txt").read_text()
+            self.assertIn("summary  Acc@1=", eval_report)
+            self.assertTrue(
+                any(label in eval_report for label in GROUP_LABELS.values())
+                or "poi/" in eval_report
+            )
             run_cli("explain", *common, "--output", root / "case.json", "--sample-index", 0)
             case = json.loads((root / "case.json").read_text())
             self.assertAlmostEqual(case["final_score"], case["base_score"] + case["moe_bias_contribution"]

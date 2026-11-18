@@ -58,7 +58,10 @@ def main():
     t.add_argument("--seed", type=int, default=42)
     t.set_defaults(func=train)
 
-    e = commands.add_parser("evaluate", help="exact ranking over every training POI; write metrics.json + report.txt")
+    e = commands.add_parser(
+        "evaluate",
+        help="exact ranking over every training POI; report Acc@1 / NDCG@1 / MRR "
+             "(+ full @K tables and Head/Mid/Tail groups) to metrics.json + report.txt")
     e.set_defaults(func=evaluate_cli)
     e.add_argument("--out", help="directory for metrics.json and report.txt "
                    "(default: <checkpoint-dir>/eval_<split>)")
