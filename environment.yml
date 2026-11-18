@@ -1,0 +1,12 @@
+# Conda environment for TS-MoE (stdlib + PyTorch only).
+# CPU default: works out of the box for demo and small-city runs.
+# For CUDA, see the README "GPU (CUDA)" note after create/activate.
+name: tsmoe
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pytorch>=2.4,<3
+  - cpuonly
+  - pip

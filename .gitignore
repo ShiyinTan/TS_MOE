@@ -1,0 +1,10 @@
+# Local data and experiment outputs (see README)
+/data/
+/runs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
