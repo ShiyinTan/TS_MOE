@@ -1,4 +1,9 @@
-"""Download the three public Massive-STEPS event CSVs for one city."""
+"""Download the three public Massive-STEPS event CSVs for one city.
+
+Writes `<data-root>/<city>/<city>_checkins_{train,validation,test}.csv`.
+Those files are the Foursquare-style check-in CSVs assumed by the design doc
+and by `python -m tsmoe prepare` (there is no `--raw` flag).
+"""
 import argparse
 import csv
 import shutil
@@ -40,6 +45,10 @@ def main():
             print("Downloaded", target)
         finally:
             staged.unlink(missing_ok=True)
+    print("Next: python scripts/verify_city_checkins.py --data-root", args.data_root,
+          "--city", args.city)
+    print("Then:  python -m tsmoe prepare --data-root", args.data_root,
+          "--city", args.city, "--out", f"runs/{args.city}/cache")
 
 
 if __name__ == "__main__":
