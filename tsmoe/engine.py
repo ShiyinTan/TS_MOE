@@ -280,12 +280,39 @@ def print_eval_tables(payload):
     print(text, end="", flush=True)
 
 
+def results_run_dir(path, *, cwd=None):
+    """Map a train --out or checkpoint-parent path to results/<run_name>/.
+
+    Under the working directory, strips a leading ``runs/`` segment so
+    ``runs/tokyo/model`` → ``<cwd>/results/tokyo/model``. Paths outside the
+    working directory (e.g. temp dirs in tests) use a sibling
+    ``<parent>/results/<basename>``.
+    """
+    p = Path(path).expanduser().resolve()
+    base = Path(cwd or Path.cwd()).resolve()
+    try:
+        rel = p.relative_to(base)
+    except ValueError:
+        return p.parent / "results" / p.name
+    parts = rel.parts
+    if parts and parts[0] == "runs":
+        run_name = Path(*parts[1:]) if len(parts) > 1 else Path(p.name)
+    else:
+        run_name = rel if parts else Path(p.name)
+    return base / "results" / run_name
+
+
 def resolve_eval_out(args):
-    """Directory for metrics.json / report.txt; default beside the checkpoint."""
+    """Directory for metrics.json / report.txt; default under results/."""
     if getattr(args, "out", None):
         return Path(args.out)
-    # Sibling of the train --out directory that holds best.pt.
-    return Path(args.checkpoint).resolve().parent / f"eval_{args.split}"
+    # Mirror train --out under results/: runs/<city>/model → results/<city>/model/eval_<split>
+    return results_run_dir(Path(args.checkpoint).resolve().parent) / f"eval_{args.split}"
+
+
+def resolve_train_eval_dir(train_out, split):
+    """Where train writes final eval artifacts (not checkpoints)."""
+    return results_run_dir(train_out) / f"eval_{split}"
 
 
 def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, checkpoint=None):
@@ -456,7 +483,7 @@ def train(args):
         val_payload["split"] = "validation"
         val_payload["selection"] = "best_checkpoint_by_NDCG@10"
         print_eval_tables(val_payload)
-        save_eval_results(val_payload, out / "eval_validation")
+        save_eval_results(val_payload, resolve_train_eval_dir(out, "validation"))
         # Final test once on the selected checkpoint (not the last-epoch weights).
         checkpoint = load_file(best_path)
         model.load_state_dict(checkpoint["weights"])
@@ -468,7 +495,7 @@ def train(args):
         test_payload["split"] = "test"
         test_payload["selection"] = "best_checkpoint_by_NDCG@10"
         print_eval_tables(test_payload)
-        save_eval_results(test_payload, out / "eval_test")
+        save_eval_results(test_payload, resolve_train_eval_dir(out, "test"))
 
 
 def load_model(args):

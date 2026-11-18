@@ -1,6 +1,7 @@
-# Local data and experiment outputs (see README)
+# Local data and experiment outputs (see README / docs/results.md)
 /data/
 /runs/
+/results/
 
 # Python
 __pycache__/
