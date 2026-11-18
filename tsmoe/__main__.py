@@ -64,7 +64,7 @@ def main():
              "(+ full @K tables and Head/Mid/Tail groups) to metrics.json + report.txt")
     e.set_defaults(func=evaluate_cli)
     e.add_argument("--out", help="directory for metrics.json and report.txt "
-                   "(default: <checkpoint-dir>/eval_<split>)")
+                   "(default: results/<run_from_checkpoint>/eval_<split>)")
     x = commands.add_parser("explain", help="audit one candidate's prior, router and score contributions")
     x.add_argument("--sample-index", type=int, default=0)
     x.add_argument("--poi-id", type=int, help="external venue_id; default is the true POI or top prediction for OOV")

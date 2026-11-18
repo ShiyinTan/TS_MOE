@@ -129,14 +129,18 @@ python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/w
 TS_MOE/
   environment.yml
   requirements.txt
+  docs/results.md        # 评估结果目录约定（metrics / report）
   tsmoe/                 # 包；入口 python -m tsmoe
   examples/              # 下载城市数据、生成 demo CSV
   scripts/               # 布局核对等辅助脚本（不改 prepare CLI）
   tests/
   data/<city>/           # 下载或自备的签到 CSV（可按城市分子目录）
   runs/<city>/cache/     # prepare 产出的样本与 SURD 缓存
-  runs/<city>/model/     # train 产出的 best.pt、history.json
+  runs/<city>/model/     # train 产出的 best.pt、history.json（不含 metrics）
+  results/<city>/model/  # 最终评估 metrics.json / report.txt
 ```
+
+评估产物的目录约定、如何读 Acc@1、与 `runs/` 的关系见 [`docs/results.md`](docs/results.md)。
 
 `prepare --data-root` 会先找 `<data-root>/<city>_checkins_train.csv`；找不到则再试 `<data-root>/<city>/<city>_checkins_train.csv`。因此下载脚本写到 `data/tokyo/` 时，可直接用 `--data-root data --city tokyo`。东京逐步命令见 **§4 Prepare Tokyo data**（`prepare` 无 `--raw`）。
 
@@ -170,7 +174,7 @@ python examples/make_demo.py --data-root data
 python -m tsmoe prepare --data-root data --city demo --out runs/demo/cache
 # train / evaluate 默认 --device auto（GPU 可用则走 CUDA）
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model --epochs 1 --dim 16 --heads 2 --layers 1
-# 评估结果默认写入 <checkpoint 目录>/eval_<split>/{metrics.json,report.txt}
+# 评估结果默认写入 results/demo/model/eval_<split>/{metrics.json,report.txt}（见 docs/results.md）
 python -m tsmoe evaluate --cache runs/demo/cache --checkpoint runs/demo/model/best.pt
 # 等价显式写法：在上述两条命令末尾加 --device cuda 或 --device cuda:0
 ```
@@ -219,11 +223,11 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
 
 ```bash
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
-# 默认写出 runs/tokyo/model/eval_test/{metrics.json,report.txt}；也可用 --out / --output
+# 默认写出 results/tokyo/model/eval_test/{metrics.json,report.txt}；也可用 --out / --output
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
   --split test --device cuda
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
-  --split test --out runs/tokyo/eval_test --output runs/tokyo/test.json --device cuda
+  --split test --out results/tokyo/eval_test --output results/tokyo/test.json --device cuda
 ```
 
 省略 `--device` 时默认为 `auto`。其它城市把 `--city` / 路径里的 `tokyo` 换成对应前缀即可；`download_city.py` 支持：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
@@ -249,8 +253,8 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 命令 | 作用 |
 | --- | --- |
 | `prepare` | 读 CSV → 样本、折外量化器、逐 POI SURD 表 → 写入 `--out` 缓存 |
-| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `eval_validation/`，并对最佳模型跑一次 test → `eval_test/`（摘要以 Acc@1 打头） |
-| `evaluate` | 全目录精确排名；终端 / `report.txt` 以 Acc@1 / NDCG@1 / MRR 为头条；完整 Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20 + groups |
+| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `results/.../eval_validation/`，并对最佳模型跑一次 test → `results/.../eval_test/`（摘要以 Acc@1 打头） |
+| `evaluate` | 全目录精确排名；默认写入 `results/.../eval_<split>/{metrics.json,report.txt}`；终端 / 报告以 Acc@1 / NDCG@1 / MRR 为头条；完整 Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20 + groups |
 | `inspect` | 查看某 POI 的 26 维 SURD；可选某训练前缀的簇与联合计数 |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
 | `explain` | 审计一个候选的先验、路由与得分贡献 |
@@ -290,7 +294,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128（可按显存下调） |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。验证集仅用于按 NDCG@10 选 `best.pt`（选模指标不变）；每轮与最终报告的**默认头条指标是 Acc@1**（同时打印 NDCG@1 与无截断 MRR）。训练结束后对最佳 checkpoint 再跑一次 **test**，并打印表格。结果目录：`eval_validation/`（最佳验证）与 `eval_test/`（最终测试），各含 `metrics.json` + `report.txt`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。独立 `evaluate` 默认写出 `<checkpoint 所在目录>/eval_<split>/`（可用 `--out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、`groups`、`primary_metrics`、`group_notes` / `group_labels`、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
+训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`（仍在 `--out`，通常为 `runs/.../model/`）。验证集仅用于按 NDCG@10 选 `best.pt`（选模指标不变）；每轮与最终报告的**默认头条指标是 Acc@1**（同时打印 NDCG@1 与无截断 MRR）。训练结束后对最佳 checkpoint 再跑一次 **test**，并打印表格。**最终 metrics / report 写在 `results/`**（由 `--out` 去掉前缀 `runs/` 得到 run 名），例如 `results/tokyo/model/eval_validation/` 与 `results/tokyo/model/eval_test/`，各含 `metrics.json` + `report.txt`（详见 [`docs/results.md`](docs/results.md)）。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。独立 `evaluate` 默认写出 `results/<run>/eval_<split>/`（可用 `--out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、`groups`、`primary_metrics`、`group_notes` / `group_labels`、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
 
 **`groups` 含义（评估切片，非训练特征）：** 每个样本按真实下一站与上下文落入三组桶，每桶单独汇总 Acc@1 / NDCG@1 / MRR：
 
@@ -344,6 +348,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 | --- | --- |
 | `environment.yml` | Conda 环境骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124 安装） |
 | `requirements.txt` | pip 版本约束（`numpy`、`tqdm`、`torch`；CUDA 轮子见上文索引 URL） |
+| `docs/results.md` | `results/` 与 `runs/` 分工、默认路径、如何读 Acc@1 |
 | `examples/download_city.py` | 从 Hugging Face 拉取某城市三个 `*_checkins_*.csv` |
 | `examples/make_demo.py` | 合成 demo CSV（无需下载） |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列（不 import torch） |
