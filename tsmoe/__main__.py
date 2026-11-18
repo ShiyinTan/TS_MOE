@@ -1,6 +1,7 @@
 """Command-line entry point. Run python -m tsmoe COMMAND --help."""
 import argparse
 import math
+import sys
 
 import torch
 
@@ -90,7 +91,11 @@ def main():
                                     or min(args.lr, args.grad_clip) <= 0):
         root.error("use --negatives -1 or a positive count, nonnegative strengths and positive lr/grad-clip")
     torch.set_num_threads(args.threads)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr, flush=True)
+        raise SystemExit(130) from None
 
 
 if __name__ == "__main__":

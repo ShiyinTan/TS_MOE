@@ -1,9 +1,9 @@
 # Conda environment for TS-MoE on a typical NVIDIA GPU server.
-# Runtime dependency: PyTorch only (stdlib otherwise).
+# Runtime deps: NumPy + tqdm + PyTorch (stdlib otherwise).
 #
-# This file only creates Python + pip. Install the CUDA 12.4 PyTorch
-# wheel with pip afterwards (see README §1). Pip wheels statically link
-# MKL, which avoids the conda-side `iJIT_NotifyEvent` ImportError that
+# This file creates Python + pip + NumPy + tqdm. Install the CUDA 12.4 PyTorch
+# wheel with pip afterwards (see README §1). Pip torch wheels statically
+# link MKL, which avoids the conda-side `iJIT_NotifyEvent` ImportError that
 # hits dynamically-linked `pytorch` + mismatched `mkl` / `intel-openmp`.
 #
 # Assumes a recent NVIDIA driver that can run CUDA 12.4 toolkit builds
@@ -15,3 +15,6 @@ channels:
 dependencies:
   - python=3.12
   - pip
+  - pip:
+      - "numpy>=1.26,<3"
+      - "tqdm>=4.66,<5"

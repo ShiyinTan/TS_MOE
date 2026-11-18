@@ -9,10 +9,12 @@ from dataclasses import asdict
 from pathlib import Path
 
 import torch
+from tqdm.auto import tqdm
 
 from .data import Categories, build_split, file_digest, make_batch, read_split
 from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
+from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable, gather_fold_priors
 
 
@@ -54,9 +56,33 @@ class Cache:
 
 
 def select_device(name):
+    """Resolve --device. Logs selection; warns when auto falls back to CPU."""
+    cuda_ok = torch.cuda.is_available()
     if name == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(name)
+        if cuda_ok:
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+            print("WARNING: --device auto fell back to CPU because "
+                  "torch.cuda.is_available() is False "
+                  "(CPU-only torch build, missing NVIDIA driver, or no GPU).",
+                  flush=True)
+    else:
+        device = torch.device(name)
+        if device.type == "cuda" and not cuda_ok:
+            raise RuntimeError(
+                f"--device {name} requested CUDA, but torch.cuda.is_available() "
+                "is False. Install a CUDA PyTorch wheel (see README) and check "
+                "nvidia-smi / drivers.")
+        if device.type == "mps" and not (hasattr(torch.backends, "mps")
+                                         and torch.backends.mps.is_available()):
+            raise RuntimeError(f"--device {name} requested MPS, but it is not available")
+    parts = [f"device={device}", f"cuda_available={cuda_ok}"]
+    if device.type == "cuda":
+        idx = device.index if device.index is not None else torch.cuda.current_device()
+        parts.append(f"gpu={torch.cuda.get_device_name(idx)!r}")
+    print("Using " + " ".join(parts), flush=True)
+    return device
 
 
 def device_batch(data, indices, device, labels=True):
@@ -78,6 +104,7 @@ def all_scores(model, table, encoded, valid, size, chunk):
     """Keep only scalar scores on the CPU across chunks. Encode the batch history once."""
     parts = []
     for start in range(0, size, chunk):
+        check_interrupt()
         rows = torch.arange(start, min(size, start + chunk), device=valid.device).expand(len(valid), -1)
         prior, confidence = table(rows)
         parts.append(model.score(encoded, valid, rows, prior, confidence)["score"].cpu())
@@ -111,12 +138,14 @@ def metric_row(ranks):
 
 
 @torch.inference_mode()
-def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None):
+def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, desc="eval"):
     model.eval()
     ranks, grouped = [], defaultdict(list)
     counts = table.target_count.cpu()
     device = table.routing_prior.device
-    for idx in torch.arange(len(data["end"])).split(batch_size):
+    batches = list(torch.arange(len(data["end"])).split(batch_size))
+    for idx in tqdm(batches, desc=desc, leave=False, dynamic_ncols=True):
+        check_interrupt()
         h, valid, target = device_batch(data, idx, device)
         scores = all_scores(model, table, model.encode(h, valid), valid, len(cache.pois), chunk)
         batch_ranks = ranks_of(scores, target).tolist()
@@ -148,6 +177,7 @@ def save_checkpoint(payload, path):
 
 
 def train(args):
+    install_interrupt_handler()
     cache = Cache(args.cache)
     cfg = ModelConfig(args.dim, args.heads, args.layers, args.dropout, args.top_k,
                       args.temperature, args.lambda_prior, use_surd=not args.no_surd)
@@ -156,6 +186,11 @@ def train(args):
     rng = random.Random(args.seed)
     batches = torch.Generator().manual_seed(args.seed)
     model = cache.model(cfg).to(device)
+    param_device = next(model.parameters()).device
+    print(f"model_param_device={param_device}", flush=True)
+    if param_device.type != device.type or (
+            device.index is not None and param_device.index not in (None, device.index)):
+        raise RuntimeError(f"model landed on {param_device}, expected {device}")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     data, val = cache.split("train"), cache.split("validation")
     tables = [cache.table(info["name"], device) for info in cache.meta["tables"] if info["name"] != "final"]
@@ -164,11 +199,15 @@ def train(args):
     out.mkdir(parents=True, exist_ok=True)
     best, history = -math.inf, []
     settings = {key: value for key, value in vars(args).items() if isinstance(value, (str, float, int, bool))}
-    for epoch in range(1, args.epochs + 1):
+    epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
+    for epoch in epoch_bar:
+        check_interrupt()
         model.train()
         loss_sum, components = 0., torch.zeros(3, dtype=torch.float64)
         counts = torch.zeros(15, dtype=torch.long, device=device)
-        for idx in torch.randperm(len(data["end"]), generator=batches).split(args.batch_size):
+        steps = list(torch.randperm(len(data["end"]), generator=batches).split(args.batch_size))
+        for idx in tqdm(steps, desc=f"train ep{epoch}", leave=False, dynamic_ncols=True):
+            check_interrupt()
             h, valid, target = device_batch(data, idx, device)
             rows, positive = candidates(target, len(cache.pois), args.negatives, rng)
             rows = rows.to(device)
@@ -182,7 +221,8 @@ def train(args):
             counts += torch.bincount(result["top"].detach().reshape(-1), minlength=15)
             loss_sum += float(loss.detach()) * len(idx)
             components += torch.stack(parts).double().cpu() * len(idx)
-        metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk)
+        metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
+                           desc=f"val ep{epoch}")
         score = metrics["all_targets"]["NDCG@10"]
         record = dict(epoch=epoch, loss=loss_sum / len(data["end"]),
                       loss_terms=dict(zip(("rec", "surd", "balance"), (components / len(data["end"])).tolist())),
@@ -193,6 +233,7 @@ def train(args):
             save_checkpoint(dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
                                  epoch=epoch, validation_ndcg10=score, training_args=settings), out / "best.pt")
         dump_json({"training_args": settings, "epochs": history}, out / "history.json")
+        epoch_bar.set_postfix(loss=f"{record['loss']:.5f}", ndcg10=f"{score:.6f}")
         print(f"epoch={epoch} loss={record['loss']:.5f} validation NDCG@10={score:.6f}", flush=True)
 
 
@@ -203,6 +244,7 @@ def load_model(args):
         raise ValueError("checkpoint trained with a different cache; check --cache and --checkpoint")
     model = cache.model(ModelConfig(**checkpoint["config"])).to(device)
     model.load_state_dict(checkpoint["weights"])
+    print(f"model_param_device={next(model.parameters()).device}", flush=True)
     return cache, model.eval(), cache.table("final", device)
 
 
@@ -216,17 +258,19 @@ def report(value, dest):
 
 
 def evaluate_cli(args):
+    install_interrupt_handler()
     cache, model, table = load_model(args)
     training = cache.split("train")
     category_frequency = Counter(training["C"].tolist())
     metrics = evaluate(model, table, cache.split(args.split), cache, args.eval_batch_size,
-                       args.chunk, category_frequency)
+                       args.chunk, category_frequency, desc=f"eval {args.split}")
     report(dict(split=args.split, catalog_size=len(cache.pois), target_mode=cache.cfg["eval_targets"],
                 cache_id=cache.id, **metrics), args.output)
 
 
 @torch.inference_mode()
 def explain(args):
+    install_interrupt_handler()
     cache, model, table = load_model(args)
     data = cache.split(args.split)
     i = args.sample_index
@@ -275,12 +319,15 @@ def explain(args):
 
 @torch.inference_mode()
 def recommend(args):
+    install_interrupt_handler()
     cache, model, table = load_model(args)
     groups, _ = read_split(args.history)
     cats = Categories.from_manifest(cache.meta["preprocessing"])
     data = build_split(groups, cats, cache.pois, cache.meta["cat_vocab"], cache.cfg["max_length"], "predict")
     records = []
-    for idx in torch.arange(len(data["end"])).split(args.eval_batch_size):
+    batches = list(torch.arange(len(data["end"])).split(args.eval_batch_size))
+    for idx in tqdm(batches, desc="recommend", dynamic_ncols=True):
+        check_interrupt()
         h, valid, _ = device_batch(data, idx, table.routing_prior.device, labels=False)
         scores = all_scores(model, table, model.encode(h, valid), valid, len(cache.pois), args.chunk)
         top = torch.argsort(scores, descending=True, stable=True)[:, :args.top_n]

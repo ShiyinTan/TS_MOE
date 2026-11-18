@@ -6,9 +6,11 @@ import tempfile
 from pathlib import Path
 
 import torch
+from tqdm.auto import tqdm
 
 from .data import SPLITS, Categories, build_split, file_digest, make_batch, read_split
 from .quantizer import BasicSourceQuantizer, SOURCES
+from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, SUBSET_ORDER, build_offline_surd, save_surd_table
 
 
@@ -59,6 +61,7 @@ def event_digest(data, refs):
 
 
 def prepare(args):
+    install_interrupt_handler()
     root, city, out = Path(args.data_root), args.city, Path(args.out)
     if not (root / f"{city}_checkins_train.csv").is_file():
         root = root / city
@@ -131,7 +134,9 @@ def build_cache(cfg, paths, fingerprint, stage):
     ids = torch.arange(len(train["end"]))
     fixed = BasicSourceQuantizer(**args_q)
     pieces = {s: [] for s in SOURCES}
-    for batch in ids.split(256):
+    summary_batches = list(ids.split(256))
+    for batch in tqdm(summary_batches, desc="prepare summaries", dynamic_ncols=True):
+        check_interrupt()
         history, valid, _ = make_batch(train, batch, offline=True)
         for s, matrix in fixed.summarize(history, valid).items():
             pieces[s].append(matrix)
@@ -143,7 +148,8 @@ def build_cache(cfg, paths, fingerprint, stage):
     tables = []
     jobs = [(f"fold_{i}", block, ref, cutoff) for i, (block, ref, cutoff) in enumerate(folds)]
     jobs.append(("final", ids[:0], ids, None))
-    for i, (name, block, ref, cutoff) in enumerate(jobs):
+    for i, (name, block, ref, cutoff) in enumerate(tqdm(jobs, desc="prepare SURD tables", dynamic_ncols=True)):
+        check_interrupt()
         if len(block):
             train["fold"][block] = i
         targets = train["us"][train["end"][ref]]
