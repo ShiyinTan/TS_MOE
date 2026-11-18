@@ -249,8 +249,8 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 命令 | 作用 |
 | --- | --- |
 | `prepare` | 读 CSV → 样本、折外量化器、逐 POI SURD 表 → 写入 `--out` 缓存 |
-| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `eval_validation/`，并对最佳模型跑一次 test → `eval_test/` |
-| `evaluate` | 全目录精确排名；终端表格 + `metrics.json` / `report.txt`（Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20） |
+| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `eval_validation/`，并对最佳模型跑一次 test → `eval_test/`（摘要以 Acc@1 打头） |
+| `evaluate` | 全目录精确排名；终端 / `report.txt` 以 Acc@1 / NDCG@1 / MRR 为头条；完整 Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20 + groups |
 | `inspect` | 查看某 POI 的 26 维 SURD；可选某训练前缀的簇与联合计数 |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
 | `explain` | 审计一个候选的先验、路由与得分贡献 |
@@ -290,7 +290,17 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128（可按显存下调） |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。验证集仅用于按 NDCG@10 选 `best.pt`；训练结束后再对最佳 checkpoint 跑一次 **test**，并打印表格。结果目录：`eval_validation/`（最佳验证）与 `eval_test/`（最终测试），各含 `metrics.json` + `report.txt`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。独立 `evaluate` 默认写出 `<checkpoint 所在目录>/eval_<split>/`（可用 `--out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、分组、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
+训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。验证集仅用于按 NDCG@10 选 `best.pt`（选模指标不变）；每轮与最终报告的**默认头条指标是 Acc@1**（同时打印 NDCG@1 与无截断 MRR）。训练结束后对最佳 checkpoint 再跑一次 **test**，并打印表格。结果目录：`eval_validation/`（最佳验证）与 `eval_test/`（最终测试），各含 `metrics.json` + `report.txt`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。独立 `evaluate` 默认写出 `<checkpoint 所在目录>/eval_<split>/`（可用 `--out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、`groups`、`primary_metrics`、`group_notes` / `group_labels`、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
+
+**`groups` 含义（评估切片，非训练特征）：** 每个样本按真实下一站与上下文落入三组桶，每桶单独汇总 Acc@1 / NDCG@1 / MRR：
+
+| 键前缀 | 依据 | 桶 |
+| --- | --- | --- |
+| `poi/` | 真实目标 POI 在训练 SURD 表中的 `target_count`（作为 next-POI 目标出现次数） | `outside_catalog`（不在训练目录）；`no_train_target`（在目录但 0 次）；`tail_1_2`（1–2，长尾）；`mid_3_9`（3–9）；`head_10_plus`（≥10，热门） |
+| `history/` | 观测前缀长度 | `1`；`2_5`；`6_plus` |
+| `last_category/` | 历史最后一签类别在训练集中的出现频次 | `0`；`1_9`；`10_plus` |
+
+`report.txt` / 终端对上述键附带可读标签（如 `poi/head — ≥10 train targets (popular)`）；JSON 仍保留稳定短键，并写入 `group_labels` / `group_notes`。
 
 ---
 

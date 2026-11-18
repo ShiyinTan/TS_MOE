@@ -21,6 +21,34 @@ from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable, gathe
 # Cutoffs used for Acc/Hit/Recall/NDCG/MRR/MAP tables (next-POI papers often include @20).
 METRIC_KS = (1, 5, 10, 20)
 
+# Primary headline metrics for terminal / report.txt (Acc@1 is the default focus).
+PRIMARY_METRICS = ("Acc@1", "NDCG@1", "MRR")
+
+# Human-readable labels for evaluate() group keys (JSON keys stay machine-stable).
+# poi/* bins use SURD table target_count = # of times that POI is a train next-POI target.
+GROUP_LABELS = {
+    "poi/outside_catalog": "poi/outside_catalog — target not in train catalog",
+    "poi/no_train_target": "poi/no_train_target — in catalog, 0 train targets",
+    "poi/tail_1_2": "poi/tail — 1–2 train targets (long-tail)",
+    "poi/mid_3_9": "poi/mid — 3–9 train targets",
+    "poi/head_10_plus": "poi/head — ≥10 train targets (popular)",
+    "history/1": "history/len=1 — prefix length 1",
+    "history/2_5": "history/len=2–5 — prefix length 2–5",
+    "history/6_plus": "history/len≥6 — prefix length ≥6",
+    "last_category/0": "last_category/freq=0 — last-event category unseen in train",
+    "last_category/1_9": "last_category/freq=1–9 — last-event category rare in train",
+    "last_category/10_plus": "last_category/freq≥10 — last-event category common in train",
+}
+
+GROUP_NOTES = (
+    "groups slice each eval sample by (1) poi/* = train-target popularity of the "
+    "true next POI via SURD target_count: outside_catalog / no_train_target / "
+    "tail_1_2 / mid_3_9 / head_10_plus; (2) history/* = observed prefix length "
+    "bins 1 / 2_5 / 6_plus; (3) last_category/* = train frequency of the last "
+    "history event's category bins 0 / 1_9 / 10_plus. Headline group columns are "
+    "Acc@1, NDCG@1, full MRR."
+)
+
 
 def load_file(path):
     return torch.load(path, map_location="cpu", weights_only=True)
@@ -173,14 +201,22 @@ def _fmt(value, width=8):
     return f"{value:>{width}}"
 
 
+def format_primary_line(row, indent="  "):
+    """One-line Acc@1 / NDCG@1 / MRR headline (default / primary metrics)."""
+    return (f"{indent}primary  "
+            f"Acc@1={_fmt(row.get('Acc@1')).strip()}  "
+            f"NDCG@1={_fmt(row.get('NDCG@1')).strip()}  "
+            f"MRR={_fmt(row.get('MRR')).strip()}")
+
+
 def format_metric_block(row, title):
-    """Compact human-readable table for one metric_row dict."""
+    """Compact human-readable table for one metric_row dict; Acc@1 leads."""
     lines = [title,
+             format_primary_line(row),
              f"  samples={row['samples']}  known={row['known_targets']}  "
              f"coverage={_fmt(row['coverage']).strip()}  "
              f"mean_rank={_fmt(row['mean_rank']).strip()}  "
-             f"median_rank={_fmt(row['median_rank']).strip()}  "
-             f"MRR={_fmt(row['MRR']).strip()}"]
+             f"median_rank={_fmt(row['median_rank']).strip()}"]
     header = f"  {'metric':<8}" + "".join(f"{'@' + str(k):>8}" for k in METRIC_KS)
     lines.append(header)
     for name in ("Acc", "Recall", "Hit", "NDCG", "MRR", "MAP"):
@@ -194,6 +230,11 @@ def format_metric_block(row, title):
     return "\n".join(lines)
 
 
+def format_group_key(key):
+    """Prefer the annotated label; fall back to the raw group key."""
+    return GROUP_LABELS.get(key, key)
+
+
 def format_eval_report(payload, group_keys=None):
     """Terminal / report.txt text: overview + main tables + short group summary."""
     lines = ["=== Evaluation ==="]
@@ -202,21 +243,32 @@ def format_eval_report(payload, group_keys=None):
         value = payload.get(key)
         if value not in (None, ""):
             lines.append(f"  {key}={value}")
+    # Lead the whole report with Acc@1 on all_targets (default / primary metric).
+    all_row = payload["all_targets"]
+    lines.append(
+        f"  summary  Acc@1={_fmt(all_row.get('Acc@1')).strip()}  "
+        f"NDCG@1={_fmt(all_row.get('NDCG@1')).strip()}  "
+        f"MRR={_fmt(all_row.get('MRR')).strip()}  "
+        f"(primary; full tables below)")
     lines.append("")
-    lines.append(format_metric_block(payload["all_targets"], "all_targets (OOV / unknown → miss)"))
+    lines.append(format_metric_block(all_row, "all_targets (OOV / unknown → miss)"))
     lines.append("")
     lines.append(format_metric_block(payload["known_only"], "known_only (in-catalog targets)"))
     groups = payload.get("groups") or {}
     if groups:
         keys = group_keys or sorted(groups)
         lines.append("")
-        lines.append("groups (Acc@10 / NDCG@10 / MRR / n_known)")
+        lines.append("groups — Acc@1 / NDCG@1 / MRR / n_known  "
+                     "(poi = train-target popularity; history = prefix length; "
+                     "last_category = train freq of last event's category)")
         for key in keys:
             row = groups[key]
+            label = format_group_key(key)
             lines.append(
-                f"  {key:<28}"
-                f"Acc@10={_fmt(row.get('Acc@10')).strip()}  "
-                f"NDCG@10={_fmt(row.get('NDCG@10')).strip()}  "
+                f"  {label}")
+            lines.append(
+                f"    Acc@1={_fmt(row.get('Acc@1')).strip()}  "
+                f"NDCG@1={_fmt(row.get('NDCG@1')).strip()}  "
                 f"MRR={_fmt(row.get('MRR')).strip()}  "
                 f"known={row['known_targets']}/{row['samples']}")
     return "\n".join(lines) + "\n"
@@ -260,9 +312,13 @@ def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, check
         checkpoint_validation_ndcg10=ckpt.get("validation_ndcg10"),
         cli=settings,
         metric_ks=list(METRIC_KS),
-        metric_notes=("Acc@K=Hit@K=Recall@K and MAP@K=MRR@K for single next-POI target; "
+        primary_metrics=list(PRIMARY_METRICS),
+        metric_notes=("Primary headline metrics are Acc@1, NDCG@1, and full MRR. "
+                      "Acc@K=Hit@K=Recall@K and MAP@K=MRR@K for single next-POI target; "
                       "rank ties break by lower catalog row index; "
                       "unknown targets use rank 0 and count as misses under all_targets."),
+        group_notes=GROUP_NOTES,
+        group_labels=dict(GROUP_LABELS),
         **metrics,
     )
 
@@ -300,6 +356,8 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
         batch_ranks = ranks_of(scores, target).tolist()
         ranks.extend(batch_ranks)
         if cat_frequency is not None:
+            # Slice ranks into Head/Mid/Tail-style popularity bins plus context bins.
+            # count = SURD target_count (# times this POI is a train next-POI target).
             for i, row, rank in zip(idx.tolist(), target.tolist(), batch_ranks):
                 end = int(data["end"][i])
                 length = end - int(data["start"][i])
@@ -348,6 +406,7 @@ def train(args):
     out.mkdir(parents=True, exist_ok=True)
     best, history, best_metrics = -math.inf, [], None
     settings = {key: value for key, value in vars(args).items() if isinstance(value, (str, float, int, bool))}
+    category_frequency = Counter(data["C"].tolist())
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     for epoch in epoch_bar:
         check_interrupt()
@@ -370,8 +429,9 @@ def train(args):
             counts += torch.bincount(result["top"].detach().reshape(-1), minlength=15)
             loss_sum += float(loss.detach()) * len(idx)
             components += torch.stack(parts).double().cpu() * len(idx)
+        # Pass category_frequency so val (and saved best) always include groups + Acc@1.
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
-                           desc=f"val ep{epoch}")
+                           category_frequency, desc=f"val ep{epoch}")
         score = metrics["all_targets"]["NDCG@10"]
         record = dict(epoch=epoch, loss=loss_sum / len(data["end"]),
                       loss_terms=dict(zip(("rec", "surd", "balance"), (components / len(data["end"])).tolist())),
@@ -384,11 +444,11 @@ def train(args):
                                  epoch=epoch, validation_ndcg10=score, training_args=settings), out / "best.pt")
         dump_json({"training_args": settings, "epochs": history}, out / "history.json")
         row = metrics["all_targets"]
-        epoch_bar.set_postfix(loss=f"{record['loss']:.5f}", ndcg10=f"{score:.6f}",
-                              acc10=f"{row['Acc@10']:.4f}")
+        epoch_bar.set_postfix(loss=f"{record['loss']:.5f}", acc1=f"{row['Acc@1']:.4f}",
+                              ndcg10=f"{score:.6f}")
         print(f"epoch={epoch} loss={record['loss']:.5f}  "
-              f"val Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f} "
-              f"MRR={row['MRR']:.4f}", flush=True)
+              f"val Acc@1={row['Acc@1']:.4f} NDCG@1={row['NDCG@1']:.4f} MRR={row['MRR']:.4f}  "
+              f"Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f}", flush=True)
     if best_metrics is not None:
         best_path = out / "best.pt"
         val_payload = build_eval_payload(args, cache, best_metrics, device,
@@ -401,7 +461,6 @@ def train(args):
         checkpoint = load_file(best_path)
         model.load_state_dict(checkpoint["weights"])
         model.eval()
-        category_frequency = Counter(data["C"].tolist())
         test_metrics = evaluate(model, final, cache.split("test"), cache, args.eval_batch_size,
                                 args.chunk, category_frequency, desc="eval test")
         test_payload = build_eval_payload(args, cache, test_metrics, device,
