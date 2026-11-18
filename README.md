@@ -122,13 +122,14 @@ TS_MOE/
   requirements.txt
   tsmoe/                 # 包；入口 python -m tsmoe
   examples/              # 下载城市数据、生成 demo CSV
+  scripts/               # 布局核对等辅助脚本（不改 prepare CLI）
   tests/
   data/<city>/           # 下载或自备的签到 CSV（可按城市分子目录）
   runs/<city>/cache/     # prepare 产出的样本与 SURD 缓存
   runs/<city>/model/     # train 产出的 best.pt、history.json
 ```
 
-`prepare --data-root` 会先找 `<data-root>/<city>_checkins_train.csv`；找不到则再试 `<data-root>/<city>/<city>_checkins_train.csv`。因此下载脚本写到 `data/tokyo/` 时，可直接用 `--data-root data --city tokyo`。
+`prepare --data-root` 会先找 `<data-root>/<city>_checkins_train.csv`；找不到则再试 `<data-root>/<city>/<city>_checkins_train.csv`。因此下载脚本写到 `data/tokyo/` 时，可直接用 `--data-root data --city tokyo`。东京逐步命令见 **§4 Prepare Tokyo data**（`prepare` 无 `--raw`）。
 
 期望的城市签到文件：
 
@@ -147,7 +148,7 @@ data/tokyo/
 | `timestamp` | 排序、周期特征、间隔、时间折边界 |
 | `latitude`、`longitude` | 历史 L 的球面坐标、位移、方向及有效位 |
 
-采用官方预处理生成的**逐签到 CSV**。带时区的时间戳转成 UTC，无时区按 UTC 解释。等时事件按原文件行序稳定排序。以 `(user_id, trail_id, timestamp, venue_id)` 去重（保留第一条）。不可解析时间戳整行隔离；缺失类别或坐标仍保留事件并编码。审计写入缓存的 `manifest.json`。
+采用官方预处理生成的**逐签到 CSV**（Massive-STEPS / Foursquare 风格字段）。带时区的时间戳转成 UTC，无时区按 UTC 解释。等时事件按原文件行序稳定排序。以 `(user_id, trail_id, timestamp, venue_id)` 去重（保留第一条）。不可解析时间戳整行隔离；缺失类别或坐标仍保留事件并编码。审计写入缓存的 `manifest.json`。
 
 ---
 
@@ -166,21 +167,53 @@ python -m tsmoe evaluate --cache runs/demo/cache --checkpoint runs/demo/model/be
 
 ---
 
-## 4. 东京（或其它官方城市）全流程
+## 4. Prepare Tokyo data
+
+`prepare` **没有** `--raw`（或其它“从原始 dump 转换”）标志。它只读已经切好的 Massive-STEPS 签到 CSV（Foursquare 风格字段，与设计文档 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md) §2.1 一致）。仓库不附带东京原始数据；请先下载公开 CSV，再本地跑 `prepare`。
+
+### 期望目录与文件名
+
+`prepare` 先找 `<data-root>/tokyo_checkins_train.csv`；没有则用 `<data-root>/tokyo/`（`examples/download_city.py` 默认写这里）：
+
+```text
+data/tokyo/
+  tokyo_checkins_train.csv
+  tokyo_checkins_validation.csv
+  tokyo_checkins_test.csv
+```
+
+每个 CSV 至少需要：`trail_id`、`user_id`、`venue_id`、`latitude`、`longitude`、`timestamp`，以及 `venue_category_id_code` 和/或 `venue_category_id`。公开东京文件还含 `name`、`address`、`venue_category`、`venue_city*`、`venue_country` 等展示字段（`prepare` 不依赖它们）。
+
+### 从公开文件到 cache（复制即可）
+
+在**仓库根目录**、已 `conda activate tsmoe`（且已装好 torch）时：
 
 ```bash
-conda activate tsmoe
-
+# 1) 下载 Massive-STEPS Tokyo 三个 split（Hugging Face；需出网）
 python examples/download_city.py --city tokyo --data-root data
+
+# 2) 可选：核对文件名与列（stdlib；不 import torch）
+python scripts/verify_city_checkins.py --data-root data --city tokyo
+
+# 3) 构建样本 + 折外 SURD 缓存（真实 CLI；无 --raw）
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
+```
+
+成功后应看到 `runs/tokyo/cache/manifest.json` 以及 `train.pt` / `validation.pt` / `test.pt` 等。同一配置可重复跑 `prepare`（指纹一致则复用缓存）。
+
+### 手动下载（跳过 `download_city.py`）
+
+从 [Massive-STEPS-Tokyo](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo) 取得同名三个 CSV，放到 `data/tokyo/`（或扁平放在 `data/` 下且文件名仍为 `tokyo_checkins_*.csv`），然后只跑上面的第 2–3 步。固定版本可：`python examples/download_city.py --city tokyo --data-root data --revision <commit-or-branch>`。
+
+### 下载之后：训练 / 评估
+
+```bash
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
   --split test --output runs/tokyo/test.json --device cuda
 ```
 
-省略 `--device` 时默认为 `auto`，在已正确安装 CUDA PyTorch 的 GPU 服务器上效果与 `--device cuda` 相同。
-
-已有官方仓库数据时可跳过下载，把 `--data-root` 指到其 `data/` 或 `data/tokyo/`。`download_city.py` 支持的城市前缀包括：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。复现特定数据版本可传 `--revision <commit-or-branch>`。
+省略 `--device` 时默认为 `auto`。其它城市把 `--city` / 路径里的 `tokyo` 换成对应前缀即可；`download_city.py` 支持：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
 
 ### 选择预测目标
 
@@ -288,6 +321,9 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 | --- | --- |
 | `environment.yml` | Conda 环境骨架（Python 3.12 + pip；torch 用 pip cu124 安装） |
 | `requirements.txt` | pip 版本约束（仅 `torch`；CUDA 轮子见上文索引 URL） |
+| `examples/download_city.py` | 从 Hugging Face 拉取某城市三个 `*_checkins_*.csv` |
+| `examples/make_demo.py` | 合成 demo CSV（无需下载） |
+| `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列（不 import torch） |
 | `tsmoe/data.py` | CSV 读取、类别对齐、时间与地理特征、窗口 |
 | `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
 | `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
@@ -295,7 +331,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 | `tsmoe/model.py` | Transformer、稀疏专家、Router、损失 |
 | `tsmoe/engine.py`、`tsmoe/__main__.py` | 训练、评估、推荐、解释与 CLI |
 
-数据格式与来源：[Massive-STEPS](https://github.com/CRUISEResearchGroup/Massive-STEPS) · [next-POI 划分脚本](https://github.com/CRUISEResearchGroup/Massive-STEPS/blob/main/src/create_next_poi_dataset.py) · [Tokyo 数据集](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo)。
+数据格式与来源：[Massive-STEPS](https://github.com/CRUISEResearchGroup/Massive-STEPS) · [next-POI 划分脚本](https://github.com/CRUISEResearchGroup/Massive-STEPS/blob/main/src/create_next_poi_dataset.py) · [Tokyo 数据集](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo)（Foursquare 风格签到字段，见设计文档 §2.1）。
 
 ---
 
