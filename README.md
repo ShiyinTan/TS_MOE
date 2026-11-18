@@ -4,15 +4,15 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 算法设计见仓库根目录 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
 
-**依赖只有 Python 标准库 + PyTorch**（`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：请在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
+**依赖是 Python 标准库 + NumPy + PyTorch**（`numpy>=1.26,<3`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：请在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-面向 **NVIDIA GPU 服务器**：用 conda 建 Python 环境，再用 **pip 的 CUDA 12.4 轮子**装 PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（检测到 CUDA 时用 GPU）。东京连通性烟雾曾在 CPU 上跑通；GPU 上用同一 CLI，换 `--device` 即可。
+面向 **NVIDIA GPU 服务器**：用 conda 建 Python 环境，再用 **pip** 装 NumPy 与 **CUDA 12.4 轮子**的 PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（检测到 CUDA 时用 GPU）。东京连通性烟雾曾在 CPU 上跑通；GPU 上用同一 CLI，换 `--device` 即可。
 
 ---
 
 ## 1. 用 Conda 创建 CUDA 环境（推荐）
 
-需要已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。`environment.yml` 只创建 **Python 3.12 + pip**；随后从 PyTorch 官方 cu124 索引安装 GPU 轮子（**无需**本机再装完整 CUDA Toolkit）。
+需要已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。`environment.yml` 创建 **Python 3.12 + pip + NumPy**；随后从 PyTorch 官方 cu124 索引安装 GPU 轮子（**无需**本机再装完整 CUDA Toolkit）。
 
 为何不用 `conda install pytorch pytorch-cuda`：conda 版 `libtorch_cpu.so` 动态链接 MKL / `intel-openmp`，solver 若拉到不兼容的 MKL（常见于 2024.1+ / 2025.x）会在 `import torch` 时报 `undefined symbol: iJIT_NotifyEvent`。官方 **pip CUDA 轮子静态链接 MKL**，可避开该冲突。
 
@@ -22,14 +22,17 @@ cd TS_MOE   # 仓库根目录
 conda env create -f environment.yml
 conda activate tsmoe
 
+# NumPy（PyPI；与 requirements.txt 一致）。已有 env 缺 numpy 时也可单独跑这一行。
+python -m pip install "numpy>=1.26,<3"
+
 # CUDA 12.4 构建；与 requirements.txt 的版本范围一致
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
 
 # 确认：应打印 True，且 device 为 cuda:0（或同类）
-python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
+python -c "import numpy, torch; print(numpy.__version__, torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
 ```
 
-之后若只改了 `environment.yml`（Python / pip）：
+之后若只改了 `environment.yml`（Python / pip / NumPy）：
 
 ```bash
 conda env update -f environment.yml --prune
@@ -77,6 +80,8 @@ python -c "import torch; print(torch.__version__, torch.cuda.is_available()); pr
 ```bash
 conda activate tsmoe
 
+# --cache 须先由 prepare 写出（含 manifest.json），例如：
+#   python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
 # 默认 --device auto：有 CUDA 则用 GPU
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --split test
@@ -94,6 +99,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 
 ```bash
 conda activate tsmoe
+python -m pip install "numpy>=1.26,<3"
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cpu
 ```
 
@@ -104,11 +110,12 @@ python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/w
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m pip install "numpy>=1.26,<3"
 # 与上文 conda 路径相同的 CUDA 12.4 轮子；其它版本见 pytorch.org
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
 ```
 
-`requirements.txt` 仅声明版本范围 `torch>=2.4,<3`，不锁定 CUDA/CPU 轮子；GPU 服务器请用上面的 cu124 索引。
+`requirements.txt` 声明 `numpy>=1.26,<3` 与 `torch>=2.4,<3`，不锁定 CUDA/CPU 轮子；GPU 服务器请用上面的 cu124 索引装 torch。
 
 ---
 
@@ -286,8 +293,8 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 
 | 路径 | 内容 |
 | --- | --- |
-| `environment.yml` | Conda 环境骨架（Python 3.12 + pip；torch 用 pip cu124 安装） |
-| `requirements.txt` | pip 版本约束（仅 `torch`；CUDA 轮子见上文索引 URL） |
+| `environment.yml` | Conda 环境骨架（Python 3.12 + pip + NumPy；torch 用 pip cu124 安装） |
+| `requirements.txt` | pip 版本约束（`numpy`、`torch`；CUDA 轮子见上文索引 URL） |
 | `tsmoe/data.py` | CSV 读取、类别对齐、时间与地理特征、窗口 |
 | `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
 | `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
