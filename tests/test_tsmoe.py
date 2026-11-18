@@ -131,7 +131,13 @@ class TestDesign(unittest.TestCase):
         self.assertTrue(all(len(set(row)) == 4 for row in rows.tolist()))
         ranks = ranks_of(torch.ones(3, 6), torch.tensor([0, 3, -1]))
         self.assertEqual(ranks.tolist(), [1, 4, 0])
-        self.assertEqual(metric_row(ranks)["Recall@5"], 2/3)
+        row = metric_row(ranks)
+        self.assertEqual(row["Recall@5"], 2/3)
+        self.assertEqual(row["Acc@5"], row["Hit@5"])
+        self.assertEqual(row["Acc@5"], row["Recall@5"])
+        self.assertEqual(row["MAP@5"], row["MRR@5"])
+        self.assertAlmostEqual(row["mean_rank"], 2.5)
+        self.assertAlmostEqual(row["MRR"], (1 + 0.25) / 3)
 
     def test_entire_cli(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -157,11 +163,27 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(cache.meta["tables"][-1]["reference_events"], len(train["end"]))
             run_cli("train", "--cache", cache_path, "--out", run, "--epochs", 1, "--dim", 8,
                     "--layers", 1, "--heads", 2, "--device", "cpu", "--negatives", 3, "--threads", 1)
+            # train itself writes best-val + final-test result dirs.
+            train_test = json.loads((run / "eval_test" / "metrics.json").read_text())
+            self.assertEqual(train_test["split"], "test")
+            self.assertEqual(train_test["selection"], "best_checkpoint_by_NDCG@10")
+            self.assertTrue((run / "eval_test" / "report.txt").is_file())
+            self.assertTrue((run / "eval_validation" / "metrics.json").is_file())
+            self.assertIn("Acc@10", train_test["all_targets"])
+            self.assertIn("device", train_test)
+            self.assertIn("timestamp_utc", train_test)
             common = ["--cache", cache_path, "--checkpoint", run / "best.pt", "--device", "cpu"]
             run_cli("evaluate", *common, "--output", root / "evaluation.json", "--chunk", 3)
             metrics = json.loads((root / "evaluation.json").read_text())
             self.assertLess(metrics["all_targets"]["coverage"], 1)
             self.assertEqual(metrics["known_only"]["coverage"], 1)
+            self.assertIn("Acc@10", metrics["all_targets"])
+            self.assertIn("MAP@20", metrics["all_targets"])
+            self.assertEqual(metrics["all_targets"]["Acc@10"], metrics["all_targets"]["Recall@10"])
+            # Default persistence beside checkpoint + optional --output mirror.
+            saved = json.loads((run / "eval_test" / "metrics.json").read_text())
+            self.assertEqual(saved["cache_id"], metrics["cache_id"])
+            self.assertTrue((run / "eval_test" / "report.txt").is_file())
             run_cli("explain", *common, "--output", root / "case.json", "--sample-index", 0)
             case = json.loads((root / "case.json").read_text())
             self.assertAlmostEqual(case["final_score"], case["base_score"] + case["moe_bias_contribution"]
