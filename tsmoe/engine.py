@@ -390,12 +390,26 @@ def train(args):
               f"val Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f} "
               f"MRR={row['MRR']:.4f}", flush=True)
     if best_metrics is not None:
-        payload = build_eval_payload(args, cache, best_metrics, device,
-                                     checkpoint_path=out / "best.pt")
-        payload["split"] = "validation"
-        payload["selection"] = "best_checkpoint_by_NDCG@10"
-        print_eval_tables(payload)
-        save_eval_results(payload, out / "eval_validation")
+        best_path = out / "best.pt"
+        val_payload = build_eval_payload(args, cache, best_metrics, device,
+                                         checkpoint_path=best_path)
+        val_payload["split"] = "validation"
+        val_payload["selection"] = "best_checkpoint_by_NDCG@10"
+        print_eval_tables(val_payload)
+        save_eval_results(val_payload, out / "eval_validation")
+        # Final test once on the selected checkpoint (not the last-epoch weights).
+        checkpoint = load_file(best_path)
+        model.load_state_dict(checkpoint["weights"])
+        model.eval()
+        category_frequency = Counter(data["C"].tolist())
+        test_metrics = evaluate(model, final, cache.split("test"), cache, args.eval_batch_size,
+                                args.chunk, category_frequency, desc="eval test")
+        test_payload = build_eval_payload(args, cache, test_metrics, device,
+                                          checkpoint_path=best_path, checkpoint=checkpoint)
+        test_payload["split"] = "test"
+        test_payload["selection"] = "best_checkpoint_by_NDCG@10"
+        print_eval_tables(test_payload)
+        save_eval_results(test_payload, out / "eval_test")
 
 
 def load_model(args):

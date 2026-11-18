@@ -163,6 +163,15 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(cache.meta["tables"][-1]["reference_events"], len(train["end"]))
             run_cli("train", "--cache", cache_path, "--out", run, "--epochs", 1, "--dim", 8,
                     "--layers", 1, "--heads", 2, "--device", "cpu", "--negatives", 3, "--threads", 1)
+            # train itself writes best-val + final-test result dirs.
+            train_test = json.loads((run / "eval_test" / "metrics.json").read_text())
+            self.assertEqual(train_test["split"], "test")
+            self.assertEqual(train_test["selection"], "best_checkpoint_by_NDCG@10")
+            self.assertTrue((run / "eval_test" / "report.txt").is_file())
+            self.assertTrue((run / "eval_validation" / "metrics.json").is_file())
+            self.assertIn("Acc@10", train_test["all_targets"])
+            self.assertIn("device", train_test)
+            self.assertIn("timestamp_utc", train_test)
             common = ["--cache", cache_path, "--checkpoint", run / "best.pt", "--device", "cpu"]
             run_cli("evaluate", *common, "--output", root / "evaluation.json", "--chunk", 3)
             metrics = json.loads((root / "evaluation.json").read_text())
@@ -175,9 +184,6 @@ class TestDesign(unittest.TestCase):
             saved = json.loads((run / "eval_test" / "metrics.json").read_text())
             self.assertEqual(saved["cache_id"], metrics["cache_id"])
             self.assertTrue((run / "eval_test" / "report.txt").is_file())
-            self.assertTrue((run / "eval_validation" / "metrics.json").is_file())
-            self.assertIn("device", saved)
-            self.assertIn("timestamp_utc", saved)
             run_cli("explain", *common, "--output", root / "case.json", "--sample-index", 0)
             case = json.loads((root / "case.json").read_text())
             self.assertAlmostEqual(case["final_score"], case["base_score"] + case["moe_bias_contribution"]

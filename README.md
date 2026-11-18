@@ -249,7 +249,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 命令 | 作用 |
 | --- | --- |
 | `prepare` | 读 CSV → 样本、折外量化器、逐 POI SURD 表 → 写入 `--out` 缓存 |
-| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `eval_validation/` |
+| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `eval_validation/`，并对最佳模型跑一次 test → `eval_test/` |
 | `evaluate` | 全目录精确排名；终端表格 + `metrics.json` / `report.txt`（Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20） |
 | `inspect` | 查看某 POI 的 26 维 SURD；可选某训练前缀的簇与联合计数 |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
@@ -290,7 +290,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128（可按显存下调） |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。最佳验证指标另存 `eval_validation/{metrics.json,report.txt}`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。评估对训练出现过的全部 POI 分块打分；默认结果目录为 `<checkpoint 所在目录>/eval_<split>/`（可用 `evaluate --out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、分组、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
+训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`。验证集仅用于按 NDCG@10 选 `best.pt`；训练结束后再对最佳 checkpoint 跑一次 **test**，并打印表格。结果目录：`eval_validation/`（最佳验证）与 `eval_test/`（最终测试），各含 `metrics.json` + `report.txt`。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。独立 `evaluate` 默认写出 `<checkpoint 所在目录>/eval_<split>/`（可用 `--out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、分组、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
 
 ---
 
