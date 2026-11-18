@@ -6,13 +6,15 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖只有 Python 标准库 + PyTorch**（`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：请在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-面向 **NVIDIA GPU 服务器**：`environment.yml` 安装带 CUDA 的 PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（检测到 CUDA 时用 GPU）。东京连通性烟雾曾在 CPU 上跑通；GPU 上用同一 CLI，换 `--device` 即可。
+面向 **NVIDIA GPU 服务器**：用 conda 建 Python 环境，再用 **pip 的 CUDA 12.4 轮子**装 PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（检测到 CUDA 时用 GPU）。东京连通性烟雾曾在 CPU 上跑通；GPU 上用同一 CLI，换 `--device` 即可。
 
 ---
 
 ## 1. 用 Conda 创建 CUDA 环境（推荐）
 
-需要已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。仓库根目录的 `environment.yml` 安装 **CUDA 12.4** 构建的 PyTorch（`pytorch-cuda=12.4`；无需本机再装完整 CUDA Toolkit）。
+需要已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。`environment.yml` 只创建 **Python 3.12 + pip**；随后从 PyTorch 官方 cu124 索引安装 GPU 轮子（**无需**本机再装完整 CUDA Toolkit）。
+
+为何不用 `conda install pytorch pytorch-cuda`：conda 版 `libtorch_cpu.so` 动态链接 MKL / `intel-openmp`，solver 若拉到不兼容的 MKL（常见于 2024.1+ / 2025.x）会在 `import torch` 时报 `undefined symbol: iJIT_NotifyEvent`。官方 **pip CUDA 轮子静态链接 MKL**，可避开该冲突。
 
 ```bash
 cd TS_MOE   # 仓库根目录
@@ -20,17 +22,53 @@ cd TS_MOE   # 仓库根目录
 conda env create -f environment.yml
 conda activate tsmoe
 
+# CUDA 12.4 构建；与 requirements.txt 的版本范围一致
+python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
+
 # 确认：应打印 True，且 device 为 cuda:0（或同类）
 python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
 ```
 
-之后若环境或依赖有变动：
+之后若只改了 `environment.yml`（Python / pip）：
 
 ```bash
 conda env update -f environment.yml --prune
 ```
 
-**CUDA 版本假设：** 默认按常见 GPU 服务器选用 `pytorch-cuda=12.4`。若驱动偏旧，编辑 `environment.yml` 把 `pytorch-cuda=12.4` 改成 `12.1` 或 `11.8` 后重新 `conda env create` / `update`；对照 [PyTorch 安装页](https://pytorch.org/get-started/locally/) 选择匹配组合。
+PyTorch 本身请继续用上面的 `pip install ... --index-url .../cu124`（或下文 CPU / 其它 CUDA 索引）管理，不要再 `conda install pytorch`。
+
+**CUDA 版本假设：** 默认按常见 GPU 服务器选用 **cu124**。若驱动偏旧，把索引改成 `https://download.pytorch.org/whl/cu121` 或 `.../cu118` 后重装 torch；对照 [PyTorch 安装页](https://pytorch.org/get-started/locally/) 选择匹配组合。
+
+### 修复已有损坏的 `tsmoe` 环境（`iJIT_NotifyEvent`）
+
+若已按旧 README 用 conda 装过 `pytorch` / `pytorch-cuda`，且出现：
+
+`ImportError: .../torch/lib/libtorch_cpu.so: undefined symbol: iJIT_NotifyEvent`
+
+在**现有**环境里卸掉 conda 的 PyTorch 栈，改用 pip 轮子（不必删整个 env）：
+
+```bash
+conda activate tsmoe
+
+# 卸掉旧 README 用 conda 装上的动态链接 torch 栈
+conda remove -y pytorch pytorch-cuda
+
+# 用官方 CUDA 12.4 轮子重装（静态链接 MKL）
+python -m pip install --force-reinstall "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
+
+python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
+```
+
+若仍报同样符号错误，多半是环境里残留了冲突的 OpenMP/MKL；可再执行：
+
+```bash
+conda activate tsmoe
+conda install -y "mkl<2024.1" "intel-openmp<2024.1"
+python -m pip install --force-reinstall "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
+python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
+```
+
+仍不行则重建：`conda env remove -n tsmoe` 后按本节开头的「创建」步骤重来。
 
 ### 在 GPU 上跑（与 CLI 一致）
 
@@ -52,18 +90,25 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 
 ### CPU / 无 GPU 回退
 
-无 GPU 或只需 CPU 时：仍可用同一环境，对训练与评估等命令传 `--device cpu`。若希望 conda 直接装 CPU 版 PyTorch，将 `environment.yml` 中的 `pytorch-cuda=12.4` 换成 `cpuonly`，并去掉 `nvidia` channel，再重建环境。
+无 GPU 或只需 CPU 时：仍可用同一 conda 环境，对训练与评估等命令传 `--device cpu`。装 CPU 版 PyTorch：
+
+```bash
+conda activate tsmoe
+python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cpu
+```
 
 ### 备选：venv + pip（CUDA）
+
+不需要 conda 时：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-# 与 environment.yml 的 CUDA 12.4 对应；其它版本见 pytorch.org
-python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+# 与上文 conda 路径相同的 CUDA 12.4 轮子；其它版本见 pytorch.org
+python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
 ```
 
-`requirements.txt` 仅声明版本范围 `torch>=2.4,<3`，不锁定 CUDA/CPU 轮子；GPU 服务器请用上面的 cu124 索引（或 conda）。
+`requirements.txt` 仅声明版本范围 `torch>=2.4,<3`，不锁定 CUDA/CPU 轮子；GPU 服务器请用上面的 cu124 索引。
 
 ---
 
@@ -241,7 +286,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 
 | 路径 | 内容 |
 | --- | --- |
-| `environment.yml` | Conda 环境（Python 3.12 + CUDA 12.4 PyTorch） |
+| `environment.yml` | Conda 环境骨架（Python 3.12 + pip；torch 用 pip cu124 安装） |
 | `requirements.txt` | pip 版本约束（仅 `torch`；CUDA 轮子见上文索引 URL） |
 | `tsmoe/data.py` | CSV 读取、类别对齐、时间与地理特征、窗口 |
 | `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
@@ -259,6 +304,6 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 - **未打包安装**：无 `pip install -e .`；必须在仓库根目录用 `python -m tsmoe`。
 - **无独立配置文件**：超参均通过 CLI 传入；无 YAML/JSON 训练配置入口。
 - **无服务化推理 API**：推理入口是 `recommend` / `explain` CLI，不是 HTTP 服务。
-- **`environment.yml` 锁定 `pytorch-cuda=12.4`**：更旧驱动需改 pin（12.1 / 11.8）；本仓库不自动探测本机 CUDA。
+- **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118 索引重装 torch；本仓库不自动探测本机 CUDA。
 - **无多进程 / 多卡数据并行开关**：`--device cuda:0` 等可选单卡；没有 `--gpus`、DDP 或 DataParallel 专用 CLI。
 - **大数据内存**：大型城市 prepare 的峰值内存随训练前缀增长；本仓库未提供分片 / 外存统计路径。
