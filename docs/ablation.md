@@ -58,7 +58,7 @@ cp docs/ablation_log.template.csv results/ablation_log.csv
 | **仅邻域+随机** | 关掉热门+用户常去 | 组合档 | `--popular-top-k 0 --user-frequent-top-k 0` | **是** | `abl_cand_nbhd` |
 | **Router 模式** | 专家路由 π | `hard_prior`（默认）/ `surd_mlp` / `hybrid` | `train --router-mode …`；hybrid 可加 `--lambda-prior` `--hybrid-lambda` | 否 | `abl_router_hard` / `abl_router_surd_mlp` / `abl_router_hybrid` |
 | **`--no-surd`** | 关掉 SURD 引导 | off（默认）/ on | `train --no-surd` | 否 | `abl_nosurd` |
-| **SURD 表协议** | 先验如何估计 / 谁查哪张表 | **仅 train-all 共用**（协议已固定；无 fold 档可切） | `prepare` 只写 `final.surd.pt`；`train`/`evaluate`/`explain` 皆查 `final` | **是**（旧 fold 缓存须重 prepare） | 记为「当前默认」；旧 fold 训练先验 **不再支持** |
+| **SURD 表协议** | 先验如何估计 / 谁查哪张表 | **仅 train-all 共用**（协议已固定；无 fold 档可切） | `prepare`（**无** `--folds`/`--warmup`）只写 `final.surd.pt`；`train`/`evaluate`/`explain`/`inspect --table final` 皆查 `final` | **是**（旧 fold 缓存须重 prepare） | 记为「当前默认」；旧 fold 训练先验 **不再支持** |
 | **STHGCN T/L** | T=48 / L=18 相对 Φ(Δt)/Φ(Δs) | **当前唯一 schema**（`sthgcn_tl_features_v1`）；旧 `basic_fixed_features_v1` **已移除、无 CLI 开关** | （无开关；换 schema 须改代码并 **重 prepare**） | **是**（若回退旧特征） | 记为「当前默认」；不可与旧 basic 同 cache 对比 |
 | **因果计数整模块** | 在线访问/转移表 + 分箱 + transition attn | **on（默认）** / off | `--causal-counts` / `--no-causal-counts` | 否 | `abl_causal_on` / `abl_causal_off` |
 | **transition-attn** | 转移如何进 P/C 交叉注意力 | `bias`（默认）/ `gate` / `rel_key` | `--transition-attn`；`--transition-lambda`（bias） | 否（须因果 **on**） | `abl_tr_bias` / `abl_tr_gate` / `abl_tr_rel_key` |
@@ -95,32 +95,38 @@ cp docs/ablation_log.template.csv results/ablation_log.csv
 
 均在仓库根目录、`conda activate tsmoe`。按 §4 顺序执行；每组用独立 `--out`，metrics 落在 `results/tokyo/<run>/eval_test/`。
 
-### 0) 基线 prepare（只做一次，后续 1–4 步复用）
+**SURD（与 README / [#24](https://github.com/ShiyinTan/TS_MOE/pull/24) 一致）：** `prepare` **没有** `--folds` / `--warmup`；每次 prepare 只写 **`final.surd.pt` / `final.quantizer.pt`**（整份训练集 per-POI）；**train / val / test / evaluate / explain** 都查同一张 `final`。合入 #24 后旧 fold cache **须重跑下面的 prepare**（同路径默认覆盖；对照用独立 `--out`）。
+
+### 0) 基线 prepare（#24 后先重跑一次；之后 1–4 步复用同一 cache）
 
 ```bash
 conda activate tsmoe
 # 需已有 data/tokyo/*.csv（见 README §3.2）
 
+# 构建样本 + 训练集全量 SURD（train/val/test 共用）+ 多源候选
+# （勿再传 --folds / --warmup；CLI 已移除）
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache \
   --candidate-radius p90 --popular-radius max --popular-top-k 100 \
-  --user-frequent-top-k 50 --user-frequent-min-visits 2 \
+  --popular-by visit --user-frequent-top-k 50 --user-frequent-min-visits 2 \
   --random-negatives 50 --random-negatives-seed 0 \
   --train-targets all --eval-targets all
-# → 只写 final.surd.pt / final.quantizer.pt（整份训练集 per-POI SURD；train/val/test 共用）
-# 旧含 fold_*.surd.pt 的 cache：指纹已变，须重 prepare（同路径默认覆盖）。
+# 日志：`final: N reference targets (train-all shared SURD); scored=0`
+# → 只写 final.surd.pt / final.quantizer.pt；无 fold_*.surd.pt
+# 旧含 fold_* 的 cache：指纹已变，同路径默认覆盖后即可 train。
 ```
 
-可选 Demo 烟雾（同一逻辑，小模型）：
+可选 Demo 烟雾（同一 no-fold 逻辑，小模型）：
 
 ```bash
 python examples/make_demo.py --data-root data
 python -m tsmoe prepare --data-root data --city demo --out runs/demo/cache
+# → 同样只写 final.surd.pt（train/val/test 共用）；无 --folds / --warmup
 ```
 
-### 1) Router 模式（同一 `runs/tokyo/cache`）
+### 1) Router 模式（同一 `runs/tokyo/cache`；先验均查 `final`）
 
 ```bash
-# hard_prior（默认）
+# hard_prior（默认）；train/evaluate 查 cache 内 final.surd.pt（非 fold 表）
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_router_hard \
   --router-mode hard_prior --device cuda
 python -m tsmoe evaluate --cache runs/tokyo/cache \
@@ -189,10 +195,13 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_tr_rel_key \
 
 ### 5) 候选变体（每种 **重新 prepare**；独立 `--out` 以免覆盖）
 
+每条 prepare 同样**无** `--folds` / `--warmup`，只产出 train-all `final` SURD（与基线协议相同；变的是候选构造）。
+
 ```bash
 # p80 / p70
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl_p80 \
   --candidate-radius p80 --popular-radius max --popular-top-k 100 --random-negatives 50
+# → …/cache_abl_p80/final.surd.pt（train/val/test 共用）
 python -m tsmoe train --cache runs/tokyo/cache_abl_p80 --out runs/tokyo/abl_cand_p80 --device cuda
 
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl_p70 \
@@ -225,11 +234,12 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl
 python -m tsmoe train --cache runs/tokyo/cache_abl_full --out runs/tokyo/abl_cand_full --device cuda
 ```
 
-### 6) 目标协议（须重 prepare）
+### 6) 目标协议（须重 prepare；SURD 仍为 train-all `final`）
 
 ```bash
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl_tgt_all \
   --train-targets all --eval-targets all
+# → final.surd.pt only（无 fold 表 / 无 --folds --warmup）
 python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_all \
   --out runs/tokyo/abl_tgt_all --device cuda
 
@@ -251,9 +261,13 @@ python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_all_eval_last \
 `train` 结束后会写 `results/<run>/eval_validation/` 与 `results/<run>/eval_test/`；或单独：
 
 ```bash
+# evaluate 与 train 一样查 final.surd.pt（共享先验）
 python -m tsmoe evaluate --cache runs/tokyo/cache \
   --checkpoint runs/tokyo/<run>/best.pt --split test --device cuda
 # → results/tokyo/<run>/eval_test/{metrics.json,report.txt}
+
+# 可选：核对某 POI 的 train-all 表（默认 --table final）
+python -m tsmoe inspect --cache runs/tokyo/cache --table final --poi-id 3
 ```
 
 **主键（`metrics.json`）：**
