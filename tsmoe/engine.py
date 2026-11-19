@@ -21,6 +21,29 @@ from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable, gather_fold_priors
 
+
+def model_config_from_checkpoint(raw):
+    """Build ModelConfig from a checkpoint; legacy saves without router_mode → hybrid."""
+    cfg = dict(raw)
+    if "router_mode" not in cfg:
+        # Pre-router-mode checkpoints used sequence×candidate router + λ_prior·SURD bias
+        # with an implicit learned scale of 1 (logits = learned + λ_prior · bias).
+        cfg["router_mode"] = "hybrid"
+        cfg.setdefault("hybrid_lambda", 1.0)
+    return ModelConfig(**cfg)
+
+
+def load_weights(model, weights):
+    """Load weights; allow missing surd_* modules on legacy hybrid checkpoints."""
+    missing, unexpected = model.load_state_dict(weights, strict=False)
+    if unexpected:
+        raise ValueError(f"checkpoint has unexpected keys: {sorted(unexpected)[:8]}")
+    allowed = [k for k in missing if k.startswith("surd_router.") or k.startswith("surd_gate.")]
+    if len(allowed) != len(missing):
+        raise ValueError(f"checkpoint missing required keys: "
+                         f"{sorted(set(missing) - set(allowed))[:8]}")
+    return missing
+
 # Cutoffs used for Acc/Hit/Recall/NDCG/MRR/MAP tables (next-POI papers often include @20).
 METRIC_KS = (1, 5, 10, 20)
 
@@ -577,14 +600,16 @@ def train(args):
     install_interrupt_handler()
     cache = Cache(args.cache)
     cfg = ModelConfig(args.dim, args.heads, args.layers, args.dropout, args.top_k,
-                      args.temperature, args.lambda_prior, use_surd=not args.no_surd)
+                      args.temperature, args.lambda_prior, use_surd=not args.no_surd,
+                      router_mode=args.router_mode, hybrid_lambda=args.hybrid_lambda)
     device = select_device(args.device)
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
     batches = torch.Generator().manual_seed(args.seed)
     model = cache.model(cfg).to(device)
     param_device = next(model.parameters()).device
-    print(f"model_param_device={param_device}", flush=True)
+    print(f"model_param_device={param_device} router_mode={cfg.router_mode} "
+          f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior}", flush=True)
     if param_device.type != device.type or (
             device.index is not None and param_device.index not in (None, device.index)):
         raise RuntimeError(f"model landed on {param_device}, expected {device}")
@@ -704,9 +729,11 @@ def load_model(args):
     checkpoint = load_file(args.checkpoint)
     if cache.id != checkpoint["cache_id"]:
         raise ValueError("checkpoint trained with a different cache; check --cache and --checkpoint")
-    model = cache.model(ModelConfig(**checkpoint["config"])).to(device)
-    model.load_state_dict(checkpoint["weights"])
-    print(f"model_param_device={next(model.parameters()).device}", flush=True)
+    cfg = model_config_from_checkpoint(checkpoint["config"])
+    model = cache.model(cfg).to(device)
+    load_weights(model, checkpoint["weights"])
+    print(f"model_param_device={next(model.parameters()).device} "
+          f"router_mode={cfg.router_mode}", flush=True)
     return cache, model.eval(), cache.table("final", device), checkpoint
 
 
