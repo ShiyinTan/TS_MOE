@@ -22,7 +22,7 @@ from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_bat
 from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
-from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable, gather_fold_priors
+from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
 
 
 def model_config_from_checkpoint(raw):
@@ -879,7 +879,7 @@ def train(args):
         raise RuntimeError(f"model landed on {param_device}, expected {device}")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     data, val = cache.split("train"), cache.split("validation")
-    tables = [cache.table(info["name"], device) for info in cache.meta["tables"] if info["name"] != "final"]
+    # Shared train-all SURD table for train / val / test (no fold-specific priors).
     final = cache.table("final", device)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -976,8 +976,7 @@ def train(args):
                     online_tables, data, idx, cand_lists, int(valid.shape[1]), update=True)
                 count_ctx = count_ctx_to_device(count_ctx, device)
             rows, cand_mask = rows.to(device), cand_mask.to(device)
-            prior, confidence = gather_fold_priors(
-                tables, data["fold"][idx], rows.masked_fill(~cand_mask, -1))
+            prior, confidence = final(rows.masked_fill(~cand_mask, -1))
             result = model(h, valid, rows, prior, confidence, candidate_mask=cand_mask,
                            count_ctx=count_ctx)
             loss, parts = objective(result, positive.to(device), args.lambda_surd, args.lambda_balance)

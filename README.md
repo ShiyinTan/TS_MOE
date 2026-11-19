@@ -137,7 +137,7 @@ data/tokyo/
 | `trail_id`、`user_id` | 轨迹归属、组织事件、划分隔离 |
 | `venue_id` | 历史 P、下一 POI 标签与候选目录中的原始整数 ID |
 | `venue_category_id_code`、`venue_category_id` | 历史 C；优先训练集一致的 code |
-| `timestamp` | 排序、STHGCN 小时/星期 one-hot、相对间隔 Φ(Δt)、时间折边界 |
+| `timestamp` | 排序、STHGCN 小时/星期 one-hot、相对间隔 Φ(Δt)；因果计数按时间序 |
 | `latitude`、`longitude` | 历史 L 的 Φ(Δs km) 与空间候选锚点 |
 
 带时区时间戳转 UTC；等时事件按原文件行序稳定排序；以 `(user_id, trail_id, timestamp, venue_id)` 去重。审计写入缓存的 `manifest.json`。
@@ -184,14 +184,15 @@ python examples/download_city.py --city tokyo --data-root data
 # 2) 核对文件名与列（stdlib；不 import torch）
 python scripts/verify_city_checkins.py --data-root data --city tokyo
 
-# 3) 构建样本 + 折外 SURD + 多源候选
+# 3) 构建样本 + 训练集全量 SURD（train/val/test 共用）+ 多源候选
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
 # 等价显式：
 # python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache \
 #   --candidate-radius p90 --popular-radius max --popular-top-k 100 \
 #   --popular-by visit --user-frequent-top-k 50 --user-frequent-min-visits 2 \
 #   --random-negatives 50 --random-negatives-seed 0
-# 日志：`fold_*: N reference targets; M scored` — reference=该折拟合 SURD/量化器的训练事件；scored=划入该折评分的样本；`final` 用全部训练事件作 reference、scored=0。
+# 日志：`final: N reference targets (train-all shared SURD); scored=0`
+# → 只写 final.surd.pt / final.quantizer.pt；训练与 val/test 查同一张表（无 fold 表）。
 
 # 4) GPU 训练（默认 --device auto；也可显式 cuda）
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
@@ -512,7 +513,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 参数 | 默认与含义 |
 | --- | --- |
 | `prepare --max-length`、`--hash-dim`、`--tau-pos` | 50、64、10 |
-| `prepare --clusters`、`--folds`、`--warmup` | 4、3、0.2 |
+| `prepare --clusters` | 4（SURD 无 fold：去掉 `--folds` / `--warmup`；须重 prepare） |
 | `prepare --candidate-radius` | `p70` / `p80` / `p90` / `mean` / `max` / `full`；局部邻域；写入缓存 |
 | `prepare --popular-radius` | `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`（默认 `max`） |
 | `prepare --popular-radius-multiplier` | 默认 `2.0`（仅 `multiplier`） |
@@ -539,7 +540,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128 |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-改变簇数、窗口、**目标协议**（§3.3）或候选构造（§3.4）时，须 **重新 prepare**（同一 `--out` 默认覆盖；对照实验用独立目录），并用配套缓存训练与评估。**`train` 无法覆盖 prepare 已写入的目标协议或候选构造。**
+改变簇数、窗口、**目标协议**（§3.3）、候选构造（§3.4）或 **SURD 协议**（train-all `final`；已无 `--folds`/`--warmup`）时，须 **重新 prepare**（同一 `--out` 默认覆盖；对照实验用独立目录），并用配套缓存训练与评估。**`train` 无法覆盖 prepare 已写入的目标协议、候选构造或 SURD 表。**
 
 训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。完整 `history.json` 在 `runs/.../model/`；紧凑版（含每 epoch test）在 `results/.../history.json`。训练结束自动 append `results/ablation_log.*`。
 
@@ -615,7 +616,7 @@ TS_MOE/
 | `tsmoe/candidates.py` | 距离统计、多源池、训练负采样 |
 | `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
 | `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
-| `tsmoe/prepare.py`、`tsmoe/inspect.py` | 折外估计、缓存、逐样本追踪 |
+| `tsmoe/prepare.py`、`tsmoe/inspect.py` | 训练全量 SURD、缓存、逐样本追踪 |
 | `tsmoe/counts.py` | 因果在线访问 / 转移计数表、等频分箱 |
 | `tsmoe/model.py` | Transformer、稀疏专家、Router、损失、transition 交叉注意力 |
 | `tsmoe/engine.py`、`tsmoe/__main__.py` | 训练、评估、推荐、解释与 CLI |
@@ -628,8 +629,8 @@ TS_MOE/
 
 | 命令 | 作用 |
 | --- | --- |
-| `prepare` | CSV → 样本、折外 SURD、候选半径 → `--out` 缓存 |
-| `train` | 训练；按验证 NDCG@10 存 `best.pt`；每 epoch 默认 test；写 `results/.../eval_*` 与 `ablation_log.*` |
+| `prepare` | CSV → 样本、train-all SURD（`final`）、候选半径 → `--out` 缓存 |
+| `train` | 训练（共用 `final` 先验）；按验证 NDCG@10 存 `best.pt`；每 epoch 默认 test；写 `results/.../eval_*` 与 `ablation_log.*` |
 | `evaluate` | 在缓存候选集上排名；默认 `results/.../eval_<split>/` |
 | `inspect` | 查看某 POI 的 26 维 SURD |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
@@ -657,12 +658,12 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 
 1. 四源历史摘要（P/C 哈希；T/L 为 STHGCN 对齐数值 T=48、L=18）→ 每源标准化 + K-means 状态。
 2. 单一联合频数表边缘化 → 26 维（4 Unique + 11 Redundancy + 11 Synergy）；15 个 U/S 专家在线执行。
-3. 折外估计：默认最早 20% 训练样本暖启动，其后 3 个时间块；验证 / 测试 / 新轨迹用全训练 `final` 表。
+3. **SURD 先验（无 fold）：** 在整份训练集上估计逐 POI 的 26 维表，写入 `final.surd.pt`；**train / val / test 共用同一张表**（不再为时间折各算一套）。改协议后须重 prepare。
 4. 在线：四源 Transformer 编码历史（T/L MLP→`dim`）；**Router 默认 `hard_prior`**（仅候选 U/S SURD → π，无序列）；可选 `surd_mlp` / `hybrid`；Top-K 稀疏专家；`base + 门控 MoE 残差`。
 5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
 6. **因果在线计数**（默认 on）：按时间戳训练；用户/全局访问与转移表先读后写；POI/C 嵌入加计数 MLP；T/L 加等频访问分箱；P/C 交叉注意力默认 `bias` 注入转移（可选 `gate` / `rel_key`）。见 [`docs/causal-counts.md`](docs/causal-counts.md) 与 §3.8。
 
-缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、分折、候选构造与文件摘要。旧 `basic_fixed_features_v1` 缓存不兼容，须重新 prepare（默认覆盖同路径旧缓存）。
+缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、SURD `final` 表、候选构造与文件摘要。旧 `basic_fixed_features_v1` 或含 fold SURD 的缓存不兼容，须重新 prepare（默认覆盖同路径旧缓存）。
 
 ---
 

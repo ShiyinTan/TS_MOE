@@ -9,14 +9,13 @@
     "clusters": 4,
     "hash_dim": 64,
     "quant_seed": 0,
-    "folds": 3,
-    "warmup": 0.2,
     "tau_pos": 10.0,
     "train_targets": "all",
     "eval_targets": "all",
     "kappa_n": 20.0,
     "kappa_i": 0.05,
     "version": "tsmoe.massivesteps.v1",
+    "surd_table": "final (train-all; shared by train/val/test; no fold tables)",
     "files": {
       "train": "0f960159e8fc15d14e95181e13e50c68324b28d2f65f75d419a8b8f32eca6348",
       "validation": "bb26fae03c124c470e5c5214ce61d08ea8fd4aa5704d7bd5bdf256e417254dc5",
@@ -77,13 +76,7 @@
       "target_mode": "all"
     }
   },
-  "fold_reference_sizes": [
-    0,
-    1160,
-    2727,
-    4289,
-    5855
-  ],
+  "surd_reference_events": 5855,
   "validation": {
     "all_targets": {
       "samples": 808,

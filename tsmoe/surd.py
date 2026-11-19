@@ -254,8 +254,7 @@ def save_surd_table(stats, path):
 class FrozenSURDTable(nn.Module):
     """Runtime candidate-row lookup; -1 is unknown, other invalid IDs raise.
 
-    All fold tables must use the same poi_ids catalog order. Quantizer state
-    numbers need NOT match across folds: their counts must never be pooled.
+    Train / val / test share one train-all table (prepare writes `final.surd.pt`).
     Candidate padding still requires a separate candidate-valid mask.
     """
 

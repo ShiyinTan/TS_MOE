@@ -30,7 +30,7 @@ def inspect_prior(args):
     if args.sample_index is not None:
         pair = meta["quantizer_manifest"]
         if pair is None:
-            raise ValueError("the empty warm-up table has no fitted quantizer; select another table")
+            raise ValueError("this SURD table has no fitted quantizer")
         data = cache.split("train")
         if not 0 <= args.sample_index < len(data["end"]):
             raise ValueError("training sample-index outside range")

@@ -21,7 +21,9 @@ def positive(value):
 def main():
     root = argparse.ArgumentParser(description="TS-MoE for Massive-STEPS check-in CSVs")
     commands = root.add_subparsers(dest="command", required=True)
-    p = commands.add_parser("prepare", help="build samples, fold quantizers and per-POI SURD tables")
+    p = commands.add_parser(
+        "prepare",
+        help="build samples and one train-all per-POI SURD table shared by train/val/test")
     p.add_argument("--data-root", required=True, help="official data directory or its city subdirectory")
     p.add_argument("--city", required=True, help="official city filename prefix, e.g. tokyo")
     p.add_argument("--out", required=True)
@@ -29,10 +31,9 @@ def main():
         "--no-overwrite", action="store_true",
         help="refuse to replace an existing --out when the fingerprint differs "
              "or the cache is incomplete (default: rebuild and replace in place)")
-    for name, value in [("max-length", 50), ("clusters", 4), ("hash-dim", 64), ("folds", 3)]:
+    for name, value in [("max-length", 50), ("clusters", 4), ("hash-dim", 64)]:
         p.add_argument("--" + name, type=positive, default=value)
     p.add_argument("--quant-seed", type=int, default=0)
-    p.add_argument("--warmup", type=float, default=.2)
     p.add_argument("--tau-pos", type=float, default=10.)
     p.add_argument("--kappa-n", type=float, default=20.)
     p.add_argument("--kappa-i", type=float, default=.05)
@@ -89,7 +90,9 @@ def main():
     a.add_argument("--output")
     a.set_defaults(func=inspect_prior)
 
-    t = commands.add_parser("train", help="train with fold-specific priors and select by validation NDCG@10")
+    t = commands.add_parser(
+        "train",
+        help="train with the shared train-all SURD table and select by validation NDCG@10")
     t.add_argument("--out", required=True)
     for name, value in [("epochs", 20), ("batch-size", 32), ("dim", 128), ("heads", 4),
                         ("layers", 2), ("top-k", 4)]:
@@ -183,8 +186,8 @@ def main():
     args = root.parse_args()
     if any(not math.isfinite(v) for v in vars(args).values() if isinstance(v, float)):
         root.error("numeric options must be finite")
-    if args.command == "prepare" and not (0 <= args.warmup < 1 and min(args.tau_pos, args.kappa_i, args.kappa_n) > 0):
-        root.error("warmup must be in [0,1); tau-pos and reliability scales must be positive")
+    if args.command == "prepare" and min(args.tau_pos, args.kappa_i, args.kappa_n) <= 0:
+        root.error("tau-pos and reliability scales must be positive")
     if args.command == "prepare" and (
             args.popular_top_k < 0 or args.user_frequent_top_k < 0
             or args.random_negatives < 0

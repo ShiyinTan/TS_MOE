@@ -16,7 +16,7 @@ Legacy checkpoints without `router_mode` load as `hybrid` with `hybrid_lambda=1.
 
 ## What each mode uses
 
-Offline SURD stores a 26-D `routing_prior` per POI (4 Unique + 11 Redundancy + 11 Synergy). Online:
+Offline SURD stores a 26-D `routing_prior` per POI (4 Unique + 11 Redundancy + 11 Synergy) in one train-all table (`final.surd.pt`); train / val / test share that table. Online:
 
 - **U/S mass** (15-D, expert order): `mass = concat(prior[..., :4], prior[..., 15:])`
 - **Redundancy** `ρ = prior[..., 4:15].sum(-1)` and **α = mass.sum(-1)** feed the residual gate (and SURD MLP features), not the 15 expert logits directly

@@ -645,14 +645,25 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(len(trace["sample"]["q_state"]), 4)
             self.assertEqual(len(trace["specific_bits"]), 15)
             self.assertEqual(len(trace["raw_surd"]), 26)
-            for tab in cache.meta["tables"][:-1]:
-                if tab["reference_events"]:
-                    self.assertLess(tab["last_reference_target_utc_us"], tab["prediction_cutoff_utc_us"])
-                ref = (train["us"][train["end"]] < tab["prediction_cutoff_utc_us"])
-                expected = (train["poi_token"][train["end"][ref]] - 2).bincount(minlength=len(cache.pois))
-                table = cache.table(tab["name"], "cpu")
-                torch.testing.assert_close(table.target_count, expected.float())
-            self.assertEqual(cache.meta["tables"][-1]["reference_events"], len(train["end"]))
+            # One shared train-all SURD table; no fold_*.surd.pt artifacts.
+            self.assertEqual([t["name"] for t in cache.meta["tables"]], ["final"])
+            self.assertFalse(any((cache.path).glob("fold_*.surd.pt")))
+            self.assertNotIn("fold", train)
+            self.assertNotIn("folds", cache.cfg)
+            self.assertNotIn("warmup", cache.cfg)
+            final_meta = cache.meta["tables"][0]
+            self.assertEqual(final_meta["reference_events"], len(train["end"]))
+            self.assertIsNone(final_meta["prediction_cutoff_utc_us"])
+            self.assertEqual(final_meta["comparison"], "all official training reference events")
+            expected = (train["poi_token"][train["end"]] - 2).bincount(minlength=len(cache.pois))
+            table = cache.table("final", "cpu")
+            torch.testing.assert_close(table.target_count, expected.float())
+            # Same POI row → identical prior/confidence whether used for train or val/test.
+            rows = torch.tensor([[0, 1, -1]], dtype=torch.long)
+            prior_a, conf_a = table(rows)
+            prior_b, conf_b = cache.table("final", "cpu")(rows)
+            torch.testing.assert_close(prior_a, prior_b)
+            torch.testing.assert_close(conf_a, conf_b)
             train_out = io.StringIO()
             with patch.object(sys, "argv", ["tsmoe", "train", "--cache", str(cache_path),
                                             "--out", str(run), "--epochs", "1", "--dim", "8",
@@ -822,6 +833,33 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(
                 json.loads((cache_path / "manifest.json").read_text())["config"]["candidate_radius"],
                 "p80")
+
+    def test_shared_surd_table_one_artifact_same_poi_lookup(self):
+        """Prepare writes only final; train-path lookup matches val/test table for same POI."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = generate(root / "data")
+            cache_path = root / "cache"
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path)
+            cache = Cache(cache_path)
+            self.assertEqual([t["name"] for t in cache.meta["tables"]], ["final"])
+            self.assertEqual(sorted(p.name for p in cache_path.glob("*.surd.pt")), ["final.surd.pt"])
+            self.assertEqual(
+                sorted(p.name for p in cache_path.glob("*.quantizer.pt")), ["final.quantizer.pt"])
+            train = cache.split("train")
+            self.assertNotIn("fold", train)
+            # Engine train() loads the same Cache.table("final") used by evaluate.
+            shared = cache.table("final", "cpu")
+            n = min(4, len(cache.pois))
+            rows = torch.arange(n, dtype=torch.long).unsqueeze(0)
+            prior, confidence = shared(rows)
+            again_prior, again_confidence = cache.table("final", "cpu")(rows)
+            torch.testing.assert_close(prior, again_prior)
+            torch.testing.assert_close(confidence, again_confidence)
+            # Per-POI routing_prior rows are identity lookups into the shared buffer.
+            for j in range(n):
+                torch.testing.assert_close(prior[0, j], shared.routing_prior[j])
+                self.assertEqual(float(confidence[0, j]), float(shared.confidence[j]))
 
 
 class TestCausalCounts(unittest.TestCase):
