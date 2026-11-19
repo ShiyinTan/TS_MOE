@@ -2,7 +2,7 @@
 
 TS-MoE’s time (T) and location (L) **input features** follow the Massive-STEPS next-POI baseline **STHGCN** (Yan et al., SIGIR 2023; official code [alipay/Spatio-Temporal-Hypergraph-Model](https://github.com/alipay/Spatio-Temporal-Hypergraph-Model), Massive-STEPS submodule [w11wo/Spatio-Temporal-Hypergraph-Model](https://github.com/w11wo/Spatio-Temporal-Hypergraph-Model)).
 
-Cache `feature_method`: **`sthgcn_tl_features_v1`**. Changing this (or `t_dim` / `l_dim` / `sthgcn_basis_dim`) changes the prepare fingerprint — **re-prepare** existing caches.
+Cache `feature_method`: **`sthgcn_tl_features_v1`**. Changing this (or `t_dim` / `l_dim` / `sthgcn_basis_dim`) changes the prepare fingerprint — **re-prepare** (same `--out` overwrites by default; no need to `rm -rf` first).
 
 ## What STHGCN does
 
@@ -33,8 +33,8 @@ P/C hash salts remain `*/basic_fixed_features_v1` (identity encoding unchanged).
 ## Re-prepare
 
 ```bash
-# Example: Tokyo (use a new --out or delete the old cache dir)
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_sthgcn
+# Example: Tokyo (re-prepare in place; fingerprint mismatch replaces the cache)
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
 ```
 
-Same CLI as before; fingerprint now includes `feature_method`, `t_dim`, `l_dim`, `sthgcn_basis_dim`. Old caches with `basic_fixed_features_v1` will not load under the new check.
+Same CLI as before; fingerprint now includes `feature_method`, `t_dim`, `l_dim`, `sthgcn_basis_dim`. Old caches with `basic_fixed_features_v1` will not load under the new check until re-prepared.
