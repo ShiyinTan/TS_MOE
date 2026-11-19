@@ -31,11 +31,16 @@
 python -c "import json; m=json.load(open('results/tokyo/abl_router_hard/eval_test/metrics.json')); print(m['all_targets']['Acc@1'], m['all_targets']['NDCG@1'], m['all_targets'].get('MRR'))"
 ```
 
-可选：把填好的表另存为工作区本地日志（`results/` 已 gitignore）：
+**自动登记：** `train` 结束（写完最终 test）以及独立 `evaluate` 结束时，会**自动 append** 一行到：
+
+- `results/ablation_log.md`
+- `results/ablation_log.csv`
+
+（文件不存在则按模板表头创建。）列与下方模板一致：`date` / `run_name` / `cache` / `key flags` / `Acc@1` / `NDCG@1` / `MRR` / `notes`（`notes` 常含 best-val Acc@1 等）。无需再手工 `cp` 才能开始记；模板仍可作空表参考：
 
 ```bash
+# 可选：从模板重置本地日志（会丢掉已自动写入的行）
 cp docs/ablation_log.template.md results/ablation_log.md
-# 或
 cp docs/ablation_log.template.csv results/ablation_log.csv
 ```
 
@@ -277,7 +282,7 @@ Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（�
 
 ## 7. 结果登记表（填写区）
 
-跑完后把数字填进下表（或复制 [`ablation_log.template.md`](ablation_log.template.md) / [`ablation_log.template.csv`](ablation_log.template.csv) 到 `results/ablation_log.*` 再填——`results/` 已 gitignore）。
+**优先看自动日志：** 每次 `train` / `evaluate` 完成后，`results/ablation_log.md` 与 `.csv` 会追加一行（Acc@1 等来自本次 test / 所选 split；train 的 `notes` 含 best-val）。下面空表仍可手工对照；或从 [`ablation_log.template.md`](ablation_log.template.md) / [`.csv`](ablation_log.template.csv) 复制。`results/` 已 gitignore。
 
 ### 7.1 Router（同 cache）
 
@@ -341,4 +346,4 @@ Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（�
 - [ ] 因果 on/off + transition 三档填入 §7.3
 - [ ] 候选变体（re-prepare）填入 §7.4
 - [ ] 目标协议填入 §7.5
-- [ ] （可选）复制模板到 `results/ablation_log.md` 或 `.csv` 长期保存
+- [ ] 确认 `results/ablation_log.md` / `.csv` 已自动追加各跑（或从模板重置后再跑）

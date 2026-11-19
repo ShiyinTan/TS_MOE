@@ -139,6 +139,14 @@ def main():
         help=f"equal-frequency bins of user cumulative visit count for T/L "
              f"(default {DEFAULT_VISIT_BINS}; fit on train stream, freeze for val/test)")
     t.add_argument("--seed", type=int, default=42)
+    t.add_argument(
+        "--eval-test-every-epoch",
+        action=argparse.BooleanOptionalAction, default=True,
+        help="after each training epoch, also evaluate on the test split and write "
+             "results/<run>/eval_test/epoch_*.json + results/<run>/history.json "
+             "(default: on). Checkpoint selection still uses validation NDCG@10; "
+             "final best-ckpt test still runs. Use --no-eval-test-every-epoch to "
+             "skip per-epoch test for speed.")
     t.set_defaults(func=train)
 
     e = commands.add_parser(
