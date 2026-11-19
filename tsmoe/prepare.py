@@ -8,6 +8,10 @@ from pathlib import Path
 import torch
 from tqdm.auto import tqdm
 
+from .candidates import (
+    DEFAULT_RADIUS, candidate_construction_record, catalog_coordinates,
+    consecutive_visit_distances, pick_radius_km, summarize_distances,
+)
 from .data import SPLITS, Categories, build_split, file_digest, make_batch, read_split
 from .quantizer import BasicSourceQuantizer, SOURCES
 from .runtime import check_interrupt, install_interrupt_handler
@@ -67,7 +71,8 @@ def prepare(args):
         root = root / city
     paths = {s: root / f"{city}_checkins_{s}.csv" for s in SPLITS}
     config = {k: getattr(args, k) for k in ("city", "max_length", "clusters", "hash_dim", "quant_seed",
-              "folds", "warmup", "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i")}
+              "folds", "warmup", "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i",
+              "candidate_radius")}
     config.update(version="tsmoe.massivesteps.v1", files={s: file_digest(p) for s, p in paths.items()})
     fingerprint = digest_json(config)
     if out.exists():
@@ -101,6 +106,11 @@ def build_cache(cfg, paths, fingerprint, stage):
     cat_vocab = sorted({cats(e) for events in train_groups.values() for e in events if cats(e) >= 0})
     if not pois:
         raise ValueError("no observed training POIs")
+    distance_stats = summarize_distances(consecutive_visit_distances(train_groups))
+    radius_method = cfg.get("candidate_radius", DEFAULT_RADIUS)
+    radius_km = pick_radius_km(distance_stats, radius_method)
+    poi_coordinates = catalog_coordinates(train_groups, pois)
+    candidate_construction = candidate_construction_record(radius_method, distance_stats, radius_km)
     preprocessing = dict(source_fields=["venue_id", "venue_category_id_code/venue_category_id",
                                         "timestamp", "latitude/longitude"],
                          time="UTC; naive timestamps interpreted as UTC; interval in hours",
@@ -109,7 +119,8 @@ def build_cache(cfg, paths, fingerprint, stage):
                          missing="quarantine invalid timestamps; missing historical IDs use UNK; missing target ID skipped",
                          categories="training code via stable category ID; ambiguous/missing mapping uses SHA-256 stable ID",
                          category_mapping=cats.codes, ambiguous_category_codes=sorted(cats.ambiguous),
-                         max_length=cfg["max_length"], history="shared right-padding; first step/interval invalid")
+                         max_length=cfg["max_length"], history="shared right-padding; first step/interval invalid",
+                         candidate_construction=candidate_construction)
     audit, owners, held_trails = {}, {}, set()
     for split in SPLITS:
         groups, audit[split] = ((train_groups, train_audit) if split == "train" else read_split(paths[split]))
@@ -181,7 +192,12 @@ def build_cache(cfg, paths, fingerprint, stage):
         print(f"{name}: {len(ref)} reference targets; {len(block)} scored", flush=True)
     assert (train["fold"] >= 0).all()
     torch.save(train, stage / "train.pt")
+    print(f"candidate_radius={radius_method} radius_km={radius_km} "
+          f"consecutive_pairs={distance_stats['count']}", flush=True)
     manifest = dict(fingerprint=fingerprint, config=cfg, poi_ids=pois, cat_vocab=cat_vocab,
-                    preprocessing=preprocessing, audit=audit, tables=tables, torch_version=str(torch.__version__),
+                    poi_coordinates=poi_coordinates,
+                    candidate_construction=candidate_construction,
+                    preprocessing=preprocessing, audit=audit, tables=tables,
+                    torch_version=str(torch.__version__),
                     files={f.name: file_digest(f) for f in sorted(stage.glob("*.pt"))})
     dump_json(manifest, stage / "manifest.json")

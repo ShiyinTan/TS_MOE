@@ -12,6 +12,7 @@ from pathlib import Path
 import torch
 from tqdm.auto import tqdm
 
+from .candidates import pools_for_split, sample_candidates
 from .data import Categories, build_split, file_digest, make_batch, read_split
 from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
@@ -63,6 +64,22 @@ class Cache:
         if self.cfg["version"] != "tsmoe.massivesteps.v1" or digest_json(self.cfg) != self.meta["fingerprint"]:
             raise ValueError("incompatible cache or manifest fingerprint")
         self.id = file_digest(self.path / "manifest.json")
+        # Spatial radius is fixed at prepare time so train/eval share one construction.
+        construction = self.meta.get("candidate_construction")
+        if construction is None:
+            # Pre-spatial caches: full catalog (legacy).
+            self.candidate_construction = dict(
+                method="full_catalog", radius_statistic="full", radius_km=None,
+                empty_neighborhood_fallback="full_catalog", train_eval_shared=True)
+            self.radius_km = None
+            self.poi_coords = torch.full((len(self.pois), 2), float("nan"), dtype=torch.float64)
+        else:
+            self.candidate_construction = construction
+            self.radius_km = construction.get("radius_km")
+            coords = self.meta.get("poi_coordinates")
+            if coords is None or len(coords) != len(self.pois):
+                raise ValueError("cache missing poi_coordinates aligned with poi_ids; re-run prepare")
+            self.poi_coords = torch.tensor(coords, dtype=torch.float64)
 
     def load(self, name):
         verify_files(self.path, {name: self.meta["files"][name]})
@@ -85,6 +102,10 @@ class Cache:
 
     def model(self, cfg):
         return TSMoE(len(self.pois), len(self.meta["cat_vocab"]), self.cfg["max_length"], cfg)
+
+    def candidate_pools(self, data):
+        """Same spatial (or full-catalog) pools for train and evaluate."""
+        return pools_for_split(data, self.poi_coords, self.radius_km, len(self.pois))
 
 
 def select_device(name):
@@ -122,14 +143,10 @@ def device_batch(data, indices, device, labels=True):
     return {s: x.to(device) for s, x in history.items()}, valid.to(device), target
 
 
-def candidates(targets, size, negatives, rng):
-    if negatives < 0 or negatives >= size - 1:
-        return torch.arange(size).expand(len(targets), -1), targets
-    rows = []
-    for target in targets.tolist():
-        chosen = rng.sample(range(size - 1), negatives)
-        rows.append([target, *(n + (n >= target) for n in chosen)])
-    return torch.tensor(rows), torch.zeros_like(targets)
+def candidates(targets, size, negatives, rng, pools=None):
+    """Uniform or spatial negative sampling. Returns (rows, labels) for tests; train uses mask too."""
+    rows, labels, _mask = sample_candidates(targets, size, negatives, rng, pools=pools)
+    return rows, labels
 
 
 def all_scores(model, table, encoded, valid, size, chunk):
@@ -144,6 +161,54 @@ def all_scores(model, table, encoded, valid, size, chunk):
     if not torch.isfinite(scores).all():
         raise FloatingPointError("nonfinite full-catalog scores")
     return scores
+
+
+def score_pools(model, table, encoded, valid, pools, chunk):
+    """Score variable-size candidate pools; pad with mask (shared train/eval path)."""
+    width = max(int(pool.numel()) for pool in pools)
+    rows = torch.zeros(len(pools), width, dtype=torch.long, device=valid.device)
+    mask = torch.zeros(len(pools), width, dtype=torch.bool, device=valid.device)
+    for i, pool in enumerate(pools):
+        n = int(pool.numel())
+        rows[i, :n] = pool.to(valid.device)
+        mask[i, :n] = True
+    parts = []
+    for start in range(0, width, chunk):
+        check_interrupt()
+        sl = slice(start, min(width, start + chunk))
+        chunk_rows, chunk_mask = rows[:, sl], mask[:, sl]
+        safe = chunk_rows.masked_fill(~chunk_mask, -1)
+        prior, confidence = table(safe)
+        scored = model.score(encoded, valid, chunk_rows, prior, confidence, candidate_mask=chunk_mask)
+        part = scored["score"].cpu()
+        part = part.masked_fill(~chunk_mask.cpu(), float("-inf"))
+        parts.append(part)
+    scores = torch.cat(parts, 1)
+    finite = torch.isfinite(scores) | torch.isneginf(scores)
+    if not finite.all():
+        raise FloatingPointError("nonfinite candidate-pool scores")
+    return scores, rows.cpu(), mask.cpu()
+
+
+def ranks_in_pools(pool_scores, pool_rows, pool_mask, targets):
+    """Rank the target inside each sample's candidate pool (1-based; 0 = unknown)."""
+    ranks = []
+    for scores, rows, mask, target in zip(pool_scores, pool_rows, pool_mask, targets.tolist()):
+        if target < 0:
+            ranks.append(0)
+            continue
+        valid_scores = scores[mask]
+        valid_rows = rows[mask]
+        hit = (valid_rows == target).nonzero(as_tuple=False)
+        if hit.numel() == 0:
+            ranks.append(0)
+            continue
+        pos = int(hit[0])
+        truth = valid_scores[pos]
+        earlier = torch.arange(len(valid_scores)) < pos
+        rank = 1 + int((valid_scores > truth).sum()) + int(((valid_scores == truth) & earlier).sum())
+        ranks.append(rank)
+    return ranks
 
 
 def ranks_of(scores, target):
@@ -343,7 +408,10 @@ def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, check
         metric_notes=("Primary headline metrics are Acc@1, NDCG@1, and full MRR. "
                       "Acc@K=Hit@K=Recall@K and MAP@K=MRR@K for single next-POI target; "
                       "rank ties break by lower catalog row index; "
-                      "unknown targets use rank 0 and count as misses under all_targets."),
+                      "unknown targets use rank 0 and count as misses under all_targets. "
+                      "When candidate_construction.method is spatial_radius, ranks are within "
+                      "the per-sample spatial pool (same rule as training negatives)."),
+        candidate_construction=cache.candidate_construction,
         group_notes=GROUP_NOTES,
         group_labels=dict(GROUP_LABELS),
         **metrics,
@@ -375,12 +443,20 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     ranks, grouped = [], defaultdict(list)
     counts = table.target_count.cpu()
     device = table.routing_prior.device
+    pools, _resolutions = cache.candidate_pools(data)
     batches = list(torch.arange(len(data["end"])).split(batch_size))
     for idx in tqdm(batches, desc=desc, leave=False, dynamic_ncols=True):
         check_interrupt()
         h, valid, target = device_batch(data, idx, device)
-        scores = all_scores(model, table, model.encode(h, valid), valid, len(cache.pois), chunk)
-        batch_ranks = ranks_of(scores, target).tolist()
+        encoded = model.encode(h, valid)
+        if cache.radius_km is None:
+            scores = all_scores(model, table, encoded, valid, len(cache.pois), chunk)
+            batch_ranks = ranks_of(scores, target).tolist()
+        else:
+            batch_pools = [pools[i] for i in idx.tolist()]
+            pool_scores, pool_rows, pool_mask = score_pools(
+                model, table, encoded, valid, batch_pools, chunk)
+            batch_ranks = ranks_in_pools(pool_scores, pool_rows, pool_mask, target.cpu())
         ranks.extend(batch_ranks)
         if cat_frequency is not None:
             # Slice ranks into Head/Mid/Tail-style popularity bins plus context bins.
@@ -433,7 +509,14 @@ def train(args):
     out.mkdir(parents=True, exist_ok=True)
     best, history, best_metrics = -math.inf, [], None
     settings = {key: value for key, value in vars(args).items() if isinstance(value, (str, float, int, bool))}
+    settings["candidate_radius"] = cache.cfg.get("candidate_radius", "full")
+    settings["candidate_radius_km"] = cache.radius_km
     category_frequency = Counter(data["C"].tolist())
+    train_pools, _ = cache.candidate_pools(data)
+    radius_info = cache.candidate_construction
+    print(f"candidates method={radius_info.get('method')} "
+          f"radius_statistic={radius_info.get('radius_statistic')} "
+          f"radius_km={cache.radius_km}", flush=True)
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     for epoch in epoch_bar:
         check_interrupt()
@@ -444,10 +527,13 @@ def train(args):
         for idx in tqdm(steps, desc=f"train ep{epoch}", leave=False, dynamic_ncols=True):
             check_interrupt()
             h, valid, target = device_batch(data, idx, device)
-            rows, positive = candidates(target, len(cache.pois), args.negatives, rng)
-            rows = rows.to(device)
-            prior, confidence = gather_fold_priors(tables, data["fold"][idx], rows)
-            result = model(h, valid, rows, prior, confidence)
+            batch_pools = [train_pools[i] for i in idx.tolist()]
+            rows, positive, cand_mask = sample_candidates(
+                target.detach().cpu(), len(cache.pois), args.negatives, rng, pools=batch_pools)
+            rows, cand_mask = rows.to(device), cand_mask.to(device)
+            prior, confidence = gather_fold_priors(
+                tables, data["fold"][idx], rows.masked_fill(~cand_mask, -1))
+            result = model(h, valid, rows, prior, confidence, candidate_mask=cand_mask)
             loss, parts = objective(result, positive.to(device), args.lambda_surd, args.lambda_balance)
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -543,13 +629,29 @@ def explain(args):
         raise ValueError("sample-index outside split")
     h, valid, target = device_batch(data, torch.tensor([i]), table.routing_prior.device)
     encoded = model.encode(h, valid)
-    scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk)
-    if args.poi_id is None:
-        row = int(target[0]) if target[0] >= 0 else int(scores.argmax())
+    pools, resolutions = cache.candidate_pools(data)
+    pool, resolution = pools[i], resolutions[i]
+    if args.poi_id is not None and args.poi_id not in table.row_of:
+        raise ValueError("candidate POI outside the training catalog")
+    if cache.radius_km is None:
+        scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk)
+        if args.poi_id is None:
+            row = int(target[0]) if target[0] >= 0 else int(scores.argmax())
+        else:
+            row = table.row_of[args.poi_id]
+        candidate_rank = int(ranks_of(scores, torch.tensor([row]))[0])
     else:
-        if args.poi_id not in table.row_of:
-            raise ValueError("candidate POI outside the training catalog")
-        row = table.row_of[args.poi_id]
+        pool_scores, pool_rows, pool_mask = score_pools(
+            model, table, encoded, valid, [pool], args.chunk)
+        if args.poi_id is None:
+            if target[0] >= 0:
+                row = int(target[0])
+            else:
+                active = pool_mask[0]
+                row = int(pool_rows[0][active][pool_scores[0][active].argmax()])
+        else:
+            row = table.row_of[args.poi_id]
+        candidate_rank = ranks_in_pools(pool_scores, pool_rows, pool_mask, torch.tensor([row]))[0]
     rows = torch.tensor([[row]], device=valid.device)
     prior, confidence = table(rows)
     result = model.score(encoded, valid, rows, prior, confidence, details=True)
@@ -565,6 +667,8 @@ def explain(args):
                   history_poi_ids=data["P"][start:end].tolist(), history_category_ids=data["C"][start:end].tolist(),
                   history_time_features=h["T"][0].tolist(), history_location_features=h["L"][0].tolist(),
                   prior_version=cache.id, source_order=SOURCE_ORDER, atom_order=ATOM_ORDER, expert_order=EXPERT_ORDER,
+                  candidate_construction=cache.candidate_construction,
+                  candidate_pool_size=int(pool.numel()), candidate_pool_resolution=resolution,
                   target_count=int(table.target_count[row]), total_information_bits=float(table.total_information[row]),
                   near_tie_in_surd=bool(table.near_tie[row]),
                   exact_tie_in_route=len(set(get("logits"))) < len(EXPERT_ORDER),
@@ -578,7 +682,7 @@ def explain(args):
                   expert_projected_scores=dict(zip(top, get("projected"))),
                   expert_score_contributions=dict(zip(top, get("contributions"))),
                   moe_bias_contribution=get("moe_bias"), final_score=get("score"),
-                  candidate_rank=int(ranks_of(scores, torch.tensor([row]))[0]))
+                  candidate_rank=candidate_rank)
     report(record, args.output)
 
 
@@ -589,15 +693,38 @@ def recommend(args):
     groups, _ = read_split(args.history)
     cats = Categories.from_manifest(cache.meta["preprocessing"])
     data = build_split(groups, cats, cache.pois, cache.meta["cat_vocab"], cache.cfg["max_length"], "predict")
+    pools, resolutions = cache.candidate_pools(data)
     records = []
     batches = list(torch.arange(len(data["end"])).split(args.eval_batch_size))
     for idx in tqdm(batches, desc="recommend", dynamic_ncols=True):
         check_interrupt()
         h, valid, _ = device_batch(data, idx, table.routing_prior.device, labels=False)
-        scores = all_scores(model, table, model.encode(h, valid), valid, len(cache.pois), args.chunk)
-        top = torch.argsort(scores, descending=True, stable=True)[:, :args.top_n]
-        for i, js, row_scores in zip(idx, top.tolist(), scores):
-            user, trail = data["trails"][data["trail"][data["end"][i] - 1]]
-            records.append(dict(user_id=user, trail_id=trail, recommendations=[
-                dict(venue_id=cache.pois[j], score=float(row_scores[j])) for j in js]))
+        encoded = model.encode(h, valid)
+        if cache.radius_km is None:
+            scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk)
+            top = torch.argsort(scores, descending=True, stable=True)[:, :args.top_n]
+            for i, js, row_scores in zip(idx.tolist(), top.tolist(), scores):
+                user, trail = data["trails"][data["trail"][data["end"][i] - 1]]
+                records.append(dict(user_id=user, trail_id=trail,
+                                    candidate_pool_resolution=resolutions[i],
+                                    recommendations=[
+                                        dict(venue_id=cache.pois[j], score=float(row_scores[j]))
+                                        for j in js]))
+        else:
+            batch_pools = [pools[i] for i in idx.tolist()]
+            pool_scores, pool_rows, pool_mask = score_pools(
+                model, table, encoded, valid, batch_pools, args.chunk)
+            for bi, i in enumerate(idx.tolist()):
+                active = pool_mask[bi]
+                scores = pool_scores[bi][active]
+                rows = pool_rows[bi][active]
+                order = torch.argsort(scores, descending=True, stable=True)[:args.top_n]
+                user, trail = data["trails"][data["trail"][data["end"][i] - 1]]
+                records.append(dict(
+                    user_id=user, trail_id=trail,
+                    candidate_pool_resolution=resolutions[i],
+                    candidate_pool_size=int(active.sum()),
+                    recommendations=[
+                        dict(venue_id=cache.pois[int(rows[j])], score=float(scores[j]))
+                        for j in order.tolist()]))
     report(records, args.output)

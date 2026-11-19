@@ -33,6 +33,11 @@ def main():
     p.add_argument("--kappa-i", type=float, default=.05)
     for name in ("train-targets", "eval-targets"):
         p.add_argument("--" + name, choices=("all", "last"), default="all")
+    p.add_argument(
+        "--candidate-radius", choices=("p90", "mean", "max", "full"), default="p90",
+        help="spatial candidate radius from consecutive visit distances "
+             "(default p90); full = global catalog. Stored in the cache so "
+             "train and evaluate share the same construction.")
     p.set_defaults(func=prepare)
 
     a = commands.add_parser("inspect", help="trace a training prefix, sparse joint counts and one POI's 26 atoms")
@@ -53,15 +58,19 @@ def main():
                         ("weight-decay", .01), ("grad-clip", 1.)]:
         t.add_argument("--" + name, type=float, default=value)
     t.add_argument("--negatives", type=int, default=63,
-                   help="uniform distinct negatives per positive; -1 selects full-catalog training")
+                   help="distinct negatives per positive drawn from the cache "
+                        "candidate pool (spatial neighborhood by default; full "
+                        "catalog when prepare used --candidate-radius full); "
+                        "-1 uses every other pool member")
     t.add_argument("--no-surd", action="store_true", help="context-only U/S MoE ablation: disable all statistical guidance")
     t.add_argument("--seed", type=int, default=42)
     t.set_defaults(func=train)
 
     e = commands.add_parser(
         "evaluate",
-        help="exact ranking over every training POI; report Acc@1 / NDCG@1 / MRR "
-             "(+ full @K tables and Head/Mid/Tail groups) to metrics.json + report.txt")
+        help="rank within the cache candidate set (spatial radius by default, or "
+             "full catalog); report Acc@1 / NDCG@1 / MRR (+ full @K tables and "
+             "Head/Mid/Tail groups) to metrics.json + report.txt")
     e.set_defaults(func=evaluate_cli)
     e.add_argument("--out", help="directory for metrics.json and report.txt "
                    "(default: results/<run_from_checkpoint>/eval_<split>)")

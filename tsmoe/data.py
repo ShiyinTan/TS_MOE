@@ -117,6 +117,8 @@ class Categories:
 
 
 def numeric_features(event, previous):
+    from .candidates import haversine_km
+
     t = event.time
     hour = 2 * math.pi * (t.hour + t.minute / 60 + t.second / 3600) / 24
     day = 2 * math.pi * t.weekday() / 7
@@ -129,11 +131,9 @@ def numeric_features(event, previous):
         loc[:3] = [math.cos(lat) * math.cos(lon), math.cos(lat) * math.sin(lon), math.sin(lat)]
         loc[6] = 1.0
         if previous and previous.coord is not None:
+            distance = haversine_km(*previous.coord, *event.coord)
             prev_lat, prev_lon = map(math.radians, previous.coord)
             dlon = lon - prev_lon
-            hav = (math.sin((lat - prev_lat) / 2)**2
-                   + math.cos(prev_lat) * math.cos(lat) * math.sin(dlon / 2)**2)
-            distance = 2 * 6371.0088 * math.asin(math.sqrt(min(1., max(0., hav))))
             east = math.sin(dlon) * math.cos(lat)
             north = math.cos(prev_lat) * math.sin(lat) - math.sin(prev_lat) * math.cos(lat) * math.cos(dlon)
             norm = math.hypot(east, north)
@@ -157,7 +157,10 @@ def build_split(groups, categories, catalog, cat_vocab, max_length, target_mode)
             t, l = numeric_features(event, events[j - 1] if j else None)
             delta = event.time - EPOCH
             time_us = (delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds
+            lat, lon = (event.coord if event.coord is not None
+                        else (float("nan"), float("nan")))
             fields = {"P": event.poi, "C": category, "T": t, "L": l,
+                      "lat": lat, "lon": lon,
                       "poi_token": poi_rows.get(event.poi, -1) + 2,
                       "cat_token": cat_rows.get(category, -1) + 2, "us": time_us,
                       "line": event.line, "trail": trail_index}
@@ -171,7 +174,7 @@ def build_split(groups, categories, catalog, cat_vocab, max_length, target_mode)
             ends.append(offset + len(events))
     if not ends:
         raise ValueError("split has no usable next-POI target after preprocessing")
-    data = {k: torch.tensor(v, dtype=torch.float64 if k in ("T", "L") else torch.long)
+    data = {k: torch.tensor(v, dtype=torch.float64 if k in ("T", "L", "lat", "lon") else torch.long)
             for k, v in columns.items()}
     return {**data, "start": torch.tensor(starts), "end": torch.tensor(ends), "trails": trail_keys}
 
