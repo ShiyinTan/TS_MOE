@@ -19,9 +19,10 @@
 | **主指标** | `all_targets` 下的 **Acc@1**；同时记 NDCG@1、MRR |
 | **结果路径** | `results/<run_name>/eval_test/metrics.json`（及同目录 `report.txt`） |
 | **checkpoint** | `runs/...`；metrics **只**看 `results/` |
+| **SURD 先验** | **train-all、无 fold**：在整份训练集上估计 **逐 POI** SURD；**train / val / test 共用同一张** `final.surd.pt`；训练不再查 fold 特异表 |
 | **同一 prepare 指纹** | 能复用同一 cache 的实验（Router / causal / transition / 训练负采样）**必须共用同一 `--cache`** |
-| **须重 prepare** | 候选构造、目标协议、T/L 特征 schema 任一变化 → 重新 `prepare`（对照时用**独立** `--out` 保留多套 cache；同路径默认覆盖，见下表「依赖 prepare?」） |
-| **默认基线 cache（Tokyo）** | `runs/tokyo/cache`：默认多源 `p90` + popular@max + user-frequent + random50；`train/eval-targets=all`；`feature_method=sthgcn_tl_features_v1` |
+| **须重 prepare** | 候选构造、目标协议、T/L 特征 schema、或 **SURD 协议/指纹**（已去掉 `--folds` / `--warmup`）任一变化 → 重新 `prepare`（对照时用**独立** `--out` 保留多套 cache；同路径默认覆盖，见下表「依赖 prepare?」） |
+| **默认基线 cache（Tokyo）** | `runs/tokyo/cache`：默认多源 `p90` + popular@max + user-frequent + random50；`train/eval-targets=all`；`feature_method=sthgcn_tl_features_v1`；**仅** `final` SURD 表 |
 | **默认训练 knobs（除非该行明确改）** | `--router-mode hard_prior`；因果计数 **on**；`--transition-attn bias`；`--negatives 63`；`--max-train-candidates -1`；`--device cuda` |
 | **对比公平性** | 同一 cache、同一 seed（默认 42）、独立 `--out` / `results/<run>`，避免结果目录互相覆盖 |
 
@@ -57,6 +58,7 @@ cp docs/ablation_log.template.csv results/ablation_log.csv
 | **仅邻域+随机** | 关掉热门+用户常去 | 组合档 | `--popular-top-k 0 --user-frequent-top-k 0` | **是** | `abl_cand_nbhd` |
 | **Router 模式** | 专家路由 π | `hard_prior`（默认）/ `surd_mlp` / `hybrid` | `train --router-mode …`；hybrid 可加 `--lambda-prior` `--hybrid-lambda` | 否 | `abl_router_hard` / `abl_router_surd_mlp` / `abl_router_hybrid` |
 | **`--no-surd`** | 关掉 SURD 引导 | off（默认）/ on | `train --no-surd` | 否 | `abl_nosurd` |
+| **SURD 表协议** | 先验如何估计 / 谁查哪张表 | **仅 train-all 共用**（协议已固定；无 fold 档可切） | `prepare` 只写 `final.surd.pt`；`train`/`evaluate`/`explain` 皆查 `final` | **是**（旧 fold 缓存须重 prepare） | 记为「当前默认」；旧 fold 训练先验 **不再支持** |
 | **STHGCN T/L** | T=48 / L=18 相对 Φ(Δt)/Φ(Δs) | **当前唯一 schema**（`sthgcn_tl_features_v1`）；旧 `basic_fixed_features_v1` **已移除、无 CLI 开关** | （无开关；换 schema 须改代码并 **重 prepare**） | **是**（若回退旧特征） | 记为「当前默认」；不可与旧 basic 同 cache 对比 |
 | **因果计数整模块** | 在线访问/转移表 + 分箱 + transition attn | **on（默认）** / off | `--causal-counts` / `--no-causal-counts` | 否 | `abl_causal_on` / `abl_causal_off` |
 | **transition-attn** | 转移如何进 P/C 交叉注意力 | `bias`（默认）/ `gate` / `rel_key` | `--transition-attn`；`--transition-lambda`（bias） | 否（须因果 **on**） | `abl_tr_bias` / `abl_tr_gate` / `abl_tr_rel_key` |
@@ -78,7 +80,7 @@ cp docs/ablation_log.template.csv results/ablation_log.csv
 
 | 步 | 做什么 | 是否 re-prepare | 说明 |
 | ---: | --- | --- | --- |
-| **0** | 准备基线 Tokyo cache | 一次 | `runs/tokyo/cache`（或明确记下指纹的等价 cache） |
+| **0** | 准备基线 Tokyo cache | 一次 | `runs/tokyo/cache`（train-all `final` SURD；或明确记下指纹的等价 cache） |
 | **1** | Router：`hard_prior` / `surd_mlp` / `hybrid` | 否 | 最便宜；同一 cache |
 | **2** | 训练负采样：`negatives` / `max-train-candidates` | 否 | 同一 cache |
 | **3** | 因果整模块：on vs `--no-causal-counts` | 否 | 同一 cache |
@@ -104,6 +106,8 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache \
   --user-frequent-top-k 50 --user-frequent-min-visits 2 \
   --random-negatives 50 --random-negatives-seed 0 \
   --train-targets all --eval-targets all
+# → 只写 final.surd.pt / final.quantizer.pt（整份训练集 per-POI SURD；train/val/test 共用）
+# 旧含 fold_*.surd.pt 的 cache：指纹已变，须重 prepare（同路径默认覆盖）。
 ```
 
 可选 Demo 烟雾（同一逻辑，小模型）：
@@ -336,11 +340,17 @@ Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（�
 | --- | --- | --- |
 | `sthgcn_tl_features_v1` | **当前默认**（T=48, L=18） | 旧 `basic_fixed_features_v1` 已移除，**无开关**；勿与旧 cache 混用 |
 
+### 7.7 SURD 表协议（无 CLI 消融）
+
+| 项 | 状态 | notes |
+| --- | --- | --- |
+| train-all `final` 共用 | **当前默认 / 唯一协议** | 无 `--folds` / `--warmup`；训练也不再用 fold 表；旧 fold cache 须重 prepare |
+
 ---
 
 ## 8. 清单
 
-- [ ] 基线 `runs/tokyo/cache` prepare 完成，指纹记下（半径 / 源 / targets）
+- [ ] 基线 `runs/tokyo/cache` **按新指纹** prepare 完成（含 train-all `final` SURD；记下半径 / 源 / targets）
 - [ ] Router 三档填入 §7.1
 - [ ] 负采样填入 §7.2
 - [ ] 因果 on/off + transition 三档填入 §7.3

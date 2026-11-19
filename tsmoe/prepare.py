@@ -1,7 +1,6 @@
-"""Time-expanding cross-fitting and reproducible, versioned cache construction."""
+"""Reproducible, versioned cache construction (samples + one train-all SURD table)."""
 import hashlib
 import json
-import math
 import tempfile
 from pathlib import Path
 
@@ -51,19 +50,6 @@ def empty_stats(pois, meta):
                 manifest=meta)
 
 
-def reference_plan(train, folds, warmup):
-    pred = train["us"][train["end"] - 1]
-    target = train["us"][train["end"]]
-    order = torch.argsort(pred, stable=True)
-    n_warm = min(len(order) - 1, math.ceil(len(order) * warmup))
-    blocks = ([order[:n_warm]] if n_warm else []) + list(order[n_warm:].tensor_split(folds))
-    for block in blocks:
-        if block.numel():
-            cutoff = pred[block].min()
-            ref = torch.where(target < cutoff)[0]
-            yield block, ref, int(cutoff)
-
-
 def event_digest(data, refs):
     acc = hashlib.sha256()
     for j in data["end"][refs].tolist():
@@ -80,7 +66,7 @@ def prepare(args):
     paths = {s: root / f"{city}_checkins_{s}.csv" for s in SPLITS}
     config = {k: getattr(args, k) for k in (
         "city", "max_length", "clusters", "hash_dim", "quant_seed",
-        "folds", "warmup", "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i",
+        "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i",
         "candidate_radius", "popular_radius", "popular_radius_multiplier", "popular_top_k",
         "popular_by", "user_frequent_top_k", "user_frequent_min_visits",
         "random_negatives", "random_negatives_seed")}
@@ -210,7 +196,7 @@ def build_cache(cfg, paths, fingerprint, stage):
             torch.save(data, stage / f"{split}.pt")
     args_q = dict(n_clusters=cfg["clusters"], hash_dim=cfg["hash_dim"], seed=cfg["quant_seed"],
                   max_length=cfg["max_length"], tau_pos=cfg["tau_pos"])
-    # These deterministic per-history summaries have no fitted parameters. Reuse across folds.
+    # Deterministic per-history summaries have no fitted parameters.
     ids = torch.arange(len(train["end"]))
     fixed = BasicSourceQuantizer(**args_q)
     pieces = {s: [] for s in SOURCES}
@@ -223,43 +209,38 @@ def build_cache(cfg, paths, fingerprint, stage):
     summaries = {s: torch.cat(xs) for s, xs in pieces.items()}
     del pieces
     target_rows = train["poi_token"][train["end"]] - 2
-    folds = list(reference_plan(train, cfg["folds"], cfg["warmup"]))
-    train["fold"] = torch.full_like(ids, -1)
-    tables = []
-    jobs = [(f"fold_{i}", block, ref, cutoff) for i, (block, ref, cutoff) in enumerate(folds)]
-    jobs.append(("final", ids[:0], ids, None))
-    for i, (name, block, ref, cutoff) in enumerate(tqdm(jobs, desc="prepare SURD tables", dynamic_ncols=True)):
-        check_interrupt()
-        if len(block):
-            train["fold"][block] = i
-        targets = train["us"][train["end"][ref]]
-        split_info = dict(name=name, scored=len(block), reference_events=len(ref), prediction_cutoff_utc_us=cutoff,
-                          first_reference_target_utc_us=int(targets.min()) if len(ref) else None,
-                          last_reference_target_utc_us=int(targets.max()) if len(ref) else None,
-                          comparison="strict target timestamp < earliest scoring prediction timestamp" if cutoff is not None
-                                     else "all official training reference events",
-                          reference_event_sha256=event_digest(train, ref))
-        meta = dict(cache_id=fingerprint, feature_method=FEATURE_METHOD,
-                    source_fields=preprocessing["source_fields"], preprocessing_sha256=digest_json(preprocessing),
-                    split_manifest=split_info, quantizer_manifest=None)
-        if len(ref):
-            fit_summaries = {s: matrix[ref] for s, matrix in summaries.items()}
-            q = BasicSourceQuantizer(**args_q).fit_summaries(fit_summaries)
-            state = q.transform_summaries(fit_summaries)
-            q_file = f"{name}.quantizer.pt"
-            q.save(stage / q_file)
-            meta["quantizer_manifest"] = dict(file=q_file, sha256=file_digest(stage / q_file), config=q.config)
-            stats = build_offline_surd(state, target_rows[ref], pois, manifest=meta,
-                                       kappa_n=cfg["kappa_n"], kappa_i=cfg["kappa_i"])
-            split_info["cluster_sizes"] = {s: state[:, j].bincount().tolist() for j, s in enumerate(SOURCES)}
-            split_info["occupied_four_source_states"] = int(state.unique(dim=0).shape[0])
-        else:
-            stats = empty_stats(pois, meta)
-        stats["manifest"]["split_manifest"] = split_info
-        save_surd_table(stats, stage / f"{name}.surd.pt")
-        tables.append(split_info)
-        print(f"{name}: {len(ref)} reference targets; {len(block)} scored", flush=True)
-    assert (train["fold"] >= 0).all()
+    # Protocol: one shared per-POI SURD table from the entire training set.
+    # Train / val / test all look up this same `final` artifact (no fold tables).
+    name, ref = "final", ids
+    check_interrupt()
+    targets = train["us"][train["end"][ref]]
+    split_info = dict(
+        name=name, scored=0, reference_events=len(ref), prediction_cutoff_utc_us=None,
+        first_reference_target_utc_us=int(targets.min()) if len(ref) else None,
+        last_reference_target_utc_us=int(targets.max()) if len(ref) else None,
+        comparison="all official training reference events",
+        reference_event_sha256=event_digest(train, ref),
+    )
+    meta = dict(cache_id=fingerprint, feature_method=FEATURE_METHOD,
+                source_fields=preprocessing["source_fields"], preprocessing_sha256=digest_json(preprocessing),
+                split_manifest=split_info, quantizer_manifest=None)
+    if len(ref):
+        fit_summaries = {s: matrix[ref] for s, matrix in summaries.items()}
+        q = BasicSourceQuantizer(**args_q).fit_summaries(fit_summaries)
+        state = q.transform_summaries(fit_summaries)
+        q_file = f"{name}.quantizer.pt"
+        q.save(stage / q_file)
+        meta["quantizer_manifest"] = dict(file=q_file, sha256=file_digest(stage / q_file), config=q.config)
+        stats = build_offline_surd(state, target_rows[ref], pois, manifest=meta,
+                                   kappa_n=cfg["kappa_n"], kappa_i=cfg["kappa_i"])
+        split_info["cluster_sizes"] = {s: state[:, j].bincount().tolist() for j, s in enumerate(SOURCES)}
+        split_info["occupied_four_source_states"] = int(state.unique(dim=0).shape[0])
+    else:
+        stats = empty_stats(pois, meta)
+    stats["manifest"]["split_manifest"] = split_info
+    save_surd_table(stats, stage / f"{name}.surd.pt")
+    tables = [split_info]
+    print(f"{name}: {len(ref)} reference targets (train-all shared SURD); scored=0", flush=True)
     torch.save(train, stage / "train.pt")
     torch.save(user_frequent, stage / "user_frequent.pt")
     print(
