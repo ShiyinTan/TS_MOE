@@ -132,7 +132,7 @@ data/tokyo/
 
 ### 空间候选半径（prepare 时固定）
 
-`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）把半径写入缓存；**train / evaluate 不覆盖**，换半径须换 `--out` 并重新 prepare。锚点 = 目标前一签坐标；邻域空或锚点无效则该样本回退全目录。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全，并打印 `coordinate_imputation: …` 计数行。详见 [`docs/candidates.md`](docs/candidates.md)。
+`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）把半径写入缓存；**train / evaluate 不覆盖**，换半径须换 `--out` 并重新 prepare。锚点 = 目标前一签坐标；邻域空或锚点无效则该样本回退全目录。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全，并打印 `coordinate_imputation: …` 计数行。`train` 启动时对 train / validation / test 打印候选池大小统计（`candidates <split>: n=… min=… max=… mean=… median=…`，与评分用同一解析定义），并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
 
 `download_city.py` 支持城市：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
 
@@ -307,6 +307,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `runs/<city>/model/` | `best.pt`、`history.json`（**不含**最终 metrics） |
 | `results/<run>/eval_validation/` | train 结束后最佳模型的 validation metrics |
 | `results/<run>/eval_test/` | train 自动 test，或独立 `evaluate --split test` 的默认输出 |
+| `results/<run>/candidate_pool_stats.json` | train 启动时各 split 候选池大小（min/max/mean/median） |
 
 每个 `eval_*` 含 `metrics.json` + `report.txt`。`<run>` 由 train `--out` / checkpoint 路径去掉前缀 `runs/` 得到，例如 `runs/tokyo/model` → `results/tokyo/model/`。可用 `evaluate --out <dir>` 覆盖。
 

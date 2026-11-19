@@ -15,9 +15,9 @@ import torch
 from examples.make_demo import generate
 from tsmoe.__main__ import main
 from tsmoe.candidates import (
-    catalog_coordinates, consecutive_visit_distances, haversine_km,
-    neighborhood_indices, pick_radius_km, resolve_candidate_pool,
-    sample_candidates, summarize_distances,
+    catalog_coordinates, consecutive_visit_distances, format_pool_size_line,
+    haversine_km, neighborhood_indices, pick_radius_km, resolve_candidate_pool,
+    sample_candidates, summarize_distances, summarize_pool_sizes,
 )
 from tsmoe.prepare import dump_json
 from tsmoe.data import Categories, Event, build_split, make_batch, read_split
@@ -198,6 +198,25 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(full.tolist(), [0, 1, 2, 3])
         empty, how = resolve_candidate_pool(10.0, 10.0, 0, coords, 0.01, 4)
         self.assertEqual(how, "fallback_full_catalog")
+        # Pool-size stats use the resolved set (after target include / fallback).
+        pools = [
+            resolve_candidate_pool(0.0, 0.0, 3, coords, 1.0, 4)[0],
+            resolve_candidate_pool(float("nan"), 0.0, 1, coords, 10.0, 4)[0],
+            resolve_candidate_pool(10.0, 10.0, 0, coords, 0.01, 4)[0],
+        ]
+        resolutions = ["spatial", "fallback_full_catalog", "fallback_full_catalog"]
+        stats = summarize_pool_sizes(pools, resolutions)
+        self.assertEqual(stats["n"], 3)
+        self.assertEqual(stats["min"], 2)  # origin + force-included target
+        self.assertEqual(stats["max"], 4)
+        self.assertAlmostEqual(stats["mean"], (2 + 4 + 4) / 3)
+        self.assertEqual(stats["median"], 4.0)
+        self.assertEqual(stats["resolutions"]["spatial"], 1)
+        self.assertEqual(stats["resolutions"]["fallback_full_catalog"], 2)
+        line = format_pool_size_line("train", stats)
+        self.assertTrue(line.startswith("candidates train: n=3 min=2 max=4 mean="))
+        self.assertIn("median=4.00", line)
+        self.assertIn("spatial=1", line)
         rows, labels, mask = sample_candidates(
             torch.tensor([0]), 4, 1, random.Random(0), pools=[pool])
         self.assertTrue(mask[0, 0].item())
@@ -377,13 +396,35 @@ class TestDesign(unittest.TestCase):
                 table = cache.table(tab["name"], "cpu")
                 torch.testing.assert_close(table.target_count, expected.float())
             self.assertEqual(cache.meta["tables"][-1]["reference_events"], len(train["end"]))
-            run_cli("train", "--cache", cache_path, "--out", run, "--epochs", 1, "--dim", 8,
-                    "--layers", 1, "--heads", 2, "--device", "cpu", "--negatives", 3, "--threads", 1)
+            train_out = io.StringIO()
+            with patch.object(sys, "argv", ["tsmoe", "train", "--cache", str(cache_path),
+                                            "--out", str(run), "--epochs", "1", "--dim", "8",
+                                            "--layers", "1", "--heads", "2", "--device", "cpu",
+                                            "--negatives", "3", "--threads", "1"]), \
+                    contextlib.redirect_stdout(train_out):
+                main()
+            train_log = train_out.getvalue()
+            self.assertIn("candidates train:", train_log)
+            self.assertIn("candidates validation:", train_log)
+            self.assertIn("candidates test:", train_log)
+            self.assertRegex(train_log, r"candidates train: n=\d+ min=\d+ max=\d+ mean=")
             # Metrics/reports land under results/, not beside the checkpoint.
             results = results_run_dir(run)
             self.assertEqual(results, root / "results" / "run")
             self.assertFalse((run / "eval_test").exists())
             self.assertTrue((run / "best.pt").is_file())
+            pool_stats_path = results / "candidate_pool_stats.json"
+            self.assertTrue(pool_stats_path.is_file())
+            pool_stats = json.loads(pool_stats_path.read_text())
+            self.assertEqual(set(pool_stats["splits"]), {"train", "validation", "test"})
+            for name, stats in pool_stats["splits"].items():
+                self.assertEqual(stats["n"], len(cache.split(name)["end"]))
+                self.assertIsNotNone(stats["min"])
+                self.assertIsNotNone(stats["max"])
+                self.assertIsNotNone(stats["mean"])
+                self.assertIsNotNone(stats["median"])
+            history = json.loads((run / "history.json").read_text())
+            self.assertIn("candidate_pool_stats", history)
             train_test = json.loads((results / "eval_test" / "metrics.json").read_text())
             self.assertEqual(train_test["split"], "test")
             self.assertEqual(train_test["selection"], "best_checkpoint_by_NDCG@10")
@@ -394,6 +435,8 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(train_test["primary_metrics"], ["Acc@1", "NDCG@1", "MRR"])
             self.assertEqual(train_test["candidate_construction"]["method"], "spatial_radius")
             self.assertEqual(train_test["candidate_construction"]["radius_statistic"], "p90")
+            self.assertEqual(train_test["candidate_pool_stats"]["n"],
+                             pool_stats["splits"]["test"]["n"])
             self.assertIn("group_notes", train_test)
             self.assertTrue(train_test.get("groups"))
             self.assertIn("poi/head_10_plus", train_test["group_labels"])
@@ -402,11 +445,15 @@ class TestDesign(unittest.TestCase):
             val_metrics = json.loads((results / "eval_validation" / "metrics.json").read_text())
             self.assertIn("Acc@1", val_metrics["all_targets"])
             self.assertTrue(val_metrics.get("groups"))
+            self.assertEqual(val_metrics["candidate_pool_stats"]["n"],
+                             pool_stats["splits"]["validation"]["n"])
             val_report = (results / "eval_validation" / "report.txt").read_text()
             self.assertIn("summary  Acc@1=", val_report)
             self.assertIn("groups — Acc@1 / NDCG@1 / MRR", val_report)
+            self.assertIn("candidates validation:", val_report)
             test_report = (results / "eval_test" / "report.txt").read_text()
             self.assertIn("summary  Acc@1=", test_report)
+            self.assertIn("candidates test:", test_report)
             common = ["--cache", cache_path, "--checkpoint", run / "best.pt", "--device", "cpu"]
             run_cli("evaluate", *common, "--output", root / "evaluation.json", "--chunk", 3)
             metrics = json.loads((root / "evaluation.json").read_text())

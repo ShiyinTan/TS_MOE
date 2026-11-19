@@ -12,7 +12,9 @@ from pathlib import Path
 import torch
 from tqdm.auto import tqdm
 
-from .candidates import pools_for_split, sample_candidates
+from .candidates import (
+    format_pool_size_line, pools_for_split, sample_candidates, summarize_pool_sizes,
+)
 from .data import Categories, build_split, file_digest, make_batch, read_split
 from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
@@ -106,6 +108,11 @@ class Cache:
     def candidate_pools(self, data):
         """Same spatial (or full-catalog) pools for train and evaluate."""
         return pools_for_split(data, self.poi_coords, self.radius_km, len(self.pois))
+
+    def pool_size_stats(self, data):
+        """Min/max/mean/median candidate counts for one split (scoring definition)."""
+        pools, resolutions = self.candidate_pools(data)
+        return summarize_pool_sizes(pools, resolutions), pools, resolutions
 
 
 def select_device(name):
@@ -308,6 +315,9 @@ def format_eval_report(payload, group_keys=None):
         value = payload.get(key)
         if value not in (None, ""):
             lines.append(f"  {key}={value}")
+    pool_stats = payload.get("candidate_pool_stats")
+    if pool_stats:
+        lines.append(f"  {format_pool_size_line(payload.get('split') or 'split', pool_stats)}")
     # Lead the whole report with Acc@1 on all_targets (default / primary metric).
     all_row = payload["all_targets"]
     lines.append(
@@ -418,6 +428,26 @@ def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, check
     )
 
 
+def report_candidate_pool_stats(cache, splits):
+    """Build and print per-split pool-size stats (same pools as train negatives / eval).
+
+    ``splits`` is an ordered mapping of split name → split tensor dict.
+    Returns ``(stats_by_split, pools_by_split)``.
+    """
+    radius_info = cache.candidate_construction
+    print(f"candidates method={radius_info.get('method')} "
+          f"radius_statistic={radius_info.get('radius_statistic')} "
+          f"radius_km={cache.radius_km}", flush=True)
+    all_stats = {}
+    pools_by_split = {}
+    for name, data in splits.items():
+        stats, pools, _resolutions = cache.pool_size_stats(data)
+        all_stats[name] = stats
+        pools_by_split[name] = pools
+        print(format_pool_size_line(name, stats), flush=True)
+    return all_stats, pools_by_split
+
+
 def save_eval_results(payload, out_dir, legacy_output=None):
     """Write metrics.json + report.txt under out_dir; optionally mirror JSON to --output."""
     out = Path(out_dir)
@@ -512,11 +542,24 @@ def train(args):
     settings["candidate_radius"] = cache.cfg.get("candidate_radius", "full")
     settings["candidate_radius_km"] = cache.radius_km
     category_frequency = Counter(data["C"].tolist())
-    train_pools, _ = cache.candidate_pools(data)
-    radius_info = cache.candidate_construction
-    print(f"candidates method={radius_info.get('method')} "
-          f"radius_statistic={radius_info.get('radius_statistic')} "
-          f"radius_km={cache.radius_km}", flush=True)
+    test = cache.split("test")
+    pool_stats, pools_by_split = report_candidate_pool_stats(
+        cache, {"train": data, "validation": val, "test": test})
+    train_pools = pools_by_split["train"]
+    # Persist pool-size audit under results/ (not beside checkpoints).
+    stats_dir = results_run_dir(out)
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    dump_json(dict(
+        candidate_construction=cache.candidate_construction,
+        catalog_size=len(cache.pois),
+        cache=str(Path(args.cache).resolve()),
+        cache_id=cache.id,
+        definition=("per-sample pool size after neighborhood + force-include target "
+                    "+ empty/invalid-anchor fallback to full catalog "
+                    "(same construction as train negatives and eval ranking)"),
+        splits=pool_stats,
+    ), stats_dir / "candidate_pool_stats.json")
+    print(f"Wrote {stats_dir / 'candidate_pool_stats.json'}", flush=True)
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     for epoch in epoch_bar:
         check_interrupt()
@@ -555,7 +598,8 @@ def train(args):
             best_metrics = metrics
             save_checkpoint(dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
                                  epoch=epoch, validation_ndcg10=score, training_args=settings), out / "best.pt")
-        dump_json({"training_args": settings, "epochs": history}, out / "history.json")
+        dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
+                   "epochs": history}, out / "history.json")
         row = metrics["all_targets"]
         epoch_bar.set_postfix(loss=f"{record['loss']:.5f}", acc1=f"{row['Acc@1']:.4f}",
                               ndcg10=f"{score:.6f}")
@@ -568,18 +612,20 @@ def train(args):
                                          checkpoint_path=best_path)
         val_payload["split"] = "validation"
         val_payload["selection"] = "best_checkpoint_by_NDCG@10"
+        val_payload["candidate_pool_stats"] = pool_stats.get("validation")
         print_eval_tables(val_payload)
         save_eval_results(val_payload, resolve_train_eval_dir(out, "validation"))
         # Final test once on the selected checkpoint (not the last-epoch weights).
         checkpoint = load_file(best_path)
         model.load_state_dict(checkpoint["weights"])
         model.eval()
-        test_metrics = evaluate(model, final, cache.split("test"), cache, args.eval_batch_size,
+        test_metrics = evaluate(model, final, test, cache, args.eval_batch_size,
                                 args.chunk, category_frequency, desc="eval test")
         test_payload = build_eval_payload(args, cache, test_metrics, device,
                                           checkpoint_path=best_path, checkpoint=checkpoint)
         test_payload["split"] = "test"
         test_payload["selection"] = "best_checkpoint_by_NDCG@10"
+        test_payload["candidate_pool_stats"] = pool_stats.get("test")
         print_eval_tables(test_payload)
         save_eval_results(test_payload, resolve_train_eval_dir(out, "test"))
 
@@ -610,10 +656,13 @@ def evaluate_cli(args):
     device = table.routing_prior.device
     training = cache.split("train")
     category_frequency = Counter(training["C"].tolist())
-    metrics = evaluate(model, table, cache.split(args.split), cache, args.eval_batch_size,
+    data = cache.split(args.split)
+    pool_stats, _ = report_candidate_pool_stats(cache, {args.split: data})
+    metrics = evaluate(model, table, data, cache, args.eval_batch_size,
                        args.chunk, category_frequency, desc=f"eval {args.split}")
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
+    payload["candidate_pool_stats"] = pool_stats.get(args.split)
     print_eval_tables(payload)
     out_dir = resolve_eval_out(args)
     save_eval_results(payload, out_dir, legacy_output=args.output)
