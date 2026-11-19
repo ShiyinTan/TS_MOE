@@ -10,7 +10,8 @@ from tqdm.auto import tqdm
 
 from .candidates import (
     DEFAULT_POPULAR_BY, DEFAULT_POPULAR_RADIUS, DEFAULT_POPULAR_RADIUS_MULTIPLIER,
-    DEFAULT_POPULAR_TOP_K, DEFAULT_RADIUS, DEFAULT_USER_FREQUENT_MIN_VISITS,
+    DEFAULT_POPULAR_TOP_K, DEFAULT_RADIUS, DEFAULT_RANDOM_NEGATIVES,
+    DEFAULT_RANDOM_NEGATIVES_SEED, DEFAULT_USER_FREQUENT_MIN_VISITS,
     DEFAULT_USER_FREQUENT_TOP_K, build_user_frequent, candidate_construction_record,
     catalog_coordinates, catalog_target_counts, catalog_visit_counts,
     consecutive_visit_distances, pick_popular_radius_km, pick_radius_km,
@@ -78,7 +79,8 @@ def prepare(args):
         "city", "max_length", "clusters", "hash_dim", "quant_seed",
         "folds", "warmup", "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i",
         "candidate_radius", "popular_radius", "popular_radius_multiplier", "popular_top_k",
-        "popular_by", "user_frequent_top_k", "user_frequent_min_visits")}
+        "popular_by", "user_frequent_top_k", "user_frequent_min_visits",
+        "random_negatives", "random_negatives_seed")}
     config.update(version="tsmoe.massivesteps.v1", files={s: file_digest(p) for s, p in paths.items()})
     fingerprint = digest_json(config)
     if out.exists():
@@ -121,6 +123,8 @@ def build_cache(cfg, paths, fingerprint, stage):
     popular_by = cfg.get("popular_by", DEFAULT_POPULAR_BY)
     user_frequent_top_k = int(cfg.get("user_frequent_top_k", DEFAULT_USER_FREQUENT_TOP_K))
     user_frequent_min_visits = int(cfg.get("user_frequent_min_visits", DEFAULT_USER_FREQUENT_MIN_VISITS))
+    random_negatives = int(cfg.get("random_negatives", DEFAULT_RANDOM_NEGATIVES))
+    random_negatives_seed = int(cfg.get("random_negatives_seed", DEFAULT_RANDOM_NEGATIVES_SEED))
     popular_radius_km = pick_popular_radius_km(
         distance_stats, radius_km, popular_radius, popular_multiplier)
     poi_coordinates, coordinate_imputation = catalog_coordinates(train_groups, pois)
@@ -144,6 +148,8 @@ def build_cache(cfg, paths, fingerprint, stage):
         popular_by=popular_by,
         user_frequent_top_k=user_frequent_top_k,
         user_frequent_min_visits=user_frequent_min_visits,
+        random_negatives=random_negatives,
+        random_negatives_seed=random_negatives_seed,
         poi_visit_counts=visit_counts,
         poi_target_counts=target_counts,
     )
@@ -235,6 +241,8 @@ def build_cache(cfg, paths, fingerprint, stage):
         f"popular_top_k={popular_top_k} popular_by={popular_by} "
         f"user_frequent_top_k={user_frequent_top_k} "
         f"user_frequent_users={len(user_frequent)} "
+        f"random_negatives={random_negatives} "
+        f"random_negatives_seed={random_negatives_seed} "
         f"consecutive_pairs={distance_stats['count']}",
         flush=True,
     )
