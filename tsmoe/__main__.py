@@ -90,9 +90,15 @@ def main():
                         ("layers", 2), ("top-k", 4)]:
         t.add_argument("--" + name, type=positive, default=value)
     for name, value in [("dropout", .1), ("temperature", 1.), ("lambda-prior", .1),
-                        ("lambda-surd", .05), ("lambda-balance", .001), ("lr", .001),
-                        ("weight-decay", .01), ("grad-clip", 1.)]:
+                        ("hybrid-lambda", .1), ("lambda-surd", .05), ("lambda-balance", .001),
+                        ("lr", .001), ("weight-decay", .01), ("grad-clip", 1.)]:
         t.add_argument("--" + name, type=float, default=value)
+    t.add_argument(
+        "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
+        help="expert routing: hard_prior (default) = π from candidate U/S SURD "
+             "mass only (no sequence in router); surd_mlp = softmax(MLP(SURD)/T); "
+             "hybrid = λ_prior·surd_bias + hybrid_lambda·learned(seq×cand×SURD). "
+             "Stored in the checkpoint so evaluate/explain/recommend match train.")
     t.add_argument("--negatives", type=int, default=63,
                    help="distinct negatives per positive drawn from the cache "
                         "candidate pool (multi-source by default; full catalog "
@@ -153,7 +159,8 @@ def main():
                    "popular-radius-multiplier must be positive and finite")
     if args.command == "train" and (args.negatives < -1 or args.negatives == 0 or
                                     args.max_train_candidates == 0 or args.max_train_candidates < -1 or
-                                    min(args.lambda_prior, args.lambda_surd, args.lambda_balance, args.weight_decay) < 0
+                                    min(args.lambda_prior, args.hybrid_lambda, args.lambda_surd,
+                                        args.lambda_balance, args.weight_decay) < 0
                                     or min(args.lr, args.grad_clip) <= 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip")

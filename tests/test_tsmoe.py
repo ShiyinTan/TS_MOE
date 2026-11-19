@@ -25,7 +25,7 @@ from tsmoe.prepare import dump_json
 from tsmoe.data import Categories, Event, build_split, make_batch, read_split
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, candidates, format_eval_report, metric_row,
-    ranks_of, results_run_dir,
+    model_config_from_checkpoint, ranks_of, results_run_dir,
 )
 from tsmoe.model import ModelConfig, TSMoE, objective
 from tsmoe.quantizer import BasicSourceQuantizer
@@ -88,7 +88,9 @@ class TestDesign(unittest.TestCase):
 
     def test_sparse_dispatch_masks_and_gradients(self):
         torch.manual_seed(1)
-        model = TSMoE(5, 3, 3, ModelConfig(8, 2, 1, 0., 4))
+        # Hybrid + zeroed sequence router isolates λ_prior · SURD bias (legacy path).
+        model = TSMoE(5, 3, 3, ModelConfig(8, 2, 1, 0., 4, router_mode="hybrid",
+                                           hybrid_lambda=1.))
         h = {"P": torch.tensor([[2, 3, 0]]), "C": torch.tensor([[2, 4, 0]]),
              "T": torch.randn(1, 3, 6), "L": torch.randn(1, 3, 8)}
         valid = torch.tensor([[True, True, False]])
@@ -116,6 +118,71 @@ class TestDesign(unittest.TestCase):
         off = model(h, valid, rows, p, torch.zeros_like(w), candidate_mask=mask)
         _, (_, aux, bal) = objective(off, torch.tensor([1]))
         self.assertEqual((float(aux), float(bal)), (0., 0.))
+
+    def test_router_modes_dispatch_and_shapes(self):
+        torch.manual_seed(0)
+        h = {"P": torch.tensor([[2, 3, 0]]), "C": torch.tensor([[2, 4, 0]]),
+             "T": torch.randn(1, 3, 6), "L": torch.randn(1, 3, 8)}
+        valid = torch.tensor([[True, True, False]])
+        rows = torch.tensor([[0, 1, 2]])
+        prior = torch.zeros(1, 3, 26)
+        # Distinct U/S mass on expert slots 0 and 14 (last synergy) so hard_prior is peaked.
+        prior[0, 0, 0] = 0.8
+        prior[0, 0, 15] = 0.2
+        prior[0, 1, 1] = 1.0
+        prior[0, 2, 3] = 0.5
+        prior[0, 2, 25] = 0.5
+        conf = torch.ones(1, 3)
+        mass = torch.cat((prior[..., :4], prior[..., 15:]), -1)
+        expected_hard = torch.log1p(15 * mass)
+
+        for mode in ("hard_prior", "surd_mlp", "hybrid"):
+            cfg = ModelConfig(8, 2, 1, 0., 4, router_mode=mode, hybrid_lambda=0.1)
+            model = TSMoE(5, 3, 3, cfg).eval()
+            with torch.no_grad():
+                out = model(h, valid, rows, prior, conf, details=True)
+            self.assertEqual(out["router_mode"], mode)
+            self.assertEqual(tuple(out["log_pi"].shape), (1, 3, 15))
+            self.assertEqual(tuple(out["top"].shape), (1, 3, 4))
+            self.assertEqual(tuple(out["logits"].shape), (1, 3, 15))
+            self.assertEqual(tuple(out["mass"].shape), (1, 3, 15))
+            self.assertEqual(tuple(out["gate"].shape), (1, 3))
+            torch.testing.assert_close(out["mass"], mass)
+
+        hard = TSMoE(5, 3, 3, ModelConfig(8, 2, 1, 0., 4, router_mode="hard_prior")).eval()
+        with torch.no_grad():
+            # History change must not move hard_prior routing logits (SURD-only).
+            a = hard(h, valid, rows, prior, conf, details=True)
+            h2 = {**h, "P": torch.tensor([[1, 4, 0]])}
+            b = hard(h2, valid, rows, prior, conf, details=True)
+            torch.testing.assert_close(a["logits"], b["logits"])
+            torch.testing.assert_close(a["logits"], expected_hard)
+            self.assertTrue((a["learned"] == 0).all())
+            # Top expert for candidate 0 is Unique-P (index 0).
+            self.assertEqual(int(a["top"][0, 0, 0]), 0)
+
+        # surd_mlp / hybrid: sequence change can move hybrid learned term; surd_mlp stays SURD-only.
+        surd = TSMoE(5, 3, 3, ModelConfig(8, 2, 1, 0., 4, router_mode="surd_mlp")).eval()
+        hybrid = TSMoE(5, 3, 3, ModelConfig(8, 2, 1, 0., 4, router_mode="hybrid",
+                                            lambda_prior=1., hybrid_lambda=0.1)).eval()
+        with torch.no_grad():
+            s0 = surd(h, valid, rows, prior, conf, details=True)
+            s1 = surd(h2, valid, rows, prior, conf, details=True)
+            torch.testing.assert_close(s0["logits"], s1["logits"])
+            hy0 = hybrid(h, valid, rows, prior, conf, details=True)
+            hy1 = hybrid(h2, valid, rows, prior, conf, details=True)
+            self.assertFalse(torch.allclose(hy0["learned"], hy1["learned"]))
+            torch.testing.assert_close(hy0["logits"],
+                                       hy0["bias"] + hybrid.cfg.hybrid_lambda * hy0["learned"])
+
+        legacy = model_config_from_checkpoint(dict(
+            dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,
+            lambda_prior=.1, use_surd=True))
+        self.assertEqual(legacy.router_mode, "hybrid")
+        self.assertEqual(legacy.hybrid_lambda, 1.0)
+        self.assertEqual(ModelConfig().router_mode, "hard_prior")
+        with self.assertRaises(ValueError):
+            ModelConfig(router_mode="nope")
 
     def test_candidate_chunks_padding_and_prior_ablation(self):
         torch.manual_seed(8)
@@ -481,6 +548,11 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(results, root / "results" / "run")
             self.assertFalse((run / "eval_test").exists())
             self.assertTrue((run / "best.pt").is_file())
+            ckpt = torch.load(run / "best.pt", map_location="cpu", weights_only=True)
+            self.assertEqual(ckpt["config"]["router_mode"], "hard_prior")
+            self.assertEqual(ckpt["config"]["hybrid_lambda"], 0.1)
+            self.assertIn("router_mode", ckpt["training_args"])
+            self.assertEqual(ckpt["training_args"]["router_mode"], "hard_prior")
             pool_stats_path = results / "candidate_pool_stats.json"
             self.assertTrue(pool_stats_path.is_file())
             pool_stats = json.loads(pool_stats_path.read_text())

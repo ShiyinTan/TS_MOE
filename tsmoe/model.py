@@ -8,6 +8,8 @@ from torch.nn import functional as F
 
 from .surd import SOURCE_ORDER, SUBSETS
 
+ROUTER_MODES = ("hard_prior", "surd_mlp", "hybrid")
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -19,12 +21,22 @@ class ModelConfig:
     temperature: float = 1.
     lambda_prior: float = .1
     use_surd: bool = True
+    # hard_prior (default): π from candidate U/S SURD mass only — no sequence in router.
+    # surd_mlp: π = softmax(MLP(SURD feats) / T); SURD-only, no sequence.
+    # hybrid: logits = λ_prior · surd_bias + λ_hybrid · learned(seq×cand×SURD).
+    router_mode: str = "hard_prior"
+    # ε on the sequence×candidate learned term in hybrid (default 0.1 = small).
+    hybrid_lambda: float = .1
 
     def __post_init__(self):
         if self.dim < 1 or self.heads < 1 or self.dim % self.heads or self.layers < 1:
             raise ValueError("positive hidden dimension must be divisible by heads; layers must be positive")
         if not 1 <= self.top_k <= 15 or self.temperature <= 0 or not 0 <= self.dropout < 1:
             raise ValueError("invalid top_k, temperature or dropout")
+        if self.router_mode not in ROUTER_MODES:
+            raise ValueError(f"router_mode must be one of {ROUTER_MODES}")
+        if self.hybrid_lambda < 0:
+            raise ValueError("hybrid_lambda must be nonnegative")
 
 
 def mlp(inputs, hidden, outputs, dropout=0.):
@@ -71,8 +83,12 @@ class TSMoE(nn.Module):
         self.context = mlp(5 * d, 2 * d, d, config.dropout)
         self.base = nn.Sequential(mlp(5 * d, 2 * d, d, config.dropout), nn.Linear(d, 1))
         self.prior = mlp(26, 64, 64)
+        # Hybrid router: sequence context + candidate + SURD embedding (66 = 64+ρ+α).
         self.router = mlp(2 * d + 66, 2 * d, 15, config.dropout)
         self.gate = mlp(2 * d + 66, d, 1, config.dropout)
+        # SURD-only router / gate (hard_prior uses fixed bias; surd_mlp uses surd_router).
+        self.surd_router = mlp(66, 64, 15, config.dropout)
+        self.surd_gate = mlp(66, d, 1, config.dropout)
         self.shared = nn.ModuleList(nn.Sequential(nn.Linear(d, d), nn.LayerNorm(d)) for _ in SOURCE_ORDER)
         self.experts = nn.ModuleList(
             nn.Sequential(nn.LayerNorm(d), mlp(d, 2 * d, d, config.dropout)) if len(a) == 1
@@ -122,22 +138,40 @@ class TSMoE(nn.Module):
         prior, w = prior26.detach(), confidence.detach()
         if not self.cfg.use_surd:
             w = torch.zeros_like(w)
+        # U/S mass over the 15 experts (atoms 0..3 Unique, 15..25 Synergy); R is gate context only.
         mass = torch.cat((prior[..., :4], prior[..., 15:]), -1)
         alpha, rho = mass.sum(-1), prior[..., 4:15].sum(-1)
-        inputs = torch.cat([self.context(full), candidate, self.prior(w[..., None] * prior),
-                            (w * rho)[..., None], (w * alpha)[..., None]], -1)
-        learned = self.router(inputs)
-        bias = self.cfg.lambda_prior * w[..., None] * torch.log1p(15 * mass)
-        logits = learned + bias
+        prior_feat = self.prior(w[..., None] * prior)
+        surd_inputs = torch.cat([prior_feat, (w * rho)[..., None], (w * alpha)[..., None]], -1)
+        # Confidence-scaled log1p of U/S prior atoms (same 15-D expert order as EXPERT_ORDER).
+        surd_bias = w[..., None] * torch.log1p(15 * mass)
+        mode = self.cfg.router_mode
+        if mode == "hard_prior":
+            learned = surd_bias.new_zeros(surd_bias.shape)
+            bias = surd_bias
+            logits = surd_bias
+            gate_logits = self.surd_gate(surd_inputs).squeeze(-1)
+        elif mode == "surd_mlp":
+            learned = self.surd_router(surd_inputs)
+            bias = surd_bias.new_zeros(surd_bias.shape)
+            logits = learned
+            gate_logits = self.surd_gate(surd_inputs).squeeze(-1)
+        else:  # hybrid
+            inputs = torch.cat([self.context(full), candidate, prior_feat,
+                                (w * rho)[..., None], (w * alpha)[..., None]], -1)
+            learned = self.router(inputs)
+            bias = self.cfg.lambda_prior * surd_bias
+            logits = bias + self.cfg.hybrid_lambda * learned
+            gate_logits = self.gate(inputs).squeeze(-1)
         log_pi = F.log_softmax(logits / self.cfg.temperature, -1)
         top = torch.argsort(log_pi, dim=-1, descending=True, stable=True)[..., :self.cfg.top_k]
         weights = log_pi.gather(-1, top).softmax(-1)
-        gate_logits = self.gate(inputs).squeeze(-1)
         gate = gate_logits.sigmoid()
         residual, projected = self.dispatch(z, top, weights, mask, details)
         score = (base + gate * residual).masked_fill(~mask, -torch.inf)
         result = dict(score=score, log_pi=log_pi, top=top, weights=weights, gate_logits=gate_logits,
-                      gate=gate, mass=mass, alpha=alpha, confidence=w, mask=mask)
+                      gate=gate, mass=mass, alpha=alpha, confidence=w, mask=mask,
+                      router_mode=mode)
         if details:
             result.update(base=base, learned=learned, bias=bias, logits=logits, projected=projected,
                           contributions=gate[..., None] * weights * projected,

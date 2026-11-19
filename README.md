@@ -21,8 +21,9 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
    - [3.2 Tokyo](#32-tokyo下载--核对--prepare--cuda-训练)
    - [3.3 半径变体 prepare（p70 / p80 / p90 …）](#33-半径变体-preparep70--p80--p90-)
    - [3.4 训练抽样](#34-训练抽样)
-   - [3.5 独立评估](#35-独立评估)
-   - [3.6 GPU 占用与中断](#36-gpu-占用与中断)
+   - [3.5 Router 模式（`--router-mode`）](#35-router-模式--router-mode)
+   - [3.6 独立评估](#36-独立评估)
+   - [3.7 GPU 占用与中断](#37-gpu-占用与中断)
 4. [配置 knobs](#4-配置-knobs)
 5. [结果目录](#5-结果目录)
 6. [仓库 / 代码布局](#6-仓库--代码布局)
@@ -272,9 +273,77 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
   --batch-size 64 --eval-batch-size 32 --chunk 256 --threads 3 --device cuda
 ```
 
-### 3.5 独立评估
+### 3.5 Router 模式（`--router-mode`）
 
-对已有 cache + checkpoint 重跑排名（**完整构造池**；目录内 GT 必在池内）；默认写出 `results/<run>/eval_<split>/`。
+三种专家路由；**默认 `hard_prior`**。模式写入 checkpoint 的 `config`，`evaluate` / `explain` / `recommend` 自动与训练一致（无需再传 flag）。Acc@1 等仍写入 `results/`。
+
+| 模式 | 路由 π | 序列是否进 Router |
+| --- | --- | --- |
+| `hard_prior`（默认） | 对候选 POI 的 **U/S SURD 质量**（`prior[..., :4]`∪`prior[..., 15:]`，15 维专家序）做 `ω · log1p(15 · mass)`，再 `/T` softmax；**无序列输入** | 否 |
+| `surd_mlp` | `π = softmax(MLP(SURD_poi) / T)`；MLP 只看置信度缩放的 26 维先验 + ρ/α 摘要 | 否 |
+| `hybrid` | `logits = λ_prior · surd_bias + λ_hybrid · learned(seq×cand×SURD)`；`--lambda-prior` 默认 **0.1**，`--hybrid-lambda`（ε）默认 **0.1** | 是（learned 项） |
+
+设计意图：路由由**候选 POI 的 SURD** 决定（不同 POI 强调不同变量组合）；序列主要在该路由下拟合关系（Base / Experts）。详见 [`docs/router-modes.md`](docs/router-modes.md)。
+
+**Demo（三种模式，可复制）：**
+
+```bash
+conda activate tsmoe
+# 需已有 runs/demo/cache（见 §3.1）
+
+# 1) hard_prior（默认；可省略 --router-mode）
+python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_hard \
+  --router-mode hard_prior --epochs 1 --dim 16 --heads 2 --layers 1
+python -m tsmoe evaluate --cache runs/demo/cache \
+  --checkpoint runs/demo/model_hard/best.pt --split test
+# → results/demo/model_hard/eval_test/
+
+# 2) surd_mlp
+python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_surd_mlp \
+  --router-mode surd_mlp --epochs 1 --dim 16 --heads 2 --layers 1
+python -m tsmoe evaluate --cache runs/demo/cache \
+  --checkpoint runs/demo/model_surd_mlp/best.pt --split test
+
+# 3) hybrid（SURD bias + 小的序列学习项；ε = --hybrid-lambda）
+python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_hybrid \
+  --router-mode hybrid --lambda-prior 1 --hybrid-lambda 0.1 \
+  --epochs 1 --dim 16 --heads 2 --layers 1
+python -m tsmoe evaluate --cache runs/demo/cache \
+  --checkpoint runs/demo/model_hybrid/best.pt --split test
+```
+
+**Tokyo（三种模式，可复制）：**
+
+```bash
+conda activate tsmoe
+# 需已有 runs/tokyo/cache（见 §3.2）
+
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_hard \
+  --router-mode hard_prior --device cuda
+python -m tsmoe evaluate --cache runs/tokyo/cache \
+  --checkpoint runs/tokyo/model_hard/best.pt --split test --device cuda
+# → results/tokyo/model_hard/eval_test/{metrics.json,report.txt}
+
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_surd_mlp \
+  --router-mode surd_mlp --device cuda
+python -m tsmoe evaluate --cache runs/tokyo/cache \
+  --checkpoint runs/tokyo/model_surd_mlp/best.pt --split test --device cuda
+
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_hybrid \
+  --router-mode hybrid --lambda-prior 1 --hybrid-lambda 0.1 --device cuda
+python -m tsmoe evaluate --cache runs/tokyo/cache \
+  --checkpoint runs/tokyo/model_hybrid/best.pt --split test --device cuda
+```
+
+读 Acc@1：
+
+```bash
+python -c "import json; m=json.load(open('results/tokyo/model_hard/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
+```
+
+### 3.6 独立评估
+
+对已有 cache + checkpoint 重跑排名（**完整构造池**；目录内 GT 必在池内）；默认写出 `results/<run>/eval_<split>/`。路由模式从 checkpoint 读取。
 
 ```bash
 conda activate tsmoe
@@ -295,7 +364,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache \
 python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
 ```
 
-### 3.6 GPU 占用与中断
+### 3.7 GPU 占用与中断
 
 ```bash
 # 多卡时常显式指定
@@ -325,7 +394,9 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `train --dim`、`--heads`、`--layers` | 128、4、2 |
 | `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
 | `train --top-k`、`--temperature` | 4、1.0 |
-| `train --lambda-prior`、`--lambda-surd`、`--lambda-balance` | 0.1、0.05、0.001 |
+| `train --router-mode` | `hard_prior`（默认）/ `surd_mlp` / `hybrid`；写入 checkpoint |
+| `train --lambda-prior`、`--hybrid-lambda` | 0.1、0.1（hybrid：`λ_prior·surd_bias + λ_hybrid·learned`） |
+| `train --lambda-surd`、`--lambda-balance` | 0.05、0.001 |
 | `train --negatives` | 每例 63 个负例（从构造池抽样）；`-1` 为池内其余全部 |
 | `train --max-train-candidates` | 训练时每例候选总数上限（含正例）；`-1` 不额外封顶；**eval 不抽样** |
 | `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督 |
@@ -381,6 +452,7 @@ TS_MOE/
   requirements.txt
   docs/results.md          # results/ 与 runs/ 分工、Acc@1
   docs/candidates.md       # 多源候选、抽样、回退、train/eval 一致
+  docs/router-modes.md     # --router-mode hard_prior / surd_mlp / hybrid
   tsmoe/                   # 包；入口 python -m tsmoe
   examples/                # download_city、make_demo
   scripts/                 # verify_city_checkins 等
@@ -397,6 +469,7 @@ TS_MOE/
 | `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
 | `docs/results.md` | 评估结果目录约定 |
 | `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去 + 随机负例；GT 必入池） |
+| `docs/router-modes.md` | `--router-mode`：hard_prior / surd_mlp / hybrid |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
@@ -446,7 +519,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 1. 四源历史摘要（P/C 哈希；T/L 数值）→ 每源标准化 + K-means 状态。
 2. 单一联合频数表边缘化 → 26 维（4 Unique + 11 Redundancy + 11 Synergy）；15 个 U/S 专家在线执行。
 3. 折外估计：默认最早 20% 训练样本暖启动，其后 3 个时间块；验证 / 测试 / 新轨迹用全训练 `final` 表。
-4. 在线：四源 Transformer 编码历史；Router 读候选 + 上下文 + 置信度缩放的 26 维先验；Top-K 稀疏专家；`base + 门控 MoE 残差`。
+4. 在线：四源 Transformer 编码历史；**Router 默认 `hard_prior`**（仅候选 U/S SURD → π，无序列）；可选 `surd_mlp` / `hybrid`；Top-K 稀疏专家；`base + 门控 MoE 残差`。
 5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
 
 缓存 `manifest.json` 记录字段约定、目录、分折、候选构造与文件摘要。
