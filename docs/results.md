@@ -10,10 +10,11 @@ Final evaluation **metrics and reports** are stored under a top-level `results/`
 | `runs/<city>/model/` | `train` checkpoint `best.pt` and per-epoch `history.json` |
 | `results/<run_name>/eval_validation/` | Best-checkpoint **validation** metrics after `train` |
 | `results/<run_name>/eval_test/` | Final **test** metrics after `train`, or default output of `evaluate --split test` |
+| `results/<run_name>/candidate_pool_stats.json` | Per-split candidate-pool size stats printed at train start (min/max/mean/median) |
 
 Each `eval_*` directory contains:
 
-- `metrics.json` — full payload (Acc/Hit/Recall, NDCG, MRR, MAP @1/5/10/20, groups, device, cache id, timestamp, model config, `candidate_construction`, …)
+- `metrics.json` — full payload (Acc/Hit/Recall, NDCG, MRR, MAP @1/5/10/20, groups, device, cache id, timestamp, model config, `candidate_construction`, optional `candidate_pool_stats`, …)
 - `report.txt` — same summary printed to the terminal (Acc@1 headline + tables)
 
 Ranking is over the cache candidate set (spatial neighborhood by default; see [`candidates.md`](candidates.md)), not necessarily the full POI catalog.

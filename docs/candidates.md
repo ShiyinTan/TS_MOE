@@ -33,6 +33,19 @@ Changing the statistic **requires a new cache** (`prepare --out …`); train/eva
 
 Training negatives (`train --negatives`) are drawn from this pool. Evaluation ranks the true next POI **inside the same pool**. Metrics (including **Acc@1**) are still written under `results/…/eval_*/`.
 
+## Pool-size stats at train start
+
+At the start of `train` (and again at the start of standalone `evaluate`), the code builds the same resolved pools used for scoring and prints per-split size statistics:
+
+```text
+candidates method=spatial_radius radius_statistic=p90 radius_km=1.23
+candidates train: n=5855 min=12 max=2494 mean=180.45 median=95.00  (fallback_full_catalog=3 spatial=5852)
+candidates validation: n=808 min=8 max=2494 mean=165.20 median=88.00  (spatial=808)
+candidates test: n=1694 min=10 max=2494 mean=172.11 median=90.00  (fallback_full_catalog=1 spatial=1693)
+```
+
+Counts are **after** neighborhood filtering, force-including the in-catalog target, and empty/invalid-anchor fallback to the full catalog. A JSON copy is written to `results/<run>/candidate_pool_stats.json`; each `eval_*/metrics.json` also carries that split’s `candidate_pool_stats`.
+
 ## Manifest fields
 
 `manifest.json` records:

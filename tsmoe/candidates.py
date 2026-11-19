@@ -311,6 +311,56 @@ def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size:
     return pools, resolutions
 
 
+def summarize_pool_sizes(pools: Sequence[torch.Tensor],
+                         resolutions: Sequence[str] | None = None) -> dict:
+    """Per-sample candidate-pool size stats after resolve (neighborhood + target + fallback).
+
+    ``len(pool)`` matches the set used for training negatives and eval ranking.
+    """
+    sizes = [int(pool.numel()) for pool in pools]
+    n = len(sizes)
+    if not n:
+        out = dict(n=0, min=None, max=None, mean=None, median=None)
+    else:
+        ordered = sorted(sizes)
+        mid = n // 2
+        median = float(ordered[mid]) if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+        out = dict(
+            n=n,
+            min=int(ordered[0]),
+            max=int(ordered[-1]),
+            mean=float(sum(sizes) / n),
+            median=median,
+        )
+    if resolutions is not None:
+        if len(resolutions) != n:
+            raise ValueError("resolutions must align with pools")
+        counts: dict[str, int] = {}
+        for how in resolutions:
+            counts[how] = counts.get(how, 0) + 1
+        out["resolutions"] = counts
+    return out
+
+
+def format_pool_size_line(split: str, stats: dict) -> str:
+    """One console line: ``candidates train: n=… min=… max=… mean=… median=…``."""
+    def fmt(value):
+        if value is None:
+            return "—"
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        return str(int(value))
+
+    line = (f"candidates {split}: n={stats.get('n', 0)} "
+            f"min={fmt(stats.get('min'))} max={fmt(stats.get('max'))} "
+            f"mean={fmt(stats.get('mean'))} median={fmt(stats.get('median'))}")
+    resolutions = stats.get("resolutions")
+    if resolutions:
+        parts = " ".join(f"{key}={value}" for key, value in sorted(resolutions.items()))
+        line = f"{line}  ({parts})"
+    return line
+
+
 def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
                       rng: random.Random, pools: Sequence[torch.Tensor] | None = None):
     """Sample training rows: positive at column 0, then negatives from each pool.
