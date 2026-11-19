@@ -9,8 +9,12 @@ import torch
 from tqdm.auto import tqdm
 
 from .candidates import (
-    DEFAULT_RADIUS, candidate_construction_record, catalog_coordinates,
-    consecutive_visit_distances, pick_radius_km, summarize_distances,
+    DEFAULT_POPULAR_BY, DEFAULT_POPULAR_RADIUS, DEFAULT_POPULAR_RADIUS_MULTIPLIER,
+    DEFAULT_POPULAR_TOP_K, DEFAULT_RADIUS, DEFAULT_USER_FREQUENT_MIN_VISITS,
+    DEFAULT_USER_FREQUENT_TOP_K, build_user_frequent, candidate_construction_record,
+    catalog_coordinates, catalog_target_counts, catalog_visit_counts,
+    consecutive_visit_distances, pick_popular_radius_km, pick_radius_km,
+    summarize_distances,
 )
 from .data import SPLITS, Categories, build_split, file_digest, make_batch, read_split
 from .quantizer import BasicSourceQuantizer, SOURCES
@@ -70,9 +74,11 @@ def prepare(args):
     if not (root / f"{city}_checkins_train.csv").is_file():
         root = root / city
     paths = {s: root / f"{city}_checkins_{s}.csv" for s in SPLITS}
-    config = {k: getattr(args, k) for k in ("city", "max_length", "clusters", "hash_dim", "quant_seed",
-              "folds", "warmup", "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i",
-              "candidate_radius")}
+    config = {k: getattr(args, k) for k in (
+        "city", "max_length", "clusters", "hash_dim", "quant_seed",
+        "folds", "warmup", "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i",
+        "candidate_radius", "popular_radius", "popular_radius_multiplier", "popular_top_k",
+        "popular_by", "user_frequent_top_k", "user_frequent_min_visits")}
     config.update(version="tsmoe.massivesteps.v1", files={s: file_digest(p) for s, p in paths.items()})
     fingerprint = digest_json(config)
     if out.exists():
@@ -109,7 +115,19 @@ def build_cache(cfg, paths, fingerprint, stage):
     distance_stats = summarize_distances(consecutive_visit_distances(train_groups))
     radius_method = cfg.get("candidate_radius", DEFAULT_RADIUS)
     radius_km = pick_radius_km(distance_stats, radius_method)
+    popular_radius = cfg.get("popular_radius", DEFAULT_POPULAR_RADIUS)
+    popular_multiplier = float(cfg.get("popular_radius_multiplier", DEFAULT_POPULAR_RADIUS_MULTIPLIER))
+    popular_top_k = int(cfg.get("popular_top_k", DEFAULT_POPULAR_TOP_K))
+    popular_by = cfg.get("popular_by", DEFAULT_POPULAR_BY)
+    user_frequent_top_k = int(cfg.get("user_frequent_top_k", DEFAULT_USER_FREQUENT_TOP_K))
+    user_frequent_min_visits = int(cfg.get("user_frequent_min_visits", DEFAULT_USER_FREQUENT_MIN_VISITS))
+    popular_radius_km = pick_popular_radius_km(
+        distance_stats, radius_km, popular_radius, popular_multiplier)
     poi_coordinates, coordinate_imputation = catalog_coordinates(train_groups, pois)
+    visit_counts = catalog_visit_counts(train_groups, pois)
+    target_counts = catalog_target_counts(train_groups, pois)
+    user_frequent = build_user_frequent(
+        train_groups, pois, user_frequent_top_k, user_frequent_min_visits)
     counts = coordinate_imputation["counts"]
     print(
         "coordinate_imputation: "
@@ -118,7 +136,17 @@ def build_cache(cfg, paths, fingerprint, stage):
         flush=True,
     )
     candidate_construction = candidate_construction_record(
-        radius_method, distance_stats, radius_km, coordinate_imputation)
+        radius_method, distance_stats, radius_km, coordinate_imputation,
+        popular_radius=popular_radius,
+        popular_radius_multiplier=popular_multiplier,
+        popular_radius_km=popular_radius_km,
+        popular_top_k=popular_top_k,
+        popular_by=popular_by,
+        user_frequent_top_k=user_frequent_top_k,
+        user_frequent_min_visits=user_frequent_min_visits,
+        poi_visit_counts=visit_counts,
+        poi_target_counts=target_counts,
+    )
     preprocessing = dict(source_fields=["venue_id", "venue_category_id_code/venue_category_id",
                                         "timestamp", "latitude/longitude"],
                          time="UTC; naive timestamps interpreted as UTC; interval in hours",
@@ -200,8 +228,16 @@ def build_cache(cfg, paths, fingerprint, stage):
         print(f"{name}: {len(ref)} reference targets; {len(block)} scored", flush=True)
     assert (train["fold"] >= 0).all()
     torch.save(train, stage / "train.pt")
-    print(f"candidate_radius={radius_method} radius_km={radius_km} "
-          f"consecutive_pairs={distance_stats['count']}", flush=True)
+    torch.save(user_frequent, stage / "user_frequent.pt")
+    print(
+        f"candidate_radius={radius_method} radius_km={radius_km} "
+        f"popular_radius={popular_radius} popular_radius_km={popular_radius_km} "
+        f"popular_top_k={popular_top_k} popular_by={popular_by} "
+        f"user_frequent_top_k={user_frequent_top_k} "
+        f"user_frequent_users={len(user_frequent)} "
+        f"consecutive_pairs={distance_stats['count']}",
+        flush=True,
+    )
     manifest = dict(fingerprint=fingerprint, config=cfg, poi_ids=pois, cat_vocab=cat_vocab,
                     poi_coordinates=poi_coordinates,
                     candidate_construction=candidate_construction,

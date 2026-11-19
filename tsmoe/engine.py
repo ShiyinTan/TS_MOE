@@ -66,22 +66,45 @@ class Cache:
         if self.cfg["version"] != "tsmoe.massivesteps.v1" or digest_json(self.cfg) != self.meta["fingerprint"]:
             raise ValueError("incompatible cache or manifest fingerprint")
         self.id = file_digest(self.path / "manifest.json")
-        # Spatial radius is fixed at prepare time so train/eval share one construction.
+        # Candidate construction is fixed at prepare time so train/eval share one pool rule.
         construction = self.meta.get("candidate_construction")
         if construction is None:
             # Pre-spatial caches: full catalog (legacy).
             self.candidate_construction = dict(
                 method="full_catalog", radius_statistic="full", radius_km=None,
-                empty_neighborhood_fallback="full_catalog", train_eval_shared=True)
+                empty_union_fallback="full_catalog", train_eval_shared=True,
+                eval_uses_full_pool=True)
             self.radius_km = None
+            self.popular_radius_km = None
+            self.popular_top_k = 0
+            self.popularity = None
+            self.user_frequent = {}
             self.poi_coords = torch.full((len(self.pois), 2), float("nan"), dtype=torch.float64)
         else:
             self.candidate_construction = construction
             self.radius_km = construction.get("radius_km")
+            self.popular_radius_km = construction.get("popular_radius_km")
+            self.popular_top_k = int(construction.get("popular_top_k") or 0)
             coords = self.meta.get("poi_coordinates")
             if coords is None or len(coords) != len(self.pois):
                 raise ValueError("cache missing poi_coordinates aligned with poi_ids; re-run prepare")
             self.poi_coords = torch.tensor(coords, dtype=torch.float64)
+            popular_by = construction.get("popular_by") or "visit"
+            visit = construction.get("poi_visit_counts")
+            target = construction.get("poi_target_counts")
+            if popular_by == "target" and target is not None and len(target) == len(self.pois):
+                scores = target
+            elif visit is not None and len(visit) == len(self.pois):
+                scores = visit
+            else:
+                scores = [0] * len(self.pois)
+            self.popularity = torch.tensor(scores, dtype=torch.float64)
+            if "user_frequent.pt" in self.meta.get("files", {}):
+                verify_files(self.path, {"user_frequent.pt": self.meta["files"]["user_frequent.pt"]})
+                raw = load_file(self.path / "user_frequent.pt")
+                self.user_frequent = {str(k): list(v) for k, v in raw.items()}
+            else:
+                self.user_frequent = {}
 
     def load(self, name):
         verify_files(self.path, {name: self.meta["files"][name]})
@@ -105,9 +128,19 @@ class Cache:
     def model(self, cfg):
         return TSMoE(len(self.pois), len(self.meta["cat_vocab"]), self.cfg["max_length"], cfg)
 
+    def uses_full_catalog_pools(self):
+        """True when every sample scores against the full training catalog."""
+        return self.radius_km is None or self.candidate_construction.get("method") == "full_catalog"
+
     def candidate_pools(self, data):
-        """Same spatial (or full-catalog) pools for train and evaluate."""
-        return pools_for_split(data, self.poi_coords, self.radius_km, len(self.pois))
+        """Same multi-source (or full-catalog) pools for train and evaluate."""
+        return pools_for_split(
+            data, self.poi_coords, self.radius_km, len(self.pois),
+            popular_radius_km=self.popular_radius_km,
+            popularity=self.popularity,
+            popular_top_k=self.popular_top_k,
+            user_frequent=self.user_frequent,
+        )
 
     def pool_size_stats(self, data):
         """Min/max/mean/median candidate counts for one split (scoring definition)."""
@@ -419,8 +452,9 @@ def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, check
                       "Acc@K=Hit@K=Recall@K and MAP@K=MRR@K for single next-POI target; "
                       "rank ties break by lower catalog row index; "
                       "unknown targets use rank 0 and count as misses under all_targets. "
-                      "When candidate_construction.method is spatial_radius, ranks are within "
-                      "the per-sample spatial pool (same rule as training negatives)."),
+                      "When candidate_construction.method is multi_source, ranks are within "
+                      "the per-sample constructed pool (full union at eval; training may "
+                      "subsample negatives from the same pool)."),
         candidate_construction=cache.candidate_construction,
         group_notes=GROUP_NOTES,
         group_labels=dict(GROUP_LABELS),
@@ -435,9 +469,18 @@ def report_candidate_pool_stats(cache, splits):
     Returns ``(stats_by_split, pools_by_split)``.
     """
     radius_info = cache.candidate_construction
-    print(f"candidates method={radius_info.get('method')} "
-          f"radius_statistic={radius_info.get('radius_statistic')} "
-          f"radius_km={cache.radius_km}", flush=True)
+    print(
+        f"candidates method={radius_info.get('method')} "
+        f"radius_statistic={radius_info.get('radius_statistic')} "
+        f"radius_km={cache.radius_km} "
+        f"popular_radius={radius_info.get('popular_radius')} "
+        f"popular_radius_km={cache.popular_radius_km} "
+        f"popular_top_k={cache.popular_top_k} "
+        f"popular_by={radius_info.get('popular_by')} "
+        f"user_frequent_top_k={radius_info.get('user_frequent_top_k')} "
+        f"eval_pool=full_constructed",
+        flush=True,
+    )
     all_stats = {}
     pools_by_split = {}
     for name, data in splits.items():
@@ -479,10 +522,11 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
         check_interrupt()
         h, valid, target = device_batch(data, idx, device)
         encoded = model.encode(h, valid)
-        if cache.radius_km is None:
+        if cache.uses_full_catalog_pools():
             scores = all_scores(model, table, encoded, valid, len(cache.pois), chunk)
             batch_ranks = ranks_of(scores, target).tolist()
         else:
+            # Eval always ranks inside the full constructed multi-source pool.
             batch_pools = [pools[i] for i in idx.tolist()]
             pool_scores, pool_rows, pool_mask = score_pools(
                 model, table, encoded, valid, batch_pools, chunk)
@@ -541,6 +585,9 @@ def train(args):
     settings = {key: value for key, value in vars(args).items() if isinstance(value, (str, float, int, bool))}
     settings["candidate_radius"] = cache.cfg.get("candidate_radius", "full")
     settings["candidate_radius_km"] = cache.radius_km
+    settings["popular_radius_km"] = cache.popular_radius_km
+    settings["max_train_candidates"] = args.max_train_candidates
+    max_train_candidates = None if args.max_train_candidates < 0 else args.max_train_candidates
     category_frequency = Counter(data["C"].tolist())
     test = cache.split("test")
     pool_stats, pools_by_split = report_candidate_pool_stats(
@@ -554,9 +601,15 @@ def train(args):
         catalog_size=len(cache.pois),
         cache=str(Path(args.cache).resolve()),
         cache_id=cache.id,
-        definition=("per-sample pool size after neighborhood + force-include target "
-                    "+ empty/invalid-anchor fallback to full catalog "
-                    "(same construction as train negatives and eval ranking)"),
+        train_sampling=dict(
+            negatives=args.negatives,
+            max_train_candidates=args.max_train_candidates,
+            eval_uses_full_pool=True,
+        ),
+        definition=("per-sample pool size after multi-source union "
+                    "(neighborhood + popular + user-frequent) + force-include target "
+                    "+ empty-union fallback to full catalog; stats match the full "
+                    "constructed pool used at evaluation (train may subsample)"),
         splits=pool_stats,
     ), stats_dir / "candidate_pool_stats.json")
     print(f"Wrote {stats_dir / 'candidate_pool_stats.json'}", flush=True)
@@ -572,7 +625,8 @@ def train(args):
             h, valid, target = device_batch(data, idx, device)
             batch_pools = [train_pools[i] for i in idx.tolist()]
             rows, positive, cand_mask = sample_candidates(
-                target.detach().cpu(), len(cache.pois), args.negatives, rng, pools=batch_pools)
+                target.detach().cpu(), len(cache.pois), args.negatives, rng,
+                pools=batch_pools, max_candidates=max_train_candidates)
             rows, cand_mask = rows.to(device), cand_mask.to(device)
             prior, confidence = gather_fold_priors(
                 tables, data["fold"][idx], rows.masked_fill(~cand_mask, -1))
@@ -682,7 +736,7 @@ def explain(args):
     pool, resolution = pools[i], resolutions[i]
     if args.poi_id is not None and args.poi_id not in table.row_of:
         raise ValueError("candidate POI outside the training catalog")
-    if cache.radius_km is None:
+    if cache.uses_full_catalog_pools():
         scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk)
         if args.poi_id is None:
             row = int(target[0]) if target[0] >= 0 else int(scores.argmax())
@@ -749,7 +803,7 @@ def recommend(args):
         check_interrupt()
         h, valid, _ = device_batch(data, idx, table.routing_prior.device, labels=False)
         encoded = model.encode(h, valid)
-        if cache.radius_km is None:
+        if cache.uses_full_catalog_pools():
             scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk)
             top = torch.argsort(scores, descending=True, stable=True)[:, :args.top_n]
             for i, js, row_scores in zip(idx.tolist(), top.tolist(), scores):

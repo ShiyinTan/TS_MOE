@@ -35,9 +35,33 @@ def main():
         p.add_argument("--" + name, choices=("all", "last"), default="all")
     p.add_argument(
         "--candidate-radius", choices=("p90", "mean", "max", "full"), default="p90",
-        help="spatial candidate radius from consecutive visit distances "
-             "(default p90); full = global catalog. Stored in the cache so "
-             "train and evaluate share the same construction.")
+        help="local spatial neighborhood radius from consecutive visit distances "
+             "(default p90); full = global catalog only (disables popular / "
+             "user-frequent sources). Stored in the cache so train and evaluate "
+             "share the same construction.")
+    p.add_argument(
+        "--popular-radius", choices=("max", "p90", "mean", "multiplier"), default="max",
+        help="larger radius for popular-POI source (default max of consecutive "
+             "distances); multiplier = local radius × --popular-radius-multiplier")
+    p.add_argument(
+        "--popular-radius-multiplier", type=float, default=2.0,
+        help="scale for --popular-radius multiplier (default 2.0)")
+    p.add_argument(
+        "--popular-top-k", type=int, default=100,
+        help="top-K popular catalog POIs inside the larger radius (default 100; "
+             "0 disables the popular source)")
+    p.add_argument(
+        "--popular-by", choices=("visit", "target"), default="visit",
+        help="popularity rank key: train check-in visits or next-POI targets "
+             "(default visit)")
+    p.add_argument(
+        "--user-frequent-top-k", type=int, default=50,
+        help="per-user top-K training venues for the user-frequent source "
+             "(default 50; 0 disables)")
+    p.add_argument(
+        "--user-frequent-min-visits", type=positive, default=2,
+        help="minimum training visits for a venue to count as user-frequent "
+             "(default 2)")
     p.set_defaults(func=prepare)
 
     a = commands.add_parser("inspect", help="trace a training prefix, sparse joint counts and one POI's 26 atoms")
@@ -59,16 +83,23 @@ def main():
         t.add_argument("--" + name, type=float, default=value)
     t.add_argument("--negatives", type=int, default=63,
                    help="distinct negatives per positive drawn from the cache "
-                        "candidate pool (spatial neighborhood by default; full "
-                        "catalog when prepare used --candidate-radius full); "
-                        "-1 uses every other pool member")
+                        "candidate pool (multi-source by default; full catalog "
+                        "when prepare used --candidate-radius full); "
+                        "-1 uses every other pool member (still subject to "
+                        "--max-train-candidates if set)")
+    t.add_argument(
+        "--max-train-candidates", type=int, default=-1,
+        help="cap total training candidates per sample including the positive "
+             "(default -1 = no extra cap beyond --negatives); evaluation always "
+             "uses the full constructed pool")
     t.add_argument("--no-surd", action="store_true", help="context-only U/S MoE ablation: disable all statistical guidance")
     t.add_argument("--seed", type=int, default=42)
     t.set_defaults(func=train)
 
     e = commands.add_parser(
         "evaluate",
-        help="rank within the cache candidate set (spatial radius by default, or "
+        help="rank within the full constructed cache candidate pool "
+             "(multi-source neighborhood+popular+user-frequent by default, or "
              "full catalog); report Acc@1 / NDCG@1 / MRR (+ full @K tables and "
              "Head/Mid/Tail groups) to metrics.json + report.txt")
     e.set_defaults(func=evaluate_cli)
@@ -100,10 +131,18 @@ def main():
         root.error("numeric options must be finite")
     if args.command == "prepare" and not (0 <= args.warmup < 1 and min(args.tau_pos, args.kappa_i, args.kappa_n) > 0):
         root.error("warmup must be in [0,1); tau-pos and reliability scales must be positive")
+    if args.command == "prepare" and (
+            args.popular_top_k < 0 or args.user_frequent_top_k < 0
+            or not math.isfinite(args.popular_radius_multiplier)
+            or args.popular_radius_multiplier <= 0):
+        root.error("popular-top-k / user-frequent-top-k must be >= 0; "
+                   "popular-radius-multiplier must be positive and finite")
     if args.command == "train" and (args.negatives < -1 or args.negatives == 0 or
+                                    args.max_train_candidates == 0 or args.max_train_candidates < -1 or
                                     min(args.lambda_prior, args.lambda_surd, args.lambda_balance, args.weight_decay) < 0
                                     or min(args.lr, args.grad_clip) <= 0):
-        root.error("use --negatives -1 or a positive count, nonnegative strengths and positive lr/grad-clip")
+        root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
+                   "nonnegative strengths and positive lr/grad-clip")
     torch.set_num_threads(args.threads)
     try:
         args.func(args)

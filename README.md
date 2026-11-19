@@ -6,7 +6,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。空间候选细节见 [`docs/candidates.md`](docs/candidates.md)。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。多源候选细节见 [`docs/candidates.md`](docs/candidates.md)。
 
 面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
@@ -130,9 +130,9 @@ data/tokyo/
 
 带时区时间戳转 UTC；等时事件按原文件行序稳定排序；以 `(user_id, trail_id, timestamp, venue_id)` 去重。审计写入缓存的 `manifest.json`。
 
-### 空间候选半径（prepare 时固定）
+### 多源候选池（prepare 时固定）
 
-`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）把半径写入缓存；**train / evaluate 不覆盖**，换半径须换 `--out` 并重新 prepare。锚点 = 目标前一签坐标；邻域空或锚点无效则该样本回退全目录。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全，并打印 `coordinate_imputation: …` 计数行。`train` 启动时对 train / validation / test 打印候选池大小统计（`candidates <split>: n=… min=… max=… mean=… median=…`，与评分用同一解析定义），并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
+默认候选 = **邻域 ∪ 大半径热门 ∪ 用户常去**（去重；目录内真目标必入池）。`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）定局部邻域；另有 `--popular-radius` / `--popular-top-k` / `--popular-by` 与 `--user-frequent-top-k` / `--user-frequent-min-visits`（均写入指纹）。**train / evaluate 不覆盖**；改构造须换 `--out` 并重新 prepare。三源皆空才回退全目录。`train --negatives` / `--max-train-candidates` 仅训练抽样；**evaluate 用完整构造池**。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全。`train` 启动时打印各 split 池大小统计并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
 
 `download_city.py` 支持城市：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
 
@@ -172,9 +172,10 @@ python examples/download_city.py --city tokyo --data-root data
 # 2) 核对文件名与列（stdlib；不 import torch）
 python scripts/verify_city_checkins.py --data-root data --city tokyo
 
-# 3) 构建样本 + 折外 SURD + 空间候选半径（默认 p90）
+# 3) 构建样本 + 折外 SURD + 多源候选（默认邻域 p90 + popular max/top-100 + user-frequent）
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
-# 等价显式：... --candidate-radius p90
+# 等价显式：... --candidate-radius p90 --popular-radius max --popular-top-k 100 \
+#   --popular-by visit --user-frequent-top-k 50 --user-frequent-min-visits 2
 # 日志：`fold_*: N reference targets; M scored` — reference=该折拟合 SURD/量化器的训练事件；scored=划入该折评分的样本；`final` 用全部训练事件作 reference、scored=0。
 
 # 4) GPU 训练（默认 --device auto；也可显式 cuda）
@@ -208,40 +209,38 @@ python -m tsmoe evaluate --cache runs/tokyo/cache \
 python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
 ```
 
-### 3.4 可选：不同 `--candidate-radius` 的 prepare 变体
+### 3.4 可选：候选构造 prepare 变体
 
-每种半径用**独立** `--out`（及对应 train `--out`），否则指纹 / 缓存会混用。
+每种构造用**独立** `--out`（及对应 train `--out`），否则指纹 / 缓存会混用。改 popular / user-frequent 同样要重 prepare。
 
 ```bash
 conda activate tsmoe
 
-# p90（默认）
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p90 \
-  --candidate-radius p90
-python -m tsmoe train --cache runs/tokyo/cache_p90 --out runs/tokyo/model_p90 --device cuda
+# 默认多源（邻域 p90 + popular@max top-100 + user-frequent）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_ms \
+  --candidate-radius p90 --popular-radius max --popular-top-k 100
+python -m tsmoe train --cache runs/tokyo/cache_ms --out runs/tokyo/model_ms \
+  --negatives 63 --max-train-candidates -1 --device cuda
 
-# mean
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_mean \
-  --candidate-radius mean
-python -m tsmoe train --cache runs/tokyo/cache_mean --out runs/tokyo/model_mean --device cuda
+# 更大 popular 半径 = 局部半径 × 2
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_pop2x \
+  --candidate-radius p90 --popular-radius multiplier --popular-radius-multiplier 2.0
 
-# max
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_max \
-  --candidate-radius max
-python -m tsmoe train --cache runs/tokyo/cache_max --out runs/tokyo/model_max --device cuda
+# 仅邻域（关掉 popular / user-frequent）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_nbhd \
+  --candidate-radius p90 --popular-top-k 0 --user-frequent-top-k 0
 
-# full = 全训练目录（无空间过滤）
+# full = 全训练目录
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_full \
   --candidate-radius full
 python -m tsmoe train --cache runs/tokyo/cache_full --out runs/tokyo/model_full --device cuda
 ```
 
-| 取值 | 半径 |
+| `--candidate-radius` | 局部邻域 |
 | --- | --- |
 | `p90`（默认） | 训练集连续签到球面距离的 90 分位（km） |
-| `mean` | 上述距离的均值 |
-| `max` | 最大值 |
-| `full` | 关闭空间过滤；候选 = 整个训练 POI 目录 |
+| `mean` / `max` | 均值 / 最大值 |
+| `full` | 关闭多源过滤；候选 = 整个训练 POI 目录 |
 
 ### 3.5 GPU 占用与中断
 
@@ -251,7 +250,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device c
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --device cuda:0
 ```
 
-用 `nvidia-smi` 对照占用；日志找 `Using device=cuda`。若 `--device auto` 落到 CPU，会打印 `WARNING: --device auto fell back to CPU...`。显存紧时减小 `--eval-batch-size` / `--chunk`（评估）或 `--batch-size` / `--negatives`（训练）。**Ctrl+C** 在当前 step 边界干净退出（再按一次强制）。
+用 `nvidia-smi` 对照占用；日志找 `Using device=cuda`。若 `--device auto` 落到 CPU，会打印 `WARNING: --device auto fell back to CPU...`。显存紧时减小 `--eval-batch-size` / `--chunk`（评估）或 `--batch-size` / `--negatives` / `--max-train-candidates`（训练）。**Ctrl+C** 在当前 step 边界干净退出（再按一次强制）。
 
 ---
 
@@ -263,13 +262,18 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | --- | --- |
 | `prepare --max-length`、`--hash-dim`、`--tau-pos` | 50、64、10 |
 | `prepare --clusters`、`--folds`、`--warmup` | 4、3、0.2 |
-| `prepare --candidate-radius` | `p90` / `mean` / `max` / `full`；写入缓存，train 与 evaluate 共用 |
+| `prepare --candidate-radius` | `p90` / `mean` / `max` / `full`；局部邻域；写入缓存 |
+| `prepare --popular-radius` | `max` / `p90` / `mean` / `multiplier`（默认 `max`） |
+| `prepare --popular-radius-multiplier` | 默认 `2.0`（仅 `multiplier`） |
+| `prepare --popular-top-k` / `--popular-by` | 默认 `100` / `visit`（`0` 关闭热门源） |
+| `prepare --user-frequent-top-k` / `--user-frequent-min-visits` | 默认 `50` / `2`（`0` 关闭用户常去） |
 | `prepare --train-targets` / `--eval-targets` | `all` 或 `last`（默认均为 `all`） |
 | `train --dim`、`--heads`、`--layers` | 128、4、2 |
 | `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
 | `train --top-k`、`--temperature` | 4、1.0 |
 | `train --lambda-prior`、`--lambda-surd`、`--lambda-balance` | 0.1、0.05、0.001 |
-| `train --negatives` | 每例 63 个负例（从缓存候选池抽样）；`-1` 为池内其余全部 |
+| `train --negatives` | 每例 63 个负例（从构造池抽样）；`-1` 为池内其余全部 |
+| `train --max-train-candidates` | 训练时每例候选总数上限（含正例）；`-1` 不额外封顶；**eval 不抽样** |
 | `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督 |
 | `--device`（train / evaluate / explain / recommend） | 默认 `auto`；也可 `cpu`、`cuda`、`cuda:0`、`mps` |
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128 |
@@ -283,7 +287,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 训练与评估均用每条轨迹末站 | `--train-targets last --eval-targets last` |
 | 全部前缀训练，仅评估末站 | `--train-targets all --eval-targets last` |
 
-改变簇数、窗口、目标选取或 `--candidate-radius` 时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。
+改变簇数、窗口、目标选取或候选构造（`--candidate-radius` / popular / user-frequent）时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。
 
 训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。`history.json` 仍在 `runs/.../model/`。
 
@@ -322,7 +326,7 @@ TS_MOE/
   environment.yml
   requirements.txt
   docs/results.md          # results/ 与 runs/ 分工、Acc@1
-  docs/candidates.md       # --candidate-radius、回退、train/eval 一致
+  docs/candidates.md       # 多源候选、抽样、回退、train/eval 一致
   tsmoe/                   # 包；入口 python -m tsmoe
   examples/                # download_city、make_demo
   scripts/                 # verify_city_checkins 等
@@ -338,12 +342,12 @@ TS_MOE/
 | `environment.yml` | Conda 骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124） |
 | `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
 | `docs/results.md` | 评估结果目录约定 |
-| `docs/candidates.md` | 空间邻域候选 |
+| `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去） |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
 | `tsmoe/data.py` | CSV 读取、类别对齐、时间与地理特征 |
-| `tsmoe/candidates.py` | 连续访问距离、空间邻域池、负采样 |
+| `tsmoe/candidates.py` | 距离统计、多源池、训练负采样 |
 | `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
 | `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
 | `tsmoe/prepare.py`、`tsmoe/inspect.py` | 折外估计、缓存、逐样本追踪 |
@@ -422,4 +426,4 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 - **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118；不自动探测本机 CUDA。
 - **无多进程 / 多卡数据并行开关**：可选单卡 `--device cuda:0`；无 `--gpus` / DDP CLI。
 - **大数据内存**：大型城市 prepare 峰值随训练前缀增长；无分片 / 外存统计路径。
-- **换候选半径须重 prepare**：train / evaluate 不能单独改 `--candidate-radius`。
+- **换候选构造须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent。

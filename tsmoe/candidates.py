@@ -1,20 +1,38 @@
-"""Spatial neighborhood candidate construction shared by prepare, train, and evaluate.
+"""Multi-source candidate construction shared by prepare, train, and evaluate.
 
-Default radius is the 90th percentile (p90) of consecutive check-in great-circle
-distances on the training split. Train and evaluate resolve the same per-sample
-pool: catalog POIs within that radius of the previous check-in's coordinates.
+Default pools union three parts (deduped; true target always included when in
+catalog):
+
+1. **Spatial neighborhood** — catalog POIs within ``radius_km`` of the previous
+   check-in's coordinates (``--candidate-radius`` p90/mean/max).
+2. **Larger-range popular POIs** — within a larger radius, top-K by train
+   visit or target frequency.
+3. **User-frequent POIs** — venues this user often visits in training history.
+
+``--candidate-radius full`` keeps the legacy full-catalog pool. Training may
+sample negatives / cap candidates; evaluation ranks inside the **full**
+constructed pool (no train-time sampling).
 """
 from __future__ import annotations
 
 import math
 import random
-from typing import Sequence
+from collections import Counter, defaultdict
+from typing import Mapping, Sequence
 
 import torch
 
 EARTH_RADIUS_KM = 6371.0088
 RADIUS_CHOICES = ("p90", "mean", "max", "full")
 DEFAULT_RADIUS = "p90"
+POPULAR_RADIUS_CHOICES = ("max", "p90", "mean", "multiplier")
+DEFAULT_POPULAR_RADIUS = "max"
+DEFAULT_POPULAR_RADIUS_MULTIPLIER = 2.0
+DEFAULT_POPULAR_TOP_K = 100
+POPULAR_BY_CHOICES = ("visit", "target")
+DEFAULT_POPULAR_BY = "visit"
+DEFAULT_USER_FREQUENT_TOP_K = 50
+DEFAULT_USER_FREQUENT_MIN_VISITS = 2
 # Catalog POI location fallback order when a venue never has a finite check-in coord.
 COORD_FALLBACK_ORDER = (
     "observed",           # mean of this POI's training check-ins with coords
@@ -99,6 +117,21 @@ def pick_radius_km(stats: dict, method: str) -> float | None:
     if value is None or not math.isfinite(value) or value < 0:
         raise ValueError(f"invalid distance statistic {key}={value!r}")
     return float(value)
+
+
+def pick_popular_radius_km(stats: dict, local_radius_km: float | None, method: str,
+                           multiplier: float) -> float | None:
+    """Larger radius for popular POIs, or None when local radius is disabled."""
+    if local_radius_km is None:
+        return None
+    if method not in POPULAR_RADIUS_CHOICES:
+        raise ValueError(
+            f"popular-radius must be one of {POPULAR_RADIUS_CHOICES}, got {method!r}")
+    if method == "multiplier":
+        if not math.isfinite(multiplier) or multiplier <= 0:
+            raise ValueError(f"popular-radius-multiplier must be positive finite, got {multiplier!r}")
+        return float(local_radius_km) * float(multiplier)
+    return pick_radius_km(stats, method)
 
 
 def _average_latlon(points: Sequence[tuple[float, float]]) -> list[float]:
@@ -241,6 +274,48 @@ def catalog_coordinates(groups, pois: Sequence[int]) -> tuple[list[list[float]],
     return coords, audit
 
 
+def catalog_visit_counts(groups, pois: Sequence[int]) -> list[int]:
+    """Training check-in visit counts aligned with catalog ``pois``."""
+    counts = Counter()
+    for events in groups.values():
+        for event in events:
+            if event.poi >= 0:
+                counts[event.poi] += 1
+    return [int(counts.get(poi, 0)) for poi in pois]
+
+
+def catalog_target_counts(groups, pois: Sequence[int]) -> list[int]:
+    """Training next-POI target counts (consecutive trail steps) aligned with ``pois``."""
+    counts = Counter()
+    for events in groups.values():
+        for _previous, current in zip(events, events[1:]):
+            if current.poi >= 0:
+                counts[current.poi] += 1
+    return [int(counts.get(poi, 0)) for poi in pois]
+
+
+def build_user_frequent(groups, pois: Sequence[int], top_k: int,
+                        min_visits: int) -> dict[str, list[int]]:
+    """Per-user top catalog rows by training visit count (min_visits filter)."""
+    if top_k <= 0:
+        return {}
+    if min_visits < 1:
+        raise ValueError(f"user-frequent-min-visits must be >= 1, got {min_visits!r}")
+    poi_to_row = {poi: i for i, poi in enumerate(pois)}
+    by_user: dict[str, Counter] = defaultdict(Counter)
+    for (user, _trail), events in groups.items():
+        for event in events:
+            if event.poi in poi_to_row:
+                by_user[str(user)][event.poi] += 1
+    out: dict[str, list[int]] = {}
+    for user, counter in by_user.items():
+        ranked = [poi for poi, count in counter.most_common() if count >= min_visits]
+        rows = [poi_to_row[poi] for poi in ranked[:top_k]]
+        if rows:
+            out[user] = rows
+    return out
+
+
 def neighborhood_indices(anchor_lat: float, anchor_lon: float,
                          catalog_coords: torch.Tensor, radius_km: float) -> torch.Tensor:
     """Catalog row indices within radius_km of the anchor (degrees)."""
@@ -257,33 +332,92 @@ def neighborhood_indices(anchor_lat: float, anchor_lon: float,
     return torch.where(dist <= radius_km)[0]
 
 
+def popular_indices(anchor_lat: float, anchor_lon: float, catalog_coords: torch.Tensor,
+                    popular_radius_km: float, popularity: torch.Tensor,
+                    top_k: int) -> torch.Tensor:
+    """Top-K popular catalog rows within the larger radius (ties → lower row index)."""
+    if top_k <= 0:
+        return torch.empty(0, dtype=torch.long)
+    near = neighborhood_indices(anchor_lat, anchor_lon, catalog_coords, popular_radius_km)
+    if near.numel() == 0:
+        return near
+    scores = torch.as_tensor(popularity, dtype=torch.float64)[near]
+    # argsort ascending then reverse → descending; stable keeps lower index first on ties.
+    order = torch.argsort(scores, descending=True, stable=True)
+    return near[order[: min(int(top_k), int(near.numel()))]]
+
+
+def _dedupe_rows(*parts: Sequence[int]) -> list[int]:
+    seen = set()
+    out = []
+    for part in parts:
+        for row in part:
+            value = int(row)
+            if value < 0 or value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+    return out
+
+
 def resolve_candidate_pool(anchor_lat: float, anchor_lon: float, target_row: int,
                            catalog_coords: torch.Tensor, radius_km: float | None,
-                           catalog_size: int) -> tuple[torch.Tensor, str]:
+                           catalog_size: int,
+                           *,
+                           popular_radius_km: float | None = None,
+                           popularity: torch.Tensor | None = None,
+                           popular_top_k: int = 0,
+                           user_frequent_rows: Sequence[int] | None = None) -> tuple[torch.Tensor, str]:
     """Resolve the train/eval candidate set for one sample.
 
     Returns (row_indices, resolution) where resolution is:
       - ``full_catalog`` when radius is disabled
-      - ``spatial`` when the neighborhood is nonempty
-      - ``fallback_full_catalog`` when the anchor is invalid or the neighborhood
-        is empty before force-including the target
+      - ``multi_source`` when the union of neighborhood / popular / user-frequent
+        is nonempty (before or after force-including the target)
+      - ``fallback_full_catalog`` when no source contributes and the pool would
+        otherwise be empty aside from a possible lone target
 
-    Known in-catalog targets are always included in a spatial pool.
+    Known in-catalog targets are always included in a constructed pool.
     """
     full = torch.arange(catalog_size, dtype=torch.long)
     if radius_km is None:
         return full, "full_catalog"
-    if not (math.isfinite(anchor_lat) and math.isfinite(anchor_lon)):
+
+    neighborhood: list[int] = []
+    popular: list[int] = []
+    user_rows: list[int] = []
+    anchor_ok = math.isfinite(anchor_lat) and math.isfinite(anchor_lon)
+
+    if anchor_ok:
+        neighborhood = neighborhood_indices(
+            anchor_lat, anchor_lon, catalog_coords, radius_km).tolist()
+        if (popular_radius_km is not None and popular_top_k > 0
+                and popularity is not None):
+            popular = popular_indices(
+                anchor_lat, anchor_lon, catalog_coords, popular_radius_km,
+                popularity, popular_top_k).tolist()
+
+    if user_frequent_rows:
+        user_rows = [int(x) for x in user_frequent_rows if 0 <= int(x) < catalog_size]
+
+    union = _dedupe_rows(neighborhood, popular, user_rows)
+    contributed = bool(union)
+    if target_row >= 0 and target_row not in set(union):
+        union.append(int(target_row))
+
+    if not contributed:
+        # No neighborhood / popular / user-frequent members — same spirit as the
+        # old empty-neighborhood fallback (avoid ranking in a singleton {target}).
         return full, "fallback_full_catalog"
-    pool = neighborhood_indices(anchor_lat, anchor_lon, catalog_coords, radius_km)
-    if pool.numel() == 0:
-        return full, "fallback_full_catalog"
-    if target_row >= 0 and not (pool == target_row).any():
-        pool = torch.cat([pool, torch.tensor([target_row], dtype=torch.long)])
-    return pool, "spatial"
+    return torch.tensor(union, dtype=torch.long), "multi_source"
 
 
-def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size: int):
+def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size: int,
+                    *,
+                    popular_radius_km: float | None = None,
+                    popularity: torch.Tensor | None = None,
+                    popular_top_k: int = 0,
+                    user_frequent: Mapping[str, Sequence[int]] | None = None):
     """Build per-sample candidate pools and resolution labels for a split tensor dict.
 
     Supervised splits store the true next POI at ``end``. Recommend / predict
@@ -293,6 +427,7 @@ def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size:
     ends = data["end"]
     lats, lons = data["lat"], data["lon"]
     n_events = len(data["poi_token"])
+    trails = data["trails"]
     pools, resolutions = [], []
     for i in range(len(ends)):
         end = int(ends[i])
@@ -303,9 +438,18 @@ def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size:
             target_row = int(data["poi_token"][end]) - 2
         else:
             target_row = -1
+        trail_index = int(data["trail"][prev])
+        user = str(trails[trail_index][0])
+        uf = None
+        if user_frequent is not None:
+            uf = user_frequent.get(user)
         pool, how = resolve_candidate_pool(
             float(lats[prev]), float(lons[prev]), target_row,
-            catalog_coords, radius_km, catalog_size)
+            catalog_coords, radius_km, catalog_size,
+            popular_radius_km=popular_radius_km,
+            popularity=popularity,
+            popular_top_k=popular_top_k,
+            user_frequent_rows=uf)
         pools.append(pool)
         resolutions.append(how)
     return pools, resolutions
@@ -313,9 +457,10 @@ def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size:
 
 def summarize_pool_sizes(pools: Sequence[torch.Tensor],
                          resolutions: Sequence[str] | None = None) -> dict:
-    """Per-sample candidate-pool size stats after resolve (neighborhood + target + fallback).
+    """Per-sample candidate-pool size stats after resolve (union + target + fallback).
 
-    ``len(pool)`` matches the set used for training negatives and eval ranking.
+    ``len(pool)`` matches the set used for evaluation ranking (and as the parent
+    set for training negatives).
     """
     sizes = [int(pool.numel()) for pool in pools]
     n = len(sizes)
@@ -362,21 +507,40 @@ def format_pool_size_line(split: str, stats: dict) -> str:
 
 
 def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
-                      rng: random.Random, pools: Sequence[torch.Tensor] | None = None):
+                      rng: random.Random, pools: Sequence[torch.Tensor] | None = None,
+                      max_candidates: int | None = None):
     """Sample training rows: positive at column 0, then negatives from each pool.
 
     Returns ``(rows, labels, candidate_mask)``. ``pools is None`` preserves the
-    historical uniform negative sampler over the full catalog. With spatial
-    pools, negatives are drawn only from that sample's resolved neighborhood
-    (``negatives=-1`` ⇒ all other pool members).
+    historical uniform negative sampler over the full catalog. With constructed
+    pools, negatives are drawn only from that sample's resolved set
+    (``negatives=-1`` ⇒ all other pool members, optionally capped by
+    ``max_candidates``). Evaluation should pass the full pool without sampling.
     """
+    def negative_budget(n_others: int) -> int:
+        limit = n_others
+        if negatives >= 0:
+            limit = min(limit, negatives)
+        if max_candidates is not None and max_candidates > 0:
+            limit = min(limit, max_candidates - 1)
+        return max(0, limit)
+
     if pools is None:
-        if negatives < 0 or negatives >= catalog_size - 1:
+        if max_candidates is not None and max_candidates > 0:
+            # Cap including the positive.
+            cap_neg = max(0, max_candidates - 1)
+        else:
+            cap_neg = catalog_size - 1
+        if negatives < 0:
+            want = cap_neg
+        else:
+            want = min(negatives, cap_neg)
+        if want >= catalog_size - 1:
             rows = torch.arange(catalog_size).expand(len(targets), -1).contiguous()
             return rows, targets.clone(), torch.ones_like(rows, dtype=torch.bool)
         row_lists = []
         for target in targets.tolist():
-            chosen = rng.sample(range(catalog_size - 1), negatives)
+            chosen = rng.sample(range(catalog_size - 1), want)
             row_lists.append([target, *(n + (n >= target) for n in chosen)])
         rows = torch.tensor(row_lists, dtype=torch.long)
         return rows, torch.zeros(len(targets), dtype=torch.long), torch.ones_like(rows, dtype=torch.bool)
@@ -391,10 +555,11 @@ def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
         if target < 0:
             raise ValueError("training target outside catalog")
         others = [row for row in members if row != target]
-        if negatives < 0 or negatives >= len(others):
+        want = negative_budget(len(others))
+        if want >= len(others):
             chosen = others
         else:
-            chosen = rng.sample(others, negatives)
+            chosen = rng.sample(others, want)
         row_lists.append([target, *chosen])
     width = max(len(row) for row in row_lists)
     padded = torch.full((len(row_lists), width), -1, dtype=torch.long)
@@ -405,16 +570,36 @@ def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
     return padded, torch.zeros(len(targets), dtype=torch.long), mask
 
 
-def candidate_construction_record(method: str, stats: dict, radius_km: float | None,
-                                  coordinate_imputation: dict | None = None) -> dict:
+def candidate_construction_record(
+        method: str, stats: dict, radius_km: float | None,
+        coordinate_imputation: dict | None = None,
+        *,
+        popular_radius: str = DEFAULT_POPULAR_RADIUS,
+        popular_radius_multiplier: float = DEFAULT_POPULAR_RADIUS_MULTIPLIER,
+        popular_radius_km: float | None = None,
+        popular_top_k: int = DEFAULT_POPULAR_TOP_K,
+        popular_by: str = DEFAULT_POPULAR_BY,
+        user_frequent_top_k: int = DEFAULT_USER_FREQUENT_TOP_K,
+        user_frequent_min_visits: int = DEFAULT_USER_FREQUENT_MIN_VISITS,
+        poi_visit_counts: Sequence[int] | None = None,
+        poi_target_counts: Sequence[int] | None = None) -> dict:
     """Manifest block documenting how train/eval candidates are built."""
     spatial = method != "full"
+    sources = ["neighborhood", "popular", "user_frequent"] if spatial else ["full_catalog"]
     return dict(
-        method="spatial_radius" if spatial else "full_catalog",
+        method="multi_source" if spatial else "full_catalog",
         radius_statistic=method,
         radius_km=radius_km,
         default_statistic=DEFAULT_RADIUS,
         distance_stats=stats,
+        popular_radius=popular_radius if spatial else None,
+        popular_radius_multiplier=popular_radius_multiplier if spatial else None,
+        popular_radius_km=popular_radius_km if spatial else None,
+        popular_top_k=popular_top_k if spatial else 0,
+        popular_by=popular_by if spatial else None,
+        user_frequent_top_k=user_frequent_top_k if spatial else 0,
+        user_frequent_min_visits=user_frequent_min_visits if spatial else None,
+        sources=sources,
         anchor="previous_checkin_coordinates",
         catalog_coordinates=(
             "finite mean lat/lon per catalog POI; missing check-in coords are imputed "
@@ -422,16 +607,23 @@ def candidate_construction_record(method: str, stats: dict, radius_km: float | N
         ),
         coordinate_imputation=coordinate_imputation or dict(
             fallback_order=list(COORD_FALLBACK_ORDER)),
+        poi_visit_counts=list(poi_visit_counts) if poi_visit_counts is not None else None,
+        poi_target_counts=list(poi_target_counts) if poi_target_counts is not None else None,
         include_target=True,
-        empty_neighborhood_fallback="full_catalog",
+        empty_union_fallback="full_catalog",
         train_eval_shared=True,
+        train_sampling=(
+            "train may subsample via --negatives / --max-train-candidates; "
+            "evaluate uses the full constructed pool"
+        ),
+        eval_uses_full_pool=True,
         notes=(
-            "Candidates are training-catalog POIs within radius_km of the last "
-            "observed check-in's coordinates. Train and evaluate use this same "
-            "construction. If the anchor lacks coordinates or no catalog POI lies "
-            "inside the radius, that sample falls back to the full catalog. The "
-            "true target is always added when it is in the catalog. Catalog "
-            "coordinates prefer observed check-in means; otherwise prepare imputes "
-            "from trail-adjacent locations so poi_coordinates stay JSON-finite."
+            "Candidates = union of (1) training-catalog POIs within radius_km of the "
+            "last observed check-in, (2) top popular_top_k POIs by train "
+            f"{popular_by} frequency within popular_radius_km, (3) this user's "
+            "top user_frequent_top_k training venues (min visits). Deduped; true "
+            "target always added when in catalog. If no source contributes, that "
+            "sample falls back to the full catalog. Train may sample negatives from "
+            "the pool; evaluation ranks inside the full constructed pool."
         ),
     )
