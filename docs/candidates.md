@@ -39,6 +39,18 @@ Training negatives (`train --negatives`) are drawn from this pool. Evaluation ra
 
 - `config.candidate_radius` — fingerprint input
 - `candidate_construction` — method, `radius_km`, distance stats, fallback notes
-- `poi_coordinates` — mean lat/lon per catalog POI (NaN if never observed with coords)
+- `poi_coordinates` — finite mean lat/lon per catalog POI (imputed when check-ins lack coords)
+- `candidate_construction.coordinate_imputation` — counts per fallback source
+
+### Coordinate imputation (prepare)
+
+When a catalog POI never has a valid training lat/lon, prepare fills a finite location in this order:
+
+1. **observed** — mean of that POI's check-ins with coords (no imputation)
+2. **adjacent_midpoint** — for each visit, midpoint of immediate previous/next trail neighbors that have a location (the neighbor check-in's coords, else that neighbor POI's observed mean); average across visits
+3. **trail_mean** — mean of check-in coordinates on trails where the POI appears
+4. **global_mean** — mean of all observed catalog POI means
+
+Empty-neighborhood fallback at **train/eval** is separate: it only expands that sample's candidate pool to the full catalog when the anchor is invalid or no catalog POI lies inside `radius_km`.
 
 `metrics.json` echoes `candidate_construction` for reproducibility.
