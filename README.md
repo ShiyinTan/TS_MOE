@@ -6,7 +6,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。多源候选细节见 [`docs/candidates.md`](docs/candidates.md)。T/L 数值特征按 Massive-STEPS 基线 **STHGCN** 对齐（见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)）；换特征 schema 须 **重新 prepare**。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。
 
 面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
@@ -19,11 +19,14 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 3. [运行（可复制命令）](#3-运行可复制命令)
    - [3.1 Demo](#31-demo无需下载)
    - [3.2 Tokyo](#32-tokyo下载--核对--prepare--cuda-训练)
-   - [3.3 半径变体 prepare（p70 / p80 / p90 …）](#33-半径变体-preparep70--p80--p90-)
-   - [3.4 训练抽样](#34-训练抽样)
-   - [3.5 Router 模式（`--router-mode`）](#35-router-模式--router-mode)
-   - [3.6 独立评估](#36-独立评估)
-   - [3.7 GPU 占用与中断](#37-gpu-占用与中断)
+   - [3.3 目标协议（`--train-targets` / `--eval-targets`）](#33-目标协议--train-targets--eval-targets)
+   - [3.4 候选构造（多源 / 半径 / 随机负例 / GT）](#34-候选构造多源--半径--随机负例--gt)
+   - [3.5 训练抽样](#35-训练抽样)
+   - [3.6 Router 模式（`--router-mode`）](#36-router-模式--router-mode)
+   - [3.7 STHGCN T/L 特征（须重 prepare）](#37-sthgcn-tl-特征须重-prepare)
+   - [3.8 结果目录与 Acc@1](#38-结果目录与-acc1)
+   - [3.9 独立评估](#39-独立评估)
+   - [3.10 GPU 占用与中断](#310-gpu-占用与中断)
 4. [配置 knobs](#4-配置-knobs)
 5. [结果目录](#5-结果目录)
 6. [仓库 / 代码布局](#6-仓库--代码布局)
@@ -196,24 +199,67 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device c
 
 手动下载：从 [Massive-STEPS-Tokyo](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo) 取得同名三个 CSV 放到 `data/tokyo/`（或扁平放在 `data/`），再跑上面第 2–4 步。固定版本：`python examples/download_city.py --city tokyo --data-root data --revision <commit-or-branch>`。
 
-### 3.3 半径变体 prepare（p70 / p80 / p90 …）
+### 3.3 目标协议（`--train-targets` / `--eval-targets`）
 
-每种半径 / 构造用**独立** `--out`（及对应 train `--out`），否则指纹 / 缓存会混用。改 popular / user-frequent / random-negatives 同样要重 prepare。
+**白话说明：** 一条轨迹有多个签到时，「预测目标」可以是**每个中间站的下一跳**（`all`），也可以**只预测该轨迹最后一个下一跳**（`last`）。这两个开关只属于 **`prepare`**：选好后写进缓存（`manifest` / 各 split 的 `start`/`end` 样本表）。之后的 **`train` / `evaluate` 不能改协议**——它们只读缓存里已经造好的样本。想换协议，必须换新的 `--out`（或删旧缓存）并 **重新 prepare**。
+
+| 协议 | 含义 | `prepare` 参数 |
+| --- | --- | --- |
+| 全部前缀训练 + 全部前缀评估（默认） | 轨迹上每个可用下一跳都是一条样本；val/test 同理 | `--train-targets all --eval-targets all` |
+| 仅末站训练 + 仅末站评估 | 每条轨迹只保留最后一个下一跳 | `--train-targets last --eval-targets last` |
+| 全部前缀训练 + 仅末站评估 | 训练用所有前缀；验证/测试只评末站 | `--train-targets all --eval-targets last` |
+
+三种协议的完整可复制 prepare（Tokyo；候选用默认多源；每种协议独立 `--out`）：
+
+```bash
+conda activate tsmoe
+# 需已有 data/tokyo/*.csv（见 §3.2）
+
+# A) 默认：train=all，eval=all
+python -m tsmoe prepare --data-root data --city tokyo \
+  --out runs/tokyo/cache_targets_all \
+  --train-targets all --eval-targets all
+
+# B) 训练与评估都只看每条轨迹末站
+python -m tsmoe prepare --data-root data --city tokyo \
+  --out runs/tokyo/cache_targets_last \
+  --train-targets last --eval-targets last
+
+# C) 全部前缀训练，仅评估末站
+python -m tsmoe prepare --data-root data --city tokyo \
+  --out runs/tokyo/cache_train_all_eval_last \
+  --train-targets all --eval-targets last
+```
+
+对应训练（缓存决定协议；train **没有** `--train-targets`）：
+
+```bash
+python -m tsmoe train --cache runs/tokyo/cache_targets_all \
+  --out runs/tokyo/model_targets_all --device cuda
+python -m tsmoe train --cache runs/tokyo/cache_targets_last \
+  --out runs/tokyo/model_targets_last --device cuda
+python -m tsmoe train --cache runs/tokyo/cache_train_all_eval_last \
+  --out runs/tokyo/model_train_all_eval_last --device cuda
+```
+
+### 3.4 候选构造（多源 / 半径 / 随机负例 / GT）
+
+**白话：** 候选池在 **prepare** 时按样本锚点（目标前一签）固定进缓存；train/evaluate **不覆盖**。默认 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重）。**训练目录内的真目标（GT）必入池**（含 val/test）。邻域半径可选 `p70` / `p80` / `p90`（默认）/ `mean` / `max`；`full` = 全目录。细节见 [`docs/candidates.md`](docs/candidates.md)。
+
+每种半径 / 构造用**独立** `--out`（及对应 train `--out`），否则指纹会混用。
 
 ```bash
 conda activate tsmoe
 
-# p90（默认局部邻域）
+# p90（默认局部邻域）+ popular@max + 随机负例 50
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p90 \
   --candidate-radius p90 --popular-radius max --popular-top-k 100 \
   --random-negatives 50
 
-# p80
+# p80 / p70
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p80 \
   --candidate-radius p80 --popular-radius max --popular-top-k 100 \
   --random-negatives 50
-
-# p70
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p70 \
   --candidate-radius p70 --popular-radius max --popular-top-k 100 \
   --random-negatives 50
@@ -252,9 +298,9 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_ful
 | `max`（默认） / `p90` / `p80` / `p70` / `mean` | 同上统计量 |
 | `multiplier` | `local_radius_km × --popular-radius-multiplier` |
 
-### 3.4 训练抽样
+### 3.5 训练抽样
 
-训练从**完整构造池**里抽负例；评估仍用完整池。Acc@1 等写入 `results/`。
+训练从**完整构造池**里抽负例；**评估仍用完整池**（含 GT）。Acc@1 等写入 `results/`。
 
 ```bash
 conda activate tsmoe
@@ -273,17 +319,15 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
   --batch-size 64 --eval-batch-size 32 --chunk 256 --threads 3 --device cuda
 ```
 
-### 3.5 Router 模式（`--router-mode`）
+### 3.6 Router 模式（`--router-mode`）
 
-三种专家路由；**默认 `hard_prior`**。模式写入 checkpoint 的 `config`，`evaluate` / `explain` / `recommend` 自动与训练一致（无需再传 flag）。Acc@1 等仍写入 `results/`。
+三种专家路由；**默认 `hard_prior`**。模式写入 checkpoint 的 `config`，`evaluate` / `explain` / `recommend` 自动与训练一致（无需再传 flag）。详见 [`docs/router-modes.md`](docs/router-modes.md)。
 
 | 模式 | 路由 π | 序列是否进 Router |
 | --- | --- | --- |
 | `hard_prior`（默认） | 对候选 POI 的 **U/S SURD 质量**（`prior[..., :4]`∪`prior[..., 15:]`，15 维专家序）做 `ω · log1p(15 · mass)`，再 `/T` softmax；**无序列输入** | 否 |
 | `surd_mlp` | `π = softmax(MLP(SURD_poi) / T)`；MLP 只看置信度缩放的 26 维先验 + ρ/α 摘要 | 否 |
 | `hybrid` | `logits = λ_prior · surd_bias + λ_hybrid · learned(seq×cand×SURD)`；`--lambda-prior` 默认 **0.1**，`--hybrid-lambda`（ε）默认 **0.1** | 是（learned 项） |
-
-设计意图：路由由**候选 POI 的 SURD** 决定（不同 POI 强调不同变量组合）；序列主要在该路由下拟合关系（Base / Experts）。详见 [`docs/router-modes.md`](docs/router-modes.md)。
 
 **Demo（三种模式，可复制）：**
 
@@ -335,13 +379,38 @@ python -m tsmoe evaluate --cache runs/tokyo/cache \
   --checkpoint runs/tokyo/model_hybrid/best.pt --split test --device cuda
 ```
 
-读 Acc@1：
+### 3.7 STHGCN T/L 特征（须重 prepare）
+
+当前 `main` 的 T/L **输入特征**已与 Massive-STEPS 基线 **STHGCN** 对齐（T=48、L=18；`feature_method=sthgcn_tl_features_v1`）。旧 `basic_fixed_features_v1` 缓存**不兼容**——必须换 `--out` **重新 prepare**，再 train。详见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)。
 
 ```bash
-python -c "import json; m=json.load(open('results/tokyo/model_hard/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
+conda activate tsmoe
+
+# 新 schema：用独立缓存目录（不要覆盖仍想对照的旧 cache）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_sthgcn
+python -m tsmoe train --cache runs/tokyo/cache_sthgcn --out runs/tokyo/model_sthgcn --device cuda
+# → results/tokyo/model_sthgcn/eval_validation/ 与 eval_test/
 ```
 
-### 3.6 独立评估
+### 3.8 结果目录与 Acc@1
+
+| 位置 | 内容 |
+| --- | --- |
+| `runs/<city>/cache/` | prepare 缓存 |
+| `runs/<city>/model/` | `best.pt`、`history.json`（**不含**最终 metrics） |
+| `results/<run>/eval_validation/` | train 结束后最佳模型的 validation |
+| `results/<run>/eval_test/` | train 自动 test，或独立 `evaluate --split test` |
+| `results/<run>/candidate_pool_stats.json` | 各 split 候选池大小统计 |
+
+报告头条主指标为 **Acc@1**（另报 NDCG@1、MRR）；checkpoint 仍按验证 **NDCG@10** 选取。完整约定见 [`docs/results.md`](docs/results.md)。
+
+```bash
+# 读 Acc@1（示例：§3.2 默认 Tokyo 跑完后）
+python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
+grep -E 'summary|Acc@1' results/tokyo/model/eval_test/report.txt
+```
+
+### 3.9 独立评估
 
 对已有 cache + checkpoint 重跑排名（**完整构造池**；目录内 GT 必在池内）；默认写出 `results/<run>/eval_<split>/`。路由模式从 checkpoint 读取。
 
@@ -358,13 +427,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache \
   --out results/tokyo/eval_test --output results/tokyo/test.json
 ```
 
-读 Acc@1：
-
-```bash
-python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
-```
-
-### 3.7 GPU 占用与中断
+### 3.10 GPU 占用与中断
 
 ```bash
 # 多卡时常显式指定
@@ -390,7 +453,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `prepare --popular-top-k` / `--popular-by` | 默认 `100` / `visit`（`0` 关闭热门源） |
 | `prepare --user-frequent-top-k` / `--user-frequent-min-visits` | 默认 `50` / `2`（`0` 关闭用户常去） |
 | `prepare --random-negatives` / `--random-negatives-seed` | 默认 `50` / `0`（`0` 关闭随机负例） |
-| `prepare --train-targets` / `--eval-targets` | `all` 或 `last`（默认均为 `all`） |
+| `prepare --train-targets` / `--eval-targets` | `all` 或 `last`（默认均为 `all`）；**仅 prepare**；见 §3.3 |
 | `train --dim`、`--heads`、`--layers` | 128、4、2 |
 | `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
 | `train --top-k`、`--temperature` | 4、1.0 |
@@ -404,15 +467,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128 |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-**目标协议：**
-
-| 协议 | `prepare` 参数 |
-| --- | --- |
-| 每个前缀均评分（默认） | `--train-targets all --eval-targets all` |
-| 训练与评估均用每条轨迹末站 | `--train-targets last --eval-targets last` |
-| 全部前缀训练，仅评估末站 | `--train-targets all --eval-targets last` |
-
-改变簇数、窗口、目标选取或候选构造（`--candidate-radius` / popular / user-frequent / random-negatives）时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。
+改变簇数、窗口、**目标协议**（§3.3）或候选构造（§3.4）时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。**`train` 无法覆盖 prepare 已写入的目标协议或候选构造。**
 
 训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。`history.json` 仍在 `runs/.../model/`。
 
@@ -430,6 +485,8 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 
 ## 5. 结果目录
 
+与 §3.8 相同，摘要如下。完整说明：[`docs/results.md`](docs/results.md)。候选池与 Acc@1：[`docs/candidates.md`](docs/candidates.md)。
+
 | 位置 | 内容 |
 | --- | --- |
 | `runs/<city>/cache/` | prepare 缓存（`manifest.json`、split `.pt`、SURD、候选构造） |
@@ -440,8 +497,6 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 
 每个 `eval_*` 含 `metrics.json` + `report.txt`。`<run>` 由 train `--out` / checkpoint 路径去掉前缀 `runs/` 得到，例如 `runs/tokyo/model` → `results/tokyo/model/`。可用 `evaluate --out <dir>` 覆盖。
 
-完整说明与 Acc@1 读法：[`docs/results.md`](docs/results.md)。候选构造与 Acc@1 的池内含义：[`docs/candidates.md`](docs/candidates.md)。
-
 ---
 
 ## 6. 仓库 / 代码布局
@@ -450,18 +505,18 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 TS_MOE/
   environment.yml
   requirements.txt
-  docs/results.md          # results/ 与 runs/ 分工、Acc@1
-  docs/candidates.md       # 多源候选、抽样、回退、train/eval 一致
-  docs/router-modes.md     # --router-mode hard_prior / surd_mlp / hybrid
+  docs/results.md             # results/ 与 runs/ 分工、Acc@1
+  docs/candidates.md          # 多源候选、抽样、回退、train/eval 一致
+  docs/router-modes.md        # --router-mode hard_prior / surd_mlp / hybrid
   docs/sthgcn-tl-features.md  # T/L ↔ STHGCN Φ(Δt)/Φ(Δs) 对齐
-  tsmoe/                   # 包；入口 python -m tsmoe
-  examples/                # download_city、make_demo
-  scripts/                 # verify_city_checkins 等
+  tsmoe/                      # 包；入口 python -m tsmoe
+  examples/                   # download_city、make_demo
+  scripts/                    # verify_city_checkins 等
   tests/
-  data/<city>/             # 签到 CSV（下载或自备）
-  runs/<city>/cache/       # prepare 缓存
-  runs/<city>/model/       # checkpoint（非 metrics）
-  results/<city>/model/    # metrics.json / report.txt
+  data/<city>/                # 签到 CSV（下载或自备）
+  runs/<city>/cache/          # prepare 缓存
+  runs/<city>/model/          # checkpoint（非 metrics）
+  results/<city>/model/       # metrics.json / report.txt
 ```
 
 | 路径 | 内容 |
@@ -471,6 +526,7 @@ TS_MOE/
 | `docs/results.md` | 评估结果目录约定 |
 | `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去 + 随机负例；GT 必入池） |
 | `docs/router-modes.md` | `--router-mode`：hard_prior / surd_mlp / hybrid |
+| `docs/sthgcn-tl-features.md` | T/L 与 STHGCN 对齐；换 schema 须重 prepare |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
@@ -554,4 +610,5 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 - **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118；不自动探测本机 CUDA。
 - **无多进程 / 多卡数据并行开关**：可选单卡 `--device cuda:0`；无 `--gpus` / DDP CLI。
 - **大数据内存**：大型城市 prepare 峰值随训练前缀增长；无分片 / 外存统计路径。
-- **换候选构造须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives。
+- **换候选构造或目标协议须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives，也不能覆盖 `--train-targets` / `--eval-targets`（见 §3.3、§3.4）。
+- **换 T/L 特征 schema 须重 prepare**：旧 `basic_fixed_features_v1` 与当前 `sthgcn_tl_features_v1` 不兼容（见 §3.7）。
