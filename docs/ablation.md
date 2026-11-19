@@ -20,7 +20,7 @@
 | **结果路径** | `results/<run_name>/eval_test/metrics.json`（及同目录 `report.txt`） |
 | **checkpoint** | `runs/...`；metrics **只**看 `results/` |
 | **同一 prepare 指纹** | 能复用同一 cache 的实验（Router / causal / transition / 训练负采样）**必须共用同一 `--cache`** |
-| **须重 prepare** | 候选构造、目标协议、T/L 特征 schema 任一变化 → 新 `--out` 缓存（见下表「依赖 prepare?」） |
+| **须重 prepare** | 候选构造、目标协议、T/L 特征 schema 任一变化 → 重新 `prepare`（对照时用**独立** `--out` 保留多套 cache；同路径默认覆盖，见下表「依赖 prepare?」） |
 | **默认基线 cache（Tokyo）** | `runs/tokyo/cache`：默认多源 `p90` + popular@max + user-frequent + random50；`train/eval-targets=all`；`feature_method=sthgcn_tl_features_v1` |
 | **默认训练 knobs（除非该行明确改）** | `--router-mode hard_prior`；因果计数 **on**；`--transition-attn bias`；`--negatives 63`；`--max-train-candidates -1`；`--device cuda` |
 | **对比公平性** | 同一 cache、同一 seed（默认 42）、独立 `--out` / `results/<run>`，避免结果目录互相覆盖 |
@@ -178,7 +178,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_tr_rel_key \
   --transition-attn rel_key --device cuda
 ```
 
-### 5) 候选变体（每种 **重新 prepare**）
+### 5) 候选变体（每种 **重新 prepare**；独立 `--out` 以免覆盖）
 
 ```bash
 # p80 / p70

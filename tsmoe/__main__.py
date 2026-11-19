@@ -25,6 +25,10 @@ def main():
     p.add_argument("--data-root", required=True, help="official data directory or its city subdirectory")
     p.add_argument("--city", required=True, help="official city filename prefix, e.g. tokyo")
     p.add_argument("--out", required=True)
+    p.add_argument(
+        "--no-overwrite", action="store_true",
+        help="refuse to replace an existing --out when the fingerprint differs "
+             "or the cache is incomplete (default: rebuild and replace in place)")
     for name, value in [("max-length", 50), ("clusters", 4), ("hash-dim", 64), ("folds", 3)]:
         p.add_argument("--" + name, type=positive, default=value)
     p.add_argument("--quant-seed", type=int, default=0)

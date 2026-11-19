@@ -144,7 +144,7 @@ data/tokyo/
 
 ### 多源候选池（prepare 时固定）
 
-默认候选 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重；**目录内真目标必入池**，含 val/test）。`prepare --candidate-radius {p70,p80,p90,mean,max,full}`（**默认 `p90`**）定局部邻域；`--popular-radius` 可用 `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`；另有 `--popular-top-k` / `--popular-by`、`--user-frequent-*`、`--random-negatives`（默认 **50**，`0` 关闭）均写入指纹。**train / evaluate 不覆盖**；改构造须换 `--out` 并重新 prepare。邻域/热门/用户常去皆空才回退全目录。`train --negatives` / `--max-train-candidates` 仅训练抽样；**evaluate 用完整构造池**。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全。`train` 启动时打印各 split 池大小统计并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
+默认候选 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重；**目录内真目标必入池**，含 val/test）。`prepare --candidate-radius {p70,p80,p90,mean,max,full}`（**默认 `p90`**）定局部邻域；`--popular-radius` 可用 `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`；另有 `--popular-top-k` / `--popular-by`、`--user-frequent-*`、`--random-negatives`（默认 **50**，`0` 关闭）均写入指纹。**train / evaluate 不覆盖**；改构造须 **重新 prepare**（同一 `--out` **默认覆盖**旧缓存；对照实验请用独立 `--out` 保留多套；`--no-overwrite` 可禁止覆盖）。邻域/热门/用户常去皆空才回退全目录。`train --negatives` / `--max-train-candidates` 仅训练抽样；**evaluate 用完整构造池**。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全。`train` 启动时打印各 split 池大小统计并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
 
 `download_city.py` 支持城市：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
 
@@ -203,7 +203,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device c
 
 ### 3.3 目标协议（`--train-targets` / `--eval-targets`）
 
-**白话说明：** 一条轨迹有多个签到时，「预测目标」可以是**每个中间站的下一跳**（`all`），也可以**只预测该轨迹最后一个下一跳**（`last`）。这两个开关只属于 **`prepare`**：选好后写进缓存（`manifest` / 各 split 的 `start`/`end` 样本表）。之后的 **`train` / `evaluate` 不能改协议**——它们只读缓存里已经造好的样本。想换协议，必须换新的 `--out`（或删旧缓存）并 **重新 prepare**。
+**白话说明：** 一条轨迹有多个签到时，「预测目标」可以是**每个中间站的下一跳**（`all`），也可以**只预测该轨迹最后一个下一跳**（`last`）。这两个开关只属于 **`prepare`**：选好后写进缓存（`manifest` / 各 split 的 `start`/`end` 样本表）。之后的 **`train` / `evaluate` 不能改协议**——它们只读缓存里已经造好的样本。想换协议，**重新 prepare** 即可（同一 `--out` 默认覆盖；对照时用独立目录）。
 
 | 协议 | 含义 | `prepare` 参数 |
 | --- | --- | --- |
@@ -248,7 +248,7 @@ python -m tsmoe train --cache runs/tokyo/cache_train_all_eval_last \
 
 **白话：** 候选池在 **prepare** 时按样本锚点（目标前一签）固定进缓存；train/evaluate **不覆盖**。默认 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重）。**训练目录内的真目标（GT）必入池**（含 val/test）。邻域半径可选 `p70` / `p80` / `p90`（默认）/ `mean` / `max`；`full` = 全目录。细节见 [`docs/candidates.md`](docs/candidates.md)。
 
-每种半径 / 构造用**独立** `--out`（及对应 train `--out`），否则指纹会混用。
+对照多种半径 / 构造时用**独立** `--out`（及对应 train `--out`）以免互相覆盖；若只保留一套，对同一 `--out` 重新 prepare 即可（默认覆盖）。
 
 ```bash
 conda activate tsmoe
@@ -383,14 +383,14 @@ python -m tsmoe evaluate --cache runs/tokyo/cache \
 
 ### 3.7 STHGCN T/L 特征（须重 prepare）
 
-当前 `main` 的 T/L **输入特征**已与 Massive-STEPS 基线 **STHGCN** 对齐（T=48、L=18；`feature_method=sthgcn_tl_features_v1`）。旧 `basic_fixed_features_v1` 缓存**不兼容**——必须换 `--out` **重新 prepare**，再 train。详见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)。
+当前 `main` 的 T/L **输入特征**已与 Massive-STEPS 基线 **STHGCN** 对齐（T=48、L=18；`feature_method=sthgcn_tl_features_v1`）。旧 `basic_fixed_features_v1` 缓存**不兼容**——须 **重新 prepare**（同一 `--out` 默认覆盖；无需先 `rm -rf`），再 train。详见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)。
 
 ```bash
 conda activate tsmoe
 
-# 新 schema：用独立缓存目录（不要覆盖仍想对照的旧 cache）
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_sthgcn
-python -m tsmoe train --cache runs/tokyo/cache_sthgcn --out runs/tokyo/model_sthgcn --device cuda
+# 新 schema：对现有目录重新 prepare（指纹不同则覆盖）；对照旧 cache 时再用独立 --out
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_sthgcn --device cuda
 # → results/tokyo/model_sthgcn/eval_validation/ 与 eval_test/
 ```
 
@@ -518,6 +518,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `prepare --user-frequent-top-k` / `--user-frequent-min-visits` | 默认 `50` / `2`（`0` 关闭用户常去） |
 | `prepare --random-negatives` / `--random-negatives-seed` | 默认 `50` / `0`（`0` 关闭随机负例） |
 | `prepare --train-targets` / `--eval-targets` | `all` 或 `last`（默认均为 `all`）；**仅 prepare**；见 §3.3 |
+| `prepare --no-overwrite` | 禁止覆盖已有 `--out`（默认允许：指纹不同或缓存不完整时就地重建） |
 | `train --dim`、`--heads`、`--layers` | 128、4、2 |
 | `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
 | `train --top-k`、`--temperature` | 4、1.0 |
@@ -535,7 +536,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128 |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
-改变簇数、窗口、**目标协议**（§3.3）或候选构造（§3.4）时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。**`train` 无法覆盖 prepare 已写入的目标协议或候选构造。**
+改变簇数、窗口、**目标协议**（§3.3）或候选构造（§3.4）时，须 **重新 prepare**（同一 `--out` 默认覆盖；对照实验用独立目录），并用配套缓存训练与评估。**`train` 无法覆盖 prepare 已写入的目标协议或候选构造。**
 
 训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。`history.json` 仍在 `runs/.../model/`。
 
@@ -656,7 +657,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
 6. **因果在线计数**（默认 on）：按时间戳训练；用户/全局访问与转移表先读后写；POI/C 嵌入加计数 MLP；T/L 加等频访问分箱；P/C 交叉注意力默认 `bias` 注入转移（可选 `gate` / `rel_key`）。见 [`docs/causal-counts.md`](docs/causal-counts.md) 与 §3.8。
 
-缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、分折、候选构造与文件摘要。旧 `basic_fixed_features_v1` 缓存不兼容，须换 `--out` 重新 prepare。
+缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、分折、候选构造与文件摘要。旧 `basic_fixed_features_v1` 缓存不兼容，须重新 prepare（默认覆盖同路径旧缓存）。
 
 ---
 

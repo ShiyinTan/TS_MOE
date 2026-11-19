@@ -23,7 +23,7 @@ For each sample, with anchor = lat/lon of the check-in immediately before the ta
 
 ## Prepare knobs (fingerprint)
 
-Changing any of these **requires a new cache** (`prepare --out …`); train/evaluate do not override them.
+Changing any of these **requires re-prepare**; train/evaluate do not override them. The same `--out` **overwrites by default** when the fingerprint differs (use distinct `--out` paths to keep parallel caches; `--no-overwrite` refuses replacement).
 
 ```bash
 python -m tsmoe prepare ... \
@@ -90,7 +90,7 @@ Counts are **after** union, force-including the in-catalog target, random negati
 
 ## Re-prepare
 
-Fingerprint now includes random-negative knobs (and p70/p80 choices). Use a **new** `--out` when those change:
+Fingerprint now includes random-negative knobs (and p70/p80 choices). Re-run `prepare` when those change (same `--out` overwrites; keep a distinct `--out` only if you still need the old cache):
 
 ```bash
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_ms \

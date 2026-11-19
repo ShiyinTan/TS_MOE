@@ -89,20 +89,37 @@ def prepare(args):
                   t_dim=T_DIM, l_dim=L_DIM, sthgcn_basis_dim=STHGCN_BASIS_DIM,
                   files={s: file_digest(p) for s, p in paths.items()})
     fingerprint = digest_json(config)
-    if out.exists():
-        if (out / "manifest.json").exists():
-            old = json.loads((out / "manifest.json").read_text())
-            if old["fingerprint"] == fingerprint:
+    overwrite = not getattr(args, "no_overwrite", False)
+    if out.exists() and (out / "manifest.json").is_file():
+        old = json.loads((out / "manifest.json").read_text())
+        if old["fingerprint"] == fingerprint:
+            try:
                 verify_files(out, old["files"])
+            except ValueError:
+                if not overwrite:
+                    raise
+                print(f"Incomplete cache at {out}; rebuilding.", flush=True)
+            else:
                 print("Reusing verified cache:", out)
                 return
-        if any(out.iterdir()):
-            raise ValueError(f"{out} contains a different cache. Select a new --out for this configuration.")
+        elif not overwrite:
+            raise ValueError(
+                f"{out} contains a different cache. Select a new --out "
+                f"or omit --no-overwrite to replace it.")
+        else:
+            print(f"Replacing cache at {out} (fingerprint changed).", flush=True)
+    elif out.exists() and any(out.iterdir()) and not overwrite:
+        raise ValueError(
+            f"{out} contains a different cache. Select a new --out "
+            f"or omit --no-overwrite to replace it.")
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
         stage = Path(tmp) / "prepared"
         stage.mkdir()
         build_cache(config, paths, fingerprint, stage)
+        # Park any existing tree inside tmp so cleanup removes it after the swap.
+        if out.exists():
+            out.replace(Path(tmp) / "old_cache")
         stage.replace(out)
     print("Prepared:", out)
 

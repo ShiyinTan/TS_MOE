@@ -696,6 +696,53 @@ class TestDesign(unittest.TestCase):
                 info = Cache(alt).meta["audit"][split]
                 self.assertEqual(info["samples"], info["trails"])
 
+    def test_prepare_overwrites_on_fingerprint_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = generate(root / "data")
+            cache_path = root / "cache"
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path)
+            first = json.loads((cache_path / "manifest.json").read_text())
+            self.assertEqual(first["config"]["candidate_radius"], "p90")
+            marker = cache_path / "stale_marker.txt"
+            marker.write_text("old\n")
+
+            # Same fingerprint → reuse (marker left alone).
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path)
+            self.assertTrue(marker.is_file())
+            self.assertEqual(
+                json.loads((cache_path / "manifest.json").read_text())["fingerprint"],
+                first["fingerprint"])
+
+            # Different fingerprint → rebuild in place (default overwrite).
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path,
+                    "--candidate-radius", "p80")
+            second = json.loads((cache_path / "manifest.json").read_text())
+            self.assertEqual(second["config"]["candidate_radius"], "p80")
+            self.assertNotEqual(second["fingerprint"], first["fingerprint"])
+            self.assertFalse(marker.exists())
+            Cache(cache_path)  # verifies checksums / loads
+
+            # --no-overwrite refuses a further fingerprint change.
+            with self.assertRaises(ValueError) as ctx:
+                run_cli("prepare", "--data-root", directory, "--city", "demo",
+                        "--out", cache_path, "--candidate-radius", "p70",
+                        "--no-overwrite")
+            self.assertIn("different cache", str(ctx.exception))
+            self.assertEqual(
+                json.loads((cache_path / "manifest.json").read_text())["config"]["candidate_radius"],
+                "p80")
+
+            # Incomplete cache (checksum mismatch) rebuilds in place by default.
+            train_pt = cache_path / "train.pt"
+            train_pt.write_bytes(train_pt.read_bytes() + b"\x00")
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path,
+                    "--candidate-radius", "p80")
+            Cache(cache_path)
+            self.assertEqual(
+                json.loads((cache_path / "manifest.json").read_text())["config"]["candidate_radius"],
+                "p80")
+
 
 class TestCausalCounts(unittest.TestCase):
     @classmethod
