@@ -15,9 +15,11 @@ import torch
 from examples.make_demo import generate
 from tsmoe.__main__ import main
 from tsmoe.candidates import (
-    catalog_coordinates, consecutive_visit_distances, format_pool_size_line,
-    haversine_km, neighborhood_indices, pick_radius_km, resolve_candidate_pool,
-    sample_candidates, summarize_distances, summarize_pool_sizes,
+    build_user_frequent, catalog_coordinates, catalog_visit_counts,
+    consecutive_visit_distances, format_pool_size_line, haversine_km,
+    neighborhood_indices, pick_popular_radius_km, pick_radius_km,
+    popular_indices, resolve_candidate_pool, sample_candidates,
+    summarize_distances, summarize_pool_sizes,
 )
 from tsmoe.prepare import dump_json
 from tsmoe.data import Categories, Event, build_split, make_batch, read_split
@@ -190,7 +192,7 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(near.tolist(), [0])
         pool, how = resolve_candidate_pool(0.0, 0.0, target_row=3, catalog_coords=coords,
                                            radius_km=1.0, catalog_size=4)
-        self.assertEqual(how, "spatial")
+        self.assertEqual(how, "multi_source")
         self.assertIn(0, pool.tolist())  # origin POI
         self.assertIn(3, pool.tolist())  # force-included target
         full, how = resolve_candidate_pool(float("nan"), 0.0, 1, coords, 10.0, 4)
@@ -198,31 +200,54 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(full.tolist(), [0, 1, 2, 3])
         empty, how = resolve_candidate_pool(10.0, 10.0, 0, coords, 0.01, 4)
         self.assertEqual(how, "fallback_full_catalog")
+        # Popular + user-frequent enrich an otherwise tiny neighborhood.
+        popularity = torch.tensor([1.0, 50.0, 5.0, 2.0], dtype=torch.float64)
+        rich, how = resolve_candidate_pool(
+            0.0, 0.0, target_row=3, catalog_coords=coords, radius_km=1.0, catalog_size=4,
+            popular_radius_km=200.0, popularity=popularity, popular_top_k=2,
+            user_frequent_rows=[2])
+        self.assertEqual(how, "multi_source")
+        self.assertIn(0, rich.tolist())
+        self.assertIn(1, rich.tolist())  # most popular within large radius
+        self.assertIn(2, rich.tolist())  # user-frequent
+        self.assertIn(3, rich.tolist())
+        self.assertEqual(pick_popular_radius_km(stats, 10.0, "multiplier", 2.5), 25.0)
+        self.assertAlmostEqual(pick_popular_radius_km(stats, 10.0, "max", 2.0), stats["max_km"])
+        visits = catalog_visit_counts(groups, pois)
+        self.assertEqual(visits, [1, 2, 1, 1])
+        uf = build_user_frequent(groups, pois, top_k=2, min_visits=1)
+        self.assertEqual(uf["u"][0], 1)  # POI 2 visited twice
+        pop = popular_indices(0.0, 0.0, coords, 200.0, popularity, top_k=1)
+        self.assertEqual(pop.tolist(), [1])
         # Pool-size stats use the resolved set (after target include / fallback).
         pools = [
             resolve_candidate_pool(0.0, 0.0, 3, coords, 1.0, 4)[0],
             resolve_candidate_pool(float("nan"), 0.0, 1, coords, 10.0, 4)[0],
             resolve_candidate_pool(10.0, 10.0, 0, coords, 0.01, 4)[0],
         ]
-        resolutions = ["spatial", "fallback_full_catalog", "fallback_full_catalog"]
+        resolutions = ["multi_source", "fallback_full_catalog", "fallback_full_catalog"]
         stats = summarize_pool_sizes(pools, resolutions)
         self.assertEqual(stats["n"], 3)
         self.assertEqual(stats["min"], 2)  # origin + force-included target
         self.assertEqual(stats["max"], 4)
         self.assertAlmostEqual(stats["mean"], (2 + 4 + 4) / 3)
         self.assertEqual(stats["median"], 4.0)
-        self.assertEqual(stats["resolutions"]["spatial"], 1)
+        self.assertEqual(stats["resolutions"]["multi_source"], 1)
         self.assertEqual(stats["resolutions"]["fallback_full_catalog"], 2)
         line = format_pool_size_line("train", stats)
         self.assertTrue(line.startswith("candidates train: n=3 min=2 max=4 mean="))
         self.assertIn("median=4.00", line)
-        self.assertIn("spatial=1", line)
+        self.assertIn("multi_source=1", line)
         rows, labels, mask = sample_candidates(
             torch.tensor([0]), 4, 1, random.Random(0), pools=[pool])
         self.assertTrue(mask[0, 0].item())
         self.assertEqual(int(rows[0, 0]), 0)
         self.assertEqual(int(labels[0]), 0)
         self.assertEqual(int(mask[0].sum()), 2)
+        capped, _, cap_mask = sample_candidates(
+            torch.tensor([0]), 4, -1, random.Random(0), pools=[rich], max_candidates=2)
+        self.assertEqual(int(cap_mask[0].sum()), 2)
+        self.assertEqual(int(capped[0, 0]), 0)
 
     def test_prepare_prints_coordinate_imputation_counts(self):
         """prepare logs per-source catalog coordinate counts from the imputation audit."""
@@ -372,16 +397,23 @@ class TestDesign(unittest.TestCase):
             train = cache.split("train")
             self.assertEqual(cache.cfg["candidate_radius"], "p90")
             self.assertIsNotNone(cache.radius_km)
-            self.assertEqual(cache.candidate_construction["method"], "spatial_radius")
+            self.assertEqual(cache.candidate_construction["method"], "multi_source")
+            self.assertEqual(cache.cfg["popular_radius"], "max")
+            self.assertEqual(cache.cfg["popular_top_k"], 100)
+            self.assertEqual(cache.cfg["popular_by"], "visit")
+            self.assertEqual(cache.cfg["user_frequent_top_k"], 50)
+            self.assertIsNotNone(cache.popular_radius_km)
+            self.assertTrue((cache.path / "user_frequent.pt").is_file())
             self.assertEqual(len(cache.meta["poi_coordinates"]), len(cache.pois))
             self.assertTrue(all(
                 math.isfinite(v) for pair in cache.meta["poi_coordinates"] for v in pair))
             self.assertIn("coordinate_imputation", cache.candidate_construction)
+            self.assertEqual(len(cache.candidate_construction["poi_visit_counts"]), len(cache.pois))
             self.assertIn("lat", train)
             self.assertIn("lon", train)
             pools, resolutions = cache.candidate_pools(train)
             self.assertEqual(len(pools), len(train["end"]))
-            self.assertTrue(any(r in ("spatial", "fallback_full_catalog") for r in resolutions))
+            self.assertTrue(any(r in ("multi_source", "fallback_full_catalog") for r in resolutions))
             run_cli("inspect", "--cache", cache_path, "--poi-id", cache.pois[0], "--sample-index", 0,
                     "--output", root / "trace.json")
             trace = json.loads((root / "trace.json").read_text())
@@ -433,8 +465,10 @@ class TestDesign(unittest.TestCase):
             self.assertIn("Acc@1", train_test["all_targets"])
             self.assertIn("Acc@10", train_test["all_targets"])
             self.assertEqual(train_test["primary_metrics"], ["Acc@1", "NDCG@1", "MRR"])
-            self.assertEqual(train_test["candidate_construction"]["method"], "spatial_radius")
+            self.assertEqual(train_test["candidate_construction"]["method"], "multi_source")
             self.assertEqual(train_test["candidate_construction"]["radius_statistic"], "p90")
+            self.assertEqual(train_test["candidate_construction"]["popular_radius"], "max")
+            self.assertTrue(train_test["candidate_construction"]["eval_uses_full_pool"])
             self.assertEqual(train_test["candidate_pool_stats"]["n"],
                              pool_stats["splits"]["test"]["n"])
             self.assertIn("group_notes", train_test)
