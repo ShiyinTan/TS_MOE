@@ -525,6 +525,154 @@ def resolve_train_eval_dir(train_out, split):
     return results_run_dir(train_out) / f"eval_{split}"
 
 
+# Shared ablation table under results/ (gitignored); columns match docs/ablation_log.template.*
+ABLATION_LOG_COLUMNS = ("date", "run_name", "cache", "key_flags", "Acc@1", "NDCG@1", "MRR", "notes")
+ABLATION_MD_HEADER = (
+    "# Ablation results log (auto-appended)\n"
+    "\n"
+    "Rows are appended by `train` / `evaluate` when they finish. "
+    "Columns match [`docs/ablation_log.template.md`](../docs/ablation_log.template.md). "
+    "Primary numbers are **test** `all_targets` Acc@1 / NDCG@1 / MRR "
+    "(best-val summary may appear in `notes`).\n"
+    "\n"
+    "| date | run_name | cache | key flags | Acc@1 | NDCG@1 | MRR | notes |\n"
+    "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+)
+
+
+def results_root_dir(path, *, cwd=None):
+    """Directory that holds ``ablation_log.*`` (the ``results/`` root for this run)."""
+    run = results_run_dir(path, cwd=cwd)
+    cur = run
+    while cur.name != "results" and cur.parent != cur:
+        cur = cur.parent
+    return cur if cur.name == "results" else run.parent
+
+
+def run_name_for_results(path, *, cwd=None):
+    """POSIX path of the run under ``results/`` (e.g. ``tokyo/model``)."""
+    run = results_run_dir(path, cwd=cwd)
+    root = results_root_dir(path, cwd=cwd)
+    try:
+        return run.relative_to(root).as_posix()
+    except ValueError:
+        return run.name
+
+
+def format_ablation_key_flags(cache, training_args=None, model_config=None):
+    """Compact CLI-ish flag string for the ablation table (cache + train knobs)."""
+    parts = []
+    cc = cache.candidate_construction or {}
+    radius = cc.get("radius_statistic") or cache.cfg.get("candidate_radius")
+    if radius is not None:
+        parts.append(f"--candidate-radius {radius}")
+    if cc.get("method") == "multi_source":
+        if cc.get("popular_top_k") is not None:
+            parts.append(f"--popular-top-k {cc['popular_top_k']}")
+        if cc.get("popular_radius") is not None:
+            parts.append(f"--popular-radius {cc['popular_radius']}")
+        if cc.get("user_frequent_top_k") is not None:
+            parts.append(f"--user-frequent-top-k {cc['user_frequent_top_k']}")
+        if cc.get("random_negatives") is not None:
+            parts.append(f"--random-negatives {cc['random_negatives']}")
+    targets = []
+    if cache.cfg.get("train_targets") is not None:
+        targets.append(f"--train-targets {cache.cfg['train_targets']}")
+    if cache.cfg.get("eval_targets") is not None:
+        targets.append(f"--eval-targets {cache.cfg['eval_targets']}")
+    parts.extend(targets)
+    cfg = model_config or {}
+    args = training_args or {}
+    router = args.get("router_mode", cfg.get("router_mode"))
+    if router is not None:
+        parts.append(f"--router-mode {router}")
+    if args.get("no_surd") or cfg.get("use_surd") is False:
+        parts.append("--no-surd")
+    causal = args.get("causal_counts", cfg.get("causal_counts"))
+    if causal is False or args.get("no_causal_counts") is True:
+        parts.append("--no-causal-counts")
+    else:
+        parts.append("--causal-counts")
+        attn = args.get("transition_attn", cfg.get("transition_attn", "bias"))
+        parts.append(f"--transition-attn {attn}")
+        if args.get("transition_lambda", cfg.get("transition_lambda")) is not None:
+            parts.append(f"--transition-lambda {args.get('transition_lambda', cfg.get('transition_lambda'))}")
+        if args.get("visit_bins", cfg.get("visit_bins")) is not None:
+            parts.append(f"--visit-bins {args.get('visit_bins', cfg.get('visit_bins'))}")
+    if args.get("negatives") is not None:
+        parts.append(f"--negatives {args['negatives']}")
+    if args.get("max_train_candidates") is not None:
+        parts.append(f"--max-train-candidates {args['max_train_candidates']}")
+    return " ".join(parts)
+
+
+def _metric_cell(row, key):
+    if not row or row.get(key) is None:
+        return ""
+    value = row[key]
+    if isinstance(value, float):
+        return f"{value:.6f}".rstrip("0").rstrip(".") if value != 0 else "0"
+    return str(value)
+
+
+def _csv_escape(value):
+    text = "" if value is None else str(value)
+    if any(c in text for c in ',"\n'):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def append_ablation_log(row, results_anchor, *, cwd=None):
+    """Append one ablation row to ``results/ablation_log.md`` and ``.csv``.
+
+    Creates both files (with header) when missing. ``results_anchor`` is a train
+    ``--out`` or checkpoint-parent path used to locate the shared ``results/`` root.
+    ``row`` keys match ``ABLATION_LOG_COLUMNS``.
+    """
+    root = results_root_dir(results_anchor, cwd=cwd)
+    root.mkdir(parents=True, exist_ok=True)
+    md_path, csv_path = root / "ablation_log.md", root / "ablation_log.csv"
+    cells = [row.get(col, "") for col in ABLATION_LOG_COLUMNS]
+    # Markdown: display "key flags" header already in template; body cells raw.
+    md_line = "| " + " | ".join("" if c is None else str(c) for c in cells) + " |\n"
+    if not md_path.is_file():
+        md_path.write_text(ABLATION_MD_HEADER + md_line, encoding="utf-8")
+    else:
+        with md_path.open("a", encoding="utf-8") as f:
+            f.write(md_line)
+    csv_line = ",".join(_csv_escape(c) for c in cells) + "\n"
+    if not csv_path.is_file():
+        csv_path.write_text(",".join(ABLATION_LOG_COLUMNS) + "\n" + csv_line, encoding="utf-8")
+    else:
+        with csv_path.open("a", encoding="utf-8") as f:
+            f.write(csv_line)
+    print(f"Appended ablation row → {md_path}", flush=True)
+    print(f"Appended ablation row → {csv_path}", flush=True)
+    return md_path, csv_path
+
+
+def ablation_row_from_eval(cache, metrics_row, *, run_name, cache_path, key_flags,
+                           notes="", date=None):
+    """Build an ablation_log row dict from a primary metric row."""
+    return dict(
+        date=date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        run_name=run_name,
+        cache=str(cache_path),
+        key_flags=key_flags,
+        **{k: _metric_cell(metrics_row, k) for k in ("Acc@1", "NDCG@1", "MRR")},
+        notes=notes,
+    )
+
+
+def primary_metric_snapshot(metrics):
+    """Compact Acc@1 / NDCG@1 / MRR (+ NDCG@10 when present) from an evaluate() dict."""
+    row = (metrics or {}).get("all_targets") or {}
+    out = {k: row.get(k) for k in PRIMARY_METRICS}
+    if "NDCG@10" in row:
+        out["NDCG@10"] = row.get("NDCG@10")
+    return out
+
+
 def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, checkpoint=None):
     settings = {key: value for key, value in vars(args).items()
                 if isinstance(value, (str, float, int, bool))}
@@ -746,6 +894,9 @@ def train(args):
     settings["transition_attn"] = cfg.transition_attn
     settings["transition_lambda"] = cfg.transition_lambda
     settings["visit_bins"] = cfg.visit_bins
+    # Default on: test after every epoch (in addition to final best-ckpt test).
+    eval_test_every_epoch = bool(getattr(args, "eval_test_every_epoch", True))
+    settings["eval_test_every_epoch"] = eval_test_every_epoch
     max_train_candidates = None if args.max_train_candidates < 0 else args.max_train_candidates
     category_frequency = Counter(data["C"].tolist())
     test = cache.split("test")
@@ -762,6 +913,11 @@ def train(args):
               f"visit_bins={cfg.visit_bins} bin_edges={visit_bin_edges.tolist()} "
               f"(train chronological, no shuffle; val/test start from train-end tables)",
               flush=True)
+    if eval_test_every_epoch:
+        print("eval_test_every_epoch=on (per-epoch test → results/.../eval_test/epoch_*.json; "
+              "checkpoint still selected by val NDCG@10)", flush=True)
+    else:
+        print("eval_test_every_epoch=off (final best-ckpt test only)", flush=True)
     # Persist pool-size audit under results/ (not beside checkpoints).
     stats_dir = results_run_dir(out)
     stats_dir.mkdir(parents=True, exist_ok=True)
@@ -792,6 +948,8 @@ def train(args):
     print(f"Wrote {stats_dir / 'candidate_pool_stats.json'}", flush=True)
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     train_end_state = None
+    results_history = []
+    test_eval_dir = resolve_train_eval_dir(out, "test")
     for epoch in epoch_bar:
         check_interrupt()
         model.train()
@@ -841,7 +999,41 @@ def train(args):
         record = dict(epoch=epoch, loss=loss_sum / len(data["end"]),
                       loss_terms=dict(zip(("rec", "surd", "balance"), (components / len(data["end"])).tolist())),
                       dispatch_counts=dict(zip(EXPERT_ORDER, counts.cpu().tolist())), validation=metrics)
+        results_epoch = dict(
+            epoch=epoch,
+            loss=record["loss"],
+            validation=primary_metric_snapshot(metrics),
+        )
+        # Optional per-epoch test on *current* weights (not best ckpt); separate table clone.
+        if eval_test_every_epoch:
+            epoch_test_tables = online_tables.clone() if cfg.causal_counts else None
+            epoch_test = evaluate(
+                model, final, test, cache, args.eval_batch_size, args.chunk,
+                category_frequency, desc=f"test ep{epoch}", count_tables=epoch_test_tables)
+            record["test"] = epoch_test
+            results_epoch["test"] = primary_metric_snapshot(epoch_test)
+            test_eval_dir.mkdir(parents=True, exist_ok=True)
+            epoch_path = test_eval_dir / f"epoch_{epoch:03d}.json"
+            dump_json(dict(
+                timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                epoch=epoch,
+                split="test",
+                selection="current_epoch_weights",
+                cache=str(Path(args.cache).resolve()),
+                cache_id=cache.id,
+                primary_metrics=list(PRIMARY_METRICS),
+                candidate_construction=cache.candidate_construction,
+                candidate_pool_stats=pool_stats.get("test"),
+                **epoch_test,
+            ), epoch_path)
+            print(f"Wrote {epoch_path}", flush=True)
+            trow = epoch_test["all_targets"]
+            print(f"epoch={epoch}  "
+                  f"test Acc@1={trow['Acc@1']:.4f} NDCG@1={trow['NDCG@1']:.4f} "
+                  f"MRR={trow['MRR']:.4f}  Acc@10={trow['Acc@10']:.4f} "
+                  f"NDCG@10={trow['NDCG@10']:.4f}", flush=True)
         history.append(record)
+        results_history.append(results_epoch)
         if score > best:
             best = score
             best_metrics = metrics
@@ -853,9 +1045,16 @@ def train(args):
             save_checkpoint(payload, out / "best.pt")
         dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
                    "epochs": history}, out / "history.json")
+        # Compact per-epoch val (+ optional test) history under results/.
+        dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
+                   "eval_test_every_epoch": eval_test_every_epoch,
+                   "epochs": results_history}, stats_dir / "history.json")
         row = metrics["all_targets"]
-        epoch_bar.set_postfix(loss=f"{record['loss']:.5f}", acc1=f"{row['Acc@1']:.4f}",
-                              ndcg10=f"{score:.6f}")
+        postfix = dict(loss=f"{record['loss']:.5f}", acc1=f"{row['Acc@1']:.4f}",
+                       ndcg10=f"{score:.6f}")
+        if eval_test_every_epoch and "test" in results_epoch:
+            postfix["test_acc1"] = f"{results_epoch['test']['Acc@1']:.4f}"
+        epoch_bar.set_postfix(**postfix)
         print(f"epoch={epoch} loss={record['loss']:.5f}  "
               f"val Acc@1={row['Acc@1']:.4f} NDCG@1={row['NDCG@1']:.4f} MRR={row['MRR']:.4f}  "
               f"Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f}", flush=True)
@@ -894,6 +1093,25 @@ def train(args):
         test_payload["candidate_pool_stats"] = pool_stats.get("test")
         print_eval_tables(test_payload)
         save_eval_results(test_payload, resolve_train_eval_dir(out, "test"))
+        # Auto-append one ablation table row (test metrics; best-val in notes).
+        best_val = primary_metric_snapshot(best_metrics)
+        notes = (
+            f"best_val Acc@1={_metric_cell(best_val, 'Acc@1')} "
+            f"NDCG@1={_metric_cell(best_val, 'NDCG@1')} "
+            f"MRR={_metric_cell(best_val, 'MRR')}; "
+            f"ckpt_epoch={checkpoint.get('epoch')}; "
+            f"selection=best_checkpoint_by_NDCG@10"
+        )
+        append_ablation_log(
+            ablation_row_from_eval(
+                cache, test_metrics["all_targets"],
+                run_name=run_name_for_results(out),
+                cache_path=Path(args.cache).resolve(),
+                key_flags=format_ablation_key_flags(cache, settings, asdict(cfg)),
+                notes=notes,
+            ),
+            out,
+        )
 
 
 def load_model(args):
@@ -957,6 +1175,25 @@ def evaluate_cli(args):
     print_eval_tables(payload)
     out_dir = resolve_eval_out(args)
     save_eval_results(payload, out_dir, legacy_output=args.output)
+    # Append ablation row for standalone evaluate (same columns as train).
+    ckpt_parent = Path(args.checkpoint).resolve().parent
+    training_args = checkpoint.get("training_args") or {}
+    model_cfg = checkpoint.get("config") or {}
+    notes = f"evaluate --split {args.split}"
+    if checkpoint.get("epoch") is not None:
+        notes += f"; ckpt_epoch={checkpoint['epoch']}"
+    if checkpoint.get("validation_ndcg10") is not None:
+        notes += f"; ckpt_val_NDCG@10={checkpoint['validation_ndcg10']:.6f}"
+    append_ablation_log(
+        ablation_row_from_eval(
+            cache, metrics["all_targets"],
+            run_name=run_name_for_results(ckpt_parent),
+            cache_path=Path(args.cache).resolve(),
+            key_flags=format_ablation_key_flags(cache, training_args, model_cfg),
+            notes=notes,
+        ),
+        ckpt_parent,
+    )
 
 
 @torch.inference_mode()

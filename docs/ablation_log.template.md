@@ -1,12 +1,12 @@
-# Ablation results log (working copy)
+# Ablation results log (template)
 
-Copy to a gitignored path before filling, e.g.:
+`train` / `evaluate` **auto-append** matching rows to gitignored `results/ablation_log.md` and `results/ablation_log.csv` (created if missing). Copy this file only if you want a blank checklist or to reset:
 
 ```bash
 cp docs/ablation_log.template.md results/ablation_log.md
 ```
 
-Source of numbers: `results/<run>/eval_test/metrics.json` → `all_targets.Acc@1` / `NDCG@1` / `MRR`.
+Source of numbers: latest test `all_targets.Acc@1` / `NDCG@1` / `MRR` (train also notes best-val).
 Protocol: see [`ablation.md`](ablation.md).
 
 | date | run_name | cache | key flags | Acc@1 | NDCG@1 | MRR | notes |

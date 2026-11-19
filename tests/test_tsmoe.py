@@ -33,8 +33,10 @@ from tsmoe.data import (
     sthgcn_phi,
 )
 from tsmoe.engine import (
-    Cache, GROUP_LABELS, PRIMARY_METRICS, candidates, format_eval_report, metric_row,
-    model_config_from_checkpoint, ranks_of, results_run_dir,
+    Cache, GROUP_LABELS, PRIMARY_METRICS, ablation_row_from_eval, append_ablation_log,
+    candidates, format_ablation_key_flags, format_eval_report, metric_row,
+    model_config_from_checkpoint, ranks_of, results_root_dir, results_run_dir,
+    run_name_for_results,
 )
 from tsmoe.model import ModelConfig, TSMoE, TransitionCrossAttention, objective
 from tsmoe.quantizer import BasicSourceQuantizer
@@ -503,6 +505,10 @@ class TestDesign(unittest.TestCase):
             (cwd / "runs" / "tokyo" / "model").mkdir(parents=True)
             mapped = results_run_dir(cwd / "runs" / "tokyo" / "model", cwd=cwd)
             self.assertEqual(mapped, cwd / "results" / "tokyo" / "model")
+            self.assertEqual(results_root_dir(cwd / "runs" / "tokyo" / "model", cwd=cwd),
+                             cwd / "results")
+            self.assertEqual(run_name_for_results(cwd / "runs" / "tokyo" / "model", cwd=cwd),
+                             "tokyo/model")
             outside = Path(temp) / "nested" / "run"
             outside.mkdir(parents=True)
             # Force a cwd that does not contain `outside` so the sibling layout applies.
@@ -510,6 +516,60 @@ class TestDesign(unittest.TestCase):
             other.mkdir()
             self.assertEqual(results_run_dir(outside, cwd=other),
                              outside.parent / "results" / "run")
+
+    def test_append_ablation_log_creates_md_and_csv(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            out = root / "runs" / "tokyo" / "abl_router_hard"
+            out.mkdir(parents=True)
+            row = dict(
+                date="2026-11-19",
+                run_name="tokyo/abl_router_hard",
+                cache=str(root / "runs" / "tokyo" / "cache"),
+                key_flags="--router-mode hard_prior --causal-counts --transition-attn bias",
+                **{"Acc@1": "0.123456", "NDCG@1": "0.111", "MRR": "0.2"},
+                notes="best_val Acc@1=0.1; selection=best_checkpoint_by_NDCG@10",
+            )
+            md_path, csv_path = append_ablation_log(row, out, cwd=root)
+            self.assertEqual(md_path, root / "results" / "ablation_log.md")
+            self.assertEqual(csv_path, root / "results" / "ablation_log.csv")
+            md = md_path.read_text()
+            self.assertIn("| date | run_name | cache | key flags | Acc@1 | NDCG@1 | MRR | notes |", md)
+            self.assertIn("tokyo/abl_router_hard", md)
+            self.assertIn("0.123456", md)
+            csv_text = csv_path.read_text()
+            self.assertTrue(csv_text.startswith(
+                "date,run_name,cache,key_flags,Acc@1,NDCG@1,MRR,notes\n"))
+            self.assertIn("abl_router_hard", csv_text)
+            append_ablation_log({**row, "Acc@1": "0.2"}, out, cwd=root)
+            self.assertEqual(csv_path.read_text().count("\n"), 3)  # header + 2 rows
+
+    def test_ablation_row_metric_cells(self):
+        class FakeCache:
+            candidate_construction = {"method": "multi_source", "radius_statistic": "p90",
+                                      "popular_top_k": 100, "popular_radius": "max",
+                                      "user_frequent_top_k": 50, "random_negatives": 50}
+            cfg = {"train_targets": "all", "eval_targets": "all", "candidate_radius": "p90"}
+
+        flags = format_ablation_key_flags(
+            FakeCache(),
+            {"router_mode": "hard_prior", "causal_counts": True, "transition_attn": "bias",
+             "transition_lambda": 1.0, "visit_bins": 10, "negatives": 63,
+             "max_train_candidates": -1},
+            {"router_mode": "hard_prior", "causal_counts": True, "use_surd": True},
+        )
+        self.assertIn("--candidate-radius p90", flags)
+        self.assertIn("--router-mode hard_prior", flags)
+        self.assertIn("--causal-counts", flags)
+        self.assertIn("--transition-attn bias", flags)
+        row = ablation_row_from_eval(
+            FakeCache(), {"Acc@1": 1 / 3, "NDCG@1": 0.5, "MRR": 0.25},
+            run_name="demo/run", cache_path="runs/demo/cache", key_flags=flags,
+            notes="unit", date="2026-01-02")
+        self.assertEqual(row["date"], "2026-01-02")
+        self.assertEqual(row["Acc@1"], "0.333333")
+        self.assertEqual(row["NDCG@1"], "0.5")
+        self.assertEqual(row["MRR"], "0.25")
 
     def test_eval_report_leads_with_acc1_and_group_labels(self):
         all_row = metric_row([1, 2, 0])
@@ -627,6 +687,26 @@ class TestDesign(unittest.TestCase):
                 self.assertIsNotNone(stats["median"])
             history = json.loads((run / "history.json").read_text())
             self.assertIn("candidate_pool_stats", history)
+            self.assertIn("test", history["epochs"][0])
+            self.assertTrue(history["training_args"].get("eval_test_every_epoch", True))
+            # Per-epoch test + compact results history (default --eval-test-every-epoch).
+            epoch_json = results / "eval_test" / "epoch_001.json"
+            self.assertTrue(epoch_json.is_file())
+            epoch_payload = json.loads(epoch_json.read_text())
+            self.assertEqual(epoch_payload["epoch"], 1)
+            self.assertEqual(epoch_payload["selection"], "current_epoch_weights")
+            self.assertIn("Acc@1", epoch_payload["all_targets"])
+            results_history = json.loads((results / "history.json").read_text())
+            self.assertTrue(results_history["eval_test_every_epoch"])
+            self.assertIn("test", results_history["epochs"][0])
+            self.assertIn("Acc@1", results_history["epochs"][0]["test"])
+            # Auto ablation log under the shared results/ root.
+            abl_md = results.parent / "ablation_log.md"
+            abl_csv = results.parent / "ablation_log.csv"
+            self.assertTrue(abl_md.is_file())
+            self.assertTrue(abl_csv.is_file())
+            self.assertIn("Acc@1", abl_md.read_text())
+            self.assertIn("key_flags", abl_csv.read_text().splitlines()[0])
             train_test = json.loads((results / "eval_test" / "metrics.json").read_text())
             self.assertEqual(train_test["split"], "test")
             self.assertEqual(train_test["selection"], "best_checkpoint_by_NDCG@10")

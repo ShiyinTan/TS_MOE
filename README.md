@@ -463,10 +463,12 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_nocounts \
 | `runs/<city>/cache/` | prepare 缓存 |
 | `runs/<city>/model/` | `best.pt`、`history.json`（**不含**最终 metrics） |
 | `results/<run>/eval_validation/` | train 结束后最佳模型的 validation |
-| `results/<run>/eval_test/` | train 自动 test，或独立 `evaluate --split test` |
+| `results/<run>/eval_test/` | train 最终 test，或独立 `evaluate --split test`；默认另有 `epoch_*.json` |
+| `results/<run>/history.json` | 每 epoch 的 val（+ test）Acc@1 等摘要 |
+| `results/ablation_log.md` / `.csv` | train / evaluate 结束后自动追加一行 |
 | `results/<run>/candidate_pool_stats.json` | 各 split 候选池大小统计 |
 
-报告头条主指标为 **Acc@1**（另报 NDCG@1、MRR）；checkpoint 仍按验证 **NDCG@10** 选取。完整约定见 [`docs/results.md`](docs/results.md)。
+报告头条主指标为 **Acc@1**（另报 NDCG@1、MRR）；checkpoint 仍按验证 **NDCG@10** 选取。默认 **每个 epoch 也跑 test**（`--eval-test-every-epoch`；`--no-eval-test-every-epoch` 关闭）。完整约定见 [`docs/results.md`](docs/results.md)。
 
 ```bash
 # 读 Acc@1（示例：§3.2 默认 Tokyo 跑完后）
@@ -532,13 +534,14 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `train --transition-attn` | `bias`（默认）/ `gate` / `rel_key` |
 | `train --transition-lambda` | bias 项尺度，默认 `1.0` |
 | `train --visit-bins` | T/L 用户累计访问等频分箱数，默认 `10` |
+| `train --eval-test-every-epoch` / `--no-eval-test-every-epoch` | 每 epoch 跑 test 并写 `results/.../eval_test/epoch_*.json`（**默认 on**） |
 | `--device`（train / evaluate / explain / recommend） | 默认 `auto`；也可 `cpu`、`cuda`、`cuda:0`、`mps` |
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128 |
 | `--threads` | PyTorch CPU 线程数，默认 2 |
 
 改变簇数、窗口、**目标协议**（§3.3）或候选构造（§3.4）时，须 **重新 prepare**（同一 `--out` 默认覆盖；对照实验用独立目录），并用配套缓存训练与评估。**`train` 无法覆盖 prepare 已写入的目标协议或候选构造。**
 
-训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。`history.json` 仍在 `runs/.../model/`。
+训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。完整 `history.json` 在 `runs/.../model/`；紧凑版（含每 epoch test）在 `results/.../history.json`。训练结束自动 append `results/ablation_log.*`。
 
 **`groups` 切片（非训练特征）：** 按真实下一站汇总 Acc@1 / NDCG@1 / MRR：
 
@@ -561,7 +564,9 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `runs/<city>/cache/` | prepare 缓存（`manifest.json`、split `.pt`、SURD、候选构造） |
 | `runs/<city>/model/` | `best.pt`、`history.json`（**不含**最终 metrics） |
 | `results/<run>/eval_validation/` | train 结束后最佳模型的 validation metrics |
-| `results/<run>/eval_test/` | train 自动 test，或独立 `evaluate --split test` 的默认输出 |
+| `results/<run>/eval_test/` | 最终 test + 默认 `epoch_*.json`；或独立 `evaluate --split test` |
+| `results/<run>/history.json` | 每 epoch val（+ test）Acc@1 摘要 |
+| `results/ablation_log.md` / `.csv` | train / evaluate 自动追加 |
 | `results/<run>/candidate_pool_stats.json` | train 启动时各 split 候选池大小（min/max/mean/median） |
 
 每个 `eval_*` 含 `metrics.json` + `report.txt`。`<run>` 由 train `--out` / checkpoint 路径去掉前缀 `runs/` 得到，例如 `runs/tokyo/model` → `results/tokyo/model/`。可用 `evaluate --out <dir>` 覆盖。
@@ -602,7 +607,7 @@ TS_MOE/
 | `docs/sthgcn-tl-features.md` | T/L 与 STHGCN 对齐；换 schema 须重 prepare |
 | `docs/causal-counts.md` | 因果在线计数、等频分箱、`--transition-attn` |
 | `docs/ablation.md` | 消融实验手册（开关总表、顺序、命令、结果登记） |
-| `docs/ablation_log.template.md` / `.csv` | 结果登记模板（建议复制到 `results/` 再填） |
+| `docs/ablation_log.template.md` / `.csv` | 结果登记模板（运行时自动写 `results/ablation_log.*`） |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
@@ -624,7 +629,7 @@ TS_MOE/
 | 命令 | 作用 |
 | --- | --- |
 | `prepare` | CSV → 样本、折外 SURD、候选半径 → `--out` 缓存 |
-| `train` | 训练；按验证 NDCG@10 存 `best.pt`；写 `results/.../eval_validation/` 与 `eval_test/` |
+| `train` | 训练；按验证 NDCG@10 存 `best.pt`；每 epoch 默认 test；写 `results/.../eval_*` 与 `ablation_log.*` |
 | `evaluate` | 在缓存候选集上排名；默认 `results/.../eval_<split>/` |
 | `inspect` | 查看某 POI 的 26 维 SURD |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
@@ -697,7 +702,9 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 
 近期改动多，应用对照实验分清贡献：固定同一 prepare 指纹（能复用则复用）、以 **Acc@1** 为主、结果写入 `results/<run>/`。
 
+`train` / `evaluate` 结束后会**自动 append** 到 `results/ablation_log.md` 与 `.csv`（无则创建）。
+
 完整内容（因子/开关总表、推荐顺序、Tokyo 可复制命令、结果登记空表、如何读 `metrics.json`）：
 
 - [`docs/ablation.md`](docs/ablation.md)
-- 结果模板（建议 `cp` 到 gitignore 的 `results/` 再填）：[`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`docs/ablation_log.template.csv`](docs/ablation_log.template.csv)
+- 结果模板（可选 `cp` 到 `results/` 作空表 / 重置）：[`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`docs/ablation_log.template.csv`](docs/ablation_log.template.csv)

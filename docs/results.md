@@ -7,10 +7,13 @@ Final evaluation **metrics and reports** are stored under a top-level `results/`
 | Location | Contents |
 | --- | --- |
 | `runs/<city>/cache/` | `prepare` cache (`manifest.json`, split `.pt` files, SURD tables) |
-| `runs/<city>/model/` | `train` checkpoint `best.pt` and per-epoch `history.json` |
+| `runs/<city>/model/` | `train` checkpoint `best.pt` and per-epoch `history.json` (full val metrics; optional per-epoch `test`) |
 | `results/<run_name>/eval_validation/` | Best-checkpoint **validation** metrics after `train` |
-| `results/<run_name>/eval_test/` | Final **test** metrics after `train`, or default output of `evaluate --split test` |
+| `results/<run_name>/eval_test/` | Final **test** metrics after `train` (`metrics.json` + `report.txt`), or default output of `evaluate --split test` |
+| `results/<run_name>/eval_test/epoch_NNN.json` | Per-epoch **test** on current weights when `--eval-test-every-epoch` (default **on**) |
+| `results/<run_name>/history.json` | Compact per-epoch val (+ test) Acc@1 / NDCG@1 / MRR under `results/` |
 | `results/<run_name>/candidate_pool_stats.json` | Per-split candidate-pool size stats printed at train start (min/max/mean/median) |
+| `results/ablation_log.md` / `.csv` | Auto-appended ablation rows after each `train` / `evaluate` (see [`ablation.md`](ablation.md)) |
 
 Each `eval_*` directory contains:
 
@@ -35,9 +38,23 @@ So:
 ```text
 results/tokyo/model/eval_validation/{metrics.json,report.txt}
 results/tokyo/model/eval_test/{metrics.json,report.txt}
+results/tokyo/model/eval_test/epoch_001.json   # when --eval-test-every-epoch (default)
+results/tokyo/model/history.json
+results/ablation_log.md
+results/ablation_log.csv
 ```
 
 Override the eval destination with `evaluate --out <dir>` (writes `metrics.json` + `report.txt` directly in that directory).
+
+## Per-epoch test (default on)
+
+After **each** training epoch, `train` also ranks the **test** split on the **current** weights (validation still selects `best.pt` by NDCG@10). Disable for speed:
+
+```bash
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --no-eval-test-every-epoch
+```
+
+Per-epoch files: `results/<run>/eval_test/epoch_001.json`, … plus compact `results/<run>/history.json`. Final best-checkpoint test still overwrites `eval_test/metrics.json`.
 
 ## Finding Acc@1 after train
 
@@ -64,7 +81,10 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model
 # → checkpoints: runs/tokyo/model/best.pt
 # → results:     results/tokyo/model/eval_validation/ and .../eval_test/
+# → per-epoch:   results/tokyo/model/eval_test/epoch_*.json + history.json (default)
+# → ablation:    results/ablation_log.md and .csv (auto-append)
 
 python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --split test
 # → results/tokyo/model/eval_test/{metrics.json,report.txt}
+# → also appends a row to results/ablation_log.*
 ```
