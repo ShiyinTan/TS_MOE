@@ -6,6 +6,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from .data import L_DIM, T_DIM
 from .surd import SOURCE_ORDER, SUBSETS
 
 ROUTER_MODES = ("hard_prior", "surd_mlp", "hybrid")
@@ -65,7 +66,7 @@ class TSMoE(nn.Module):
         self.projections = nn.ModuleDict({
             "P": nn.Embedding(n_pois + 2, d, padding_idx=0),
             "C": nn.Embedding(n_categories + 2, d, padding_idx=0),
-            "T": mlp(6, d, d), "L": mlp(8, d, d)})
+            "T": mlp(T_DIM, d, d), "L": mlp(L_DIM, d, d)})
         self.positions = nn.Embedding(max_length, d)
         self.encoders = nn.ModuleDict({s: nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d, config.heads, 4 * d, config.dropout, activation="gelu",
