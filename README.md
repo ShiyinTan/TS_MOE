@@ -6,7 +6,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。多源候选细节见 [`docs/candidates.md`](docs/candidates.md)。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。多源候选细节见 [`docs/candidates.md`](docs/candidates.md)。prepare / train / eval 耗时热点见 [`docs/runtime.md`](docs/runtime.md)。
 
 面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
@@ -381,6 +381,7 @@ TS_MOE/
   requirements.txt
   docs/results.md          # results/ 与 runs/ 分工、Acc@1
   docs/candidates.md       # 多源候选、抽样、回退、train/eval 一致
+  docs/runtime.md          # prepare/train/eval 耗时热点与复杂度
   tsmoe/                   # 包；入口 python -m tsmoe
   examples/                # download_city、make_demo
   scripts/                 # verify_city_checkins 等
@@ -397,6 +398,7 @@ TS_MOE/
 | `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
 | `docs/results.md` | 评估结果目录约定 |
 | `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去 + 随机负例；GT 必入池） |
+| `docs/runtime.md` | prepare / train / evaluate 运行时热点 |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
