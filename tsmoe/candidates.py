@@ -15,7 +15,13 @@ import torch
 EARTH_RADIUS_KM = 6371.0088
 RADIUS_CHOICES = ("p90", "mean", "max", "full")
 DEFAULT_RADIUS = "p90"
-MISSING_COORD = float("nan")
+# Catalog POI location fallback order when a venue never has a finite check-in coord.
+COORD_FALLBACK_ORDER = (
+    "observed",           # mean of this POI's training check-ins with coords
+    "adjacent_midpoint",  # mean over visits: midpoint of trail-adjacent locations
+    "trail_mean",         # mean of all coords on trails where this POI appears
+    "global_mean",        # mean of all observed catalog POI means
+)
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -95,25 +101,144 @@ def pick_radius_km(stats: dict, method: str) -> float | None:
     return float(value)
 
 
-def catalog_coordinates(groups, pois: Sequence[int]) -> list[list[float]]:
-    """Mean lat/lon per catalog POI from training check-ins; NaN if never observed."""
+def _average_latlon(points: Sequence[tuple[float, float]]) -> list[float]:
+    n = len(points)
+    if not n:
+        raise ValueError("cannot average an empty coordinate list")
+    return [sum(lat for lat, _ in points) / n, sum(lon for _, lon in points) / n]
+
+
+def _neighbor_location(event, observed: dict[int, list[float]]) -> tuple[float, float] | None:
+    """Prefer the check-in's own coords; else that POI's observed catalog mean."""
+    if event.coord is not None:
+        lat, lon = event.coord
+        if math.isfinite(lat) and math.isfinite(lon):
+            return float(lat), float(lon)
+    mean = observed.get(event.poi)
+    if mean is not None:
+        return float(mean[0]), float(mean[1])
+    return None
+
+
+def catalog_coordinates(groups, pois: Sequence[int]) -> tuple[list[list[float]], dict]:
+    """Finite mean lat/lon per catalog POI, with trail-based imputation when needed.
+
+    Fallback order (see ``COORD_FALLBACK_ORDER``):
+      1. ``observed`` — mean of this POI's training check-ins with valid coords
+      2. ``adjacent_midpoint`` — for each visit, midpoint of immediate trail
+         neighbors that have a location (check-in coord, else that neighbor
+         POI's observed mean); average those midpoints across visits
+      3. ``trail_mean`` — mean of check-in coords on trails where the POI appears
+      4. ``global_mean`` — mean of all observed catalog POI means
+
+    Returns ``(coords, audit)`` where ``coords[i]`` aligns with ``pois[i]`` and
+    every entry is a finite ``[lat, lon]``. Raises if no training coordinates
+    exist to impute from.
+    """
     sums = {poi: [0.0, 0.0, 0] for poi in pois}
     for events in groups.values():
         for event in events:
             if event.poi not in sums or event.coord is None:
                 continue
             lat, lon = event.coord
+            if not (math.isfinite(lat) and math.isfinite(lon)):
+                continue
             sums[event.poi][0] += lat
             sums[event.poi][1] += lon
             sums[event.poi][2] += 1
-    coords = []
+
+    observed: dict[int, list[float]] = {}
     for poi in pois:
         lat_sum, lon_sum, count = sums[poi]
         if count:
-            coords.append([lat_sum / count, lon_sum / count])
-        else:
-            coords.append([MISSING_COORD, MISSING_COORD])
-    return coords
+            observed[poi] = [lat_sum / count, lon_sum / count]
+
+    missing = [poi for poi in pois if poi not in observed]
+    sources = {poi: "observed" for poi in observed}
+
+    if missing:
+        adjacent_hits: dict[int, list[tuple[float, float]]] = {poi: [] for poi in missing}
+        trail_hits: dict[int, list[tuple[float, float]]] = {poi: [] for poi in missing}
+        for events in groups.values():
+            trail_coords = [
+                (float(e.coord[0]), float(e.coord[1]))
+                for e in events
+                if e.coord is not None and math.isfinite(e.coord[0]) and math.isfinite(e.coord[1])
+            ]
+            trail_mean = _average_latlon(trail_coords) if trail_coords else None
+            seen_on_trail = set()
+            for index, event in enumerate(events):
+                if event.poi not in adjacent_hits:
+                    continue
+                neighbors = []
+                if index > 0:
+                    left = _neighbor_location(events[index - 1], observed)
+                    if left is not None:
+                        neighbors.append(left)
+                if index + 1 < len(events):
+                    right = _neighbor_location(events[index + 1], observed)
+                    if right is not None:
+                        neighbors.append(right)
+                if neighbors:
+                    adjacent_hits[event.poi].append(
+                        (sum(p[0] for p in neighbors) / len(neighbors),
+                         sum(p[1] for p in neighbors) / len(neighbors)))
+                if trail_mean is not None and event.poi not in seen_on_trail:
+                    trail_hits[event.poi].append((trail_mean[0], trail_mean[1]))
+                    seen_on_trail.add(event.poi)
+
+        still = []
+        for poi in missing:
+            samples = adjacent_hits[poi]
+            if samples:
+                observed[poi] = _average_latlon(samples)
+                sources[poi] = "adjacent_midpoint"
+            else:
+                still.append(poi)
+
+        missing = still
+        still = []
+        for poi in missing:
+            samples = trail_hits[poi]
+            if samples:
+                observed[poi] = _average_latlon(samples)
+                sources[poi] = "trail_mean"
+            else:
+                still.append(poi)
+        missing = still
+
+    if missing:
+        # Global prior uses only directly observed POI means (not already-imputed).
+        observed_means = [
+            (sums[poi][0] / sums[poi][2], sums[poi][1] / sums[poi][2])
+            for poi in pois if sums[poi][2]
+        ]
+        if not observed_means:
+            raise ValueError(
+                "no training check-ins with valid coordinates; cannot build or impute "
+                "catalog poi_coordinates")
+        global_mean = _average_latlon(observed_means)
+        for poi in missing:
+            observed[poi] = list(global_mean)
+            sources[poi] = "global_mean"
+
+    coords = []
+    for poi in pois:
+        lat, lon = observed[poi]
+        if not (math.isfinite(lat) and math.isfinite(lon)):
+            raise ValueError(f"non-finite catalog coordinate for poi={poi}: {[lat, lon]}")
+        coords.append([float(lat), float(lon)])
+
+    counts = {name: 0 for name in COORD_FALLBACK_ORDER}
+    for poi in pois:
+        counts[sources[poi]] += 1
+    audit = dict(
+        fallback_order=list(COORD_FALLBACK_ORDER),
+        counts=counts,
+        imputed=sum(counts[name] for name in COORD_FALLBACK_ORDER if name != "observed"),
+        catalog_size=len(pois),
+    )
+    return coords, audit
 
 
 def neighborhood_indices(anchor_lat: float, anchor_lon: float,
@@ -230,7 +355,8 @@ def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
     return padded, torch.zeros(len(targets), dtype=torch.long), mask
 
 
-def candidate_construction_record(method: str, stats: dict, radius_km: float | None) -> dict:
+def candidate_construction_record(method: str, stats: dict, radius_km: float | None,
+                                  coordinate_imputation: dict | None = None) -> dict:
     """Manifest block documenting how train/eval candidates are built."""
     spatial = method != "full"
     return dict(
@@ -240,7 +366,12 @@ def candidate_construction_record(method: str, stats: dict, radius_km: float | N
         default_statistic=DEFAULT_RADIUS,
         distance_stats=stats,
         anchor="previous_checkin_coordinates",
-        catalog_coordinates="mean lat/lon of training check-ins with valid coords; NaN if none",
+        catalog_coordinates=(
+            "finite mean lat/lon per catalog POI; missing check-in coords are imputed "
+            "via trail-adjacent midpoints, then trail mean, then global observed mean"
+        ),
+        coordinate_imputation=coordinate_imputation or dict(
+            fallback_order=list(COORD_FALLBACK_ORDER)),
         include_target=True,
         empty_neighborhood_fallback="full_catalog",
         train_eval_shared=True,
@@ -249,6 +380,8 @@ def candidate_construction_record(method: str, stats: dict, radius_km: float | N
             "observed check-in's coordinates. Train and evaluate use this same "
             "construction. If the anchor lacks coordinates or no catalog POI lies "
             "inside the radius, that sample falls back to the full catalog. The "
-            "true target is always added when it is in the catalog."
+            "true target is always added when it is in the catalog. Catalog "
+            "coordinates prefer observed check-in means; otherwise prepare imputes "
+            "from trail-adjacent locations so poi_coordinates stay JSON-finite."
         ),
     )

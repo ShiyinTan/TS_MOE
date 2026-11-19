@@ -2,6 +2,7 @@ import contextlib
 import csv
 import io
 import json
+import math
 import random
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from tsmoe.candidates import (
     neighborhood_indices, pick_radius_km, resolve_candidate_pool,
     sample_candidates, summarize_distances,
 )
+from tsmoe.prepare import dump_json
 from tsmoe.data import Categories, Event, build_split, make_batch, read_split
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, candidates, format_eval_report, metric_row,
@@ -173,7 +175,16 @@ class TestDesign(unittest.TestCase):
         self.assertAlmostEqual(pick_radius_km(stats, "p90"), stats["p90_km"])
         self.assertIsNone(pick_radius_km(stats, "full"))
         pois = [1, 2, 3, 4]
-        coords = torch.tensor(catalog_coordinates(groups, pois), dtype=torch.float64)
+        coord_list, audit = catalog_coordinates(groups, pois)
+        self.assertEqual(coord_list[0], [0.0, 0.0])
+        self.assertEqual(audit["counts"]["observed"], 4)
+        self.assertEqual(audit["imputed"], 0)
+        # POI never visited → global mean of observed catalog means (still finite).
+        filled, filled_audit = catalog_coordinates(groups, [1, 99])
+        self.assertEqual(filled[0], [0.0, 0.0])
+        self.assertEqual(filled_audit["counts"]["global_mean"], 1)
+        self.assertTrue(all(math.isfinite(v) for pair in filled for v in pair))
+        coords = torch.tensor(coord_list, dtype=torch.float64)
         near = neighborhood_indices(0.0, 0.0, coords, radius_km=stats["mean_km"] * 0.5)
         # Only POI 1 is at the origin; mean_km/2 should exclude the ~111 km neighbors.
         self.assertEqual(near.tolist(), [0])
@@ -193,6 +204,74 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(int(rows[0, 0]), 0)
         self.assertEqual(int(labels[0]), 0)
         self.assertEqual(int(mask[0].sum()), 2)
+
+    def test_catalog_coordinate_imputation_and_strict_json(self):
+        """Missing POI coords are imputed from trail neighbors; dump stays allow_nan=False."""
+        from datetime import datetime, timezone
+        t0 = datetime(2018, 1, 1, tzinfo=timezone.utc)
+
+        def event(poi, coord, line):
+            return Event(poi, "cat", 0, t0, coord, line)
+
+        # POI 2 has no coords; adjacent visits at (0,0) and (0,2) → midpoint (0,1).
+        groups = {
+            ("u", "a"): [
+                event(1, (0.0, 0.0), 1),
+                event(2, None, 2),
+                event(3, (0.0, 2.0), 3),
+            ],
+            ("u", "b"): [
+                event(4, (10.0, 10.0), 4),
+                event(5, None, 5),  # only one adjacent neighbor → that location
+            ],
+        }
+        coords, audit = catalog_coordinates(groups, [1, 2, 3, 4, 5])
+        self.assertEqual(coords[0], [0.0, 0.0])
+        self.assertEqual(coords[1], [0.0, 1.0])
+        self.assertEqual(coords[2], [0.0, 2.0])
+        self.assertEqual(coords[3], [10.0, 10.0])
+        self.assertEqual(coords[4], [10.0, 10.0])
+        self.assertEqual(audit["counts"]["observed"], 3)
+        self.assertEqual(audit["counts"]["adjacent_midpoint"], 2)
+        self.assertEqual(audit["imputed"], 2)
+        self.assertTrue(all(math.isfinite(v) for pair in coords for v in pair))
+
+        # trail_mean: missing POI sandwiched by neighbors that also lack locations,
+        # while other check-ins on the same trail still have coords.
+        trail_only = {
+            ("u", "c"): [
+                event(6, (0.0, 0.0), 1),
+                event(10, None, 2),
+                event(7, None, 3),   # no adjacent locations (10 and 11 lack coords/means)
+                event(11, None, 4),
+                event(6, (4.0, 4.0), 5),
+            ],
+            ("u", "d"): [event(8, None, 6)],  # no trail coords → global_mean
+            ("u", "e"): [event(9, (6.0, 6.0), 7)],
+        }
+        coords2, audit2 = catalog_coordinates(trail_only, [6, 7, 8, 9, 10, 11])
+        self.assertEqual(coords2[0], [2.0, 2.0])  # observed mean of (0,0) and (4,4)
+        self.assertEqual(coords2[1], [2.0, 2.0])  # trail mean for POI 7
+        self.assertEqual(audit2["counts"]["trail_mean"], 1)
+        self.assertEqual(coords2[2], [4.0, 4.0])  # global mean of POI 6 and 9
+        self.assertEqual(audit2["counts"]["global_mean"], 1)
+        self.assertEqual(coords2[3], [6.0, 6.0])
+        # 10 and 11 get adjacent midpoints from neighboring observed/resolved locations.
+        self.assertEqual(audit2["counts"]["adjacent_midpoint"], 2)
+        self.assertTrue(all(math.isfinite(v) for pair in coords2 for v in pair))
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "manifest.json"
+            payload = {
+                "radius_km": 9.2401577249972,
+                "poi_coordinates": coords,
+                "coordinate_imputation": audit,
+            }
+            dump_json(payload, path)
+            loaded = json.loads(path.read_text())
+            self.assertEqual(loaded["radius_km"], 9.2401577249972)
+            self.assertEqual(loaded["poi_coordinates"][1], [0.0, 1.0])
+            self.assertNotIn("nan", path.read_text().lower())
 
     def test_results_run_dir_strips_runs_prefix(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -242,6 +321,9 @@ class TestDesign(unittest.TestCase):
             self.assertIsNotNone(cache.radius_km)
             self.assertEqual(cache.candidate_construction["method"], "spatial_radius")
             self.assertEqual(len(cache.meta["poi_coordinates"]), len(cache.pois))
+            self.assertTrue(all(
+                math.isfinite(v) for pair in cache.meta["poi_coordinates"] for v in pair))
+            self.assertIn("coordinate_imputation", cache.candidate_construction)
             self.assertIn("lat", train)
             self.assertIn("lon", train)
             pools, resolutions = cache.candidate_pools(train)
