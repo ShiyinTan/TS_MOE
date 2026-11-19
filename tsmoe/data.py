@@ -14,6 +14,38 @@ FIELDS = {"trail_id", "user_id", "venue_id", "latitude", "longitude", "timestamp
 NULL = {"", "na", "nan", "none", "null", "-1", "-2"}
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
+# STHGCN-aligned T/L schema (Yan et al., SIGIR 2023; Massive-STEPS baseline).
+# TimeEncoder / distance_encoder_type=time use Φ(Δ)_i = cos(Δ · 10^{-linspace(0,9,D)}).
+# Δt in hours (seconds/3600); Δs Haversine km. Absolute hour/weekday as one-hots
+# (check-in Embedding inputs). MLP projection ≈ W_t / W_s after Φ.
+FEATURE_METHOD = "sthgcn_tl_features_v1"
+STHGCN_BASIS_DIM = 16
+T_HOUR_DIM = 24
+T_WEEKDAY_DIM = 7
+T_DIM = T_HOUR_DIM + T_WEEKDAY_DIM + STHGCN_BASIS_DIM + 1  # 48
+L_DIM = STHGCN_BASIS_DIM + 2  # 18
+# Slice layout for make_batch first-step relative reset.
+T_RELATIVE_SLICE = slice(T_HOUR_DIM + T_WEEKDAY_DIM, T_DIM)  # Φ(Δt) + gap_valid
+L_BASIS_SLICE = slice(0, STHGCN_BASIS_DIM)
+L_STEP_VALID_INDEX = STHGCN_BASIS_DIM + 1
+
+
+def sthgcn_basis_freqs(dim=STHGCN_BASIS_DIM):
+    """Fixed TimeEncoder init frequencies: 1 / 10^{linspace(0, 9, dim)}."""
+    if dim < 1:
+        raise ValueError("basis dim must be positive")
+    if dim == 1:
+        return (1.0,)
+    return tuple(10.0 ** (-9.0 * i / (dim - 1)) for i in range(dim))
+
+
+_STHGCN_FREQS = sthgcn_basis_freqs(STHGCN_BASIS_DIM)
+
+
+def sthgcn_phi(delta, freqs=_STHGCN_FREQS):
+    """STHGCN relative encoding Φ(Δ)_i = cos(Δ · freq_i) with phase 0 (init)."""
+    return [math.cos(float(delta) * f) for f in freqs]
+
 
 def file_digest(path):
     with Path(path).open("rb") as stream:
@@ -117,29 +149,28 @@ class Categories:
 
 
 def numeric_features(event, previous):
+    """STHGCN-aligned T/L vectors (see FEATURE_METHOD / docs/sthgcn-tl-features.md)."""
     from .candidates import haversine_km
 
     t = event.time
-    hour = 2 * math.pi * (t.hour + t.minute / 60 + t.second / 3600) / 24
-    day = 2 * math.pi * t.weekday() / 7
-    gap = (t - previous.time).total_seconds() / 3600 if previous else 0.0
-    time = [math.sin(hour), math.cos(hour), math.sin(day), math.cos(day),
-            math.log1p(gap), float(previous is not None)]
-    loc = [0.0] * 8
+    hour_oh = [0.0] * T_HOUR_DIM
+    hour_oh[t.hour % T_HOUR_DIM] = 1.0
+    weekday_oh = [0.0] * T_WEEKDAY_DIM
+    weekday_oh[t.weekday() % T_WEEKDAY_DIM] = 1.0
+    # No previous → zero Φ (not Φ(0)=1…1) and gap_valid=0; make_batch also clears step 0.
+    if previous is None:
+        time = hour_oh + weekday_oh + [0.0] * STHGCN_BASIS_DIM + [0.0]
+    else:
+        gap_hours = (t - previous.time).total_seconds() / 3600.0
+        time = hour_oh + weekday_oh + sthgcn_phi(gap_hours) + [1.0]
+
+    loc = [0.0] * L_DIM
     if event.coord is not None:
-        lat, lon = map(math.radians, event.coord)
-        loc[:3] = [math.cos(lat) * math.cos(lon), math.cos(lat) * math.sin(lon), math.sin(lat)]
-        loc[6] = 1.0
+        loc[STHGCN_BASIS_DIM] = 1.0  # coord_valid
         if previous and previous.coord is not None:
-            distance = haversine_km(*previous.coord, *event.coord)
-            prev_lat, prev_lon = map(math.radians, previous.coord)
-            dlon = lon - prev_lon
-            east = math.sin(dlon) * math.cos(lat)
-            north = math.cos(prev_lat) * math.sin(lat) - math.sin(prev_lat) * math.cos(lat) * math.cos(dlon)
-            norm = math.hypot(east, north)
-            loc[3:6] = [math.log1p(distance), east / norm if norm > 1e-12 else 0.,
-                         north / norm if norm > 1e-12 else 0.]
-            loc[7] = 1.0
+            distance_km = haversine_km(*previous.coord, *event.coord)
+            loc[:STHGCN_BASIS_DIM] = sthgcn_phi(distance_km)
+            loc[L_STEP_VALID_INDEX] = 1.0
     return time, loc
 
 
@@ -187,9 +218,10 @@ def make_batch(data, indices, *, offline=False, labels=True):
     mask = pos < length[:, None]
     ix = torch.minimum(start[:, None] + pos, end[:, None] - 1)
     t, l = data["T"][ix], data["L"][ix]
-    t[:, 0, 4:] = 0.
-    l[:, 0, 3:6] = 0.
-    l[:, 0, 7] = 0.
+    # First history step has no previous event: clear relative Φ / validity only.
+    t[:, 0, T_RELATIVE_SLICE] = 0.
+    l[:, 0, L_BASIS_SLICE] = 0.
+    l[:, 0, L_STEP_VALID_INDEX] = 0.
     p, c, pad = ("P", "C", -1) if offline else ("poi_token", "cat_token", 0)
     history = {"P": data[p][ix].masked_fill(~mask, pad), "C": data[c][ix].masked_fill(~mask, pad),
                "T": t.masked_fill(~mask[..., None], 0.), "L": l.masked_fill(~mask[..., None], 0.)}

@@ -15,7 +15,7 @@ from tqdm.auto import tqdm
 from .candidates import (
     format_pool_size_line, pools_for_split, sample_candidates, summarize_pool_sizes,
 )
-from .data import Categories, build_split, file_digest, make_batch, read_split
+from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_batch, read_split
 from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
@@ -146,7 +146,7 @@ class Cache:
         stats = self.load(f"{name}.surd.pt")
         info = stats["manifest"]
         if (stats["poi_ids"] != self.pois or info["cache_id"] != self.meta["fingerprint"]
-                or info["feature_method"] != "basic_fixed_features_v1"
+                or info["feature_method"] != FEATURE_METHOD
                 or info["preprocessing_sha256"] != digest_json(self.meta["preprocessing"])):
             raise ValueError("SURD prior, catalog or preprocessing mismatch")
         pair = info["quantizer_manifest"]

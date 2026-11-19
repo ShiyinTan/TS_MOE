@@ -292,42 +292,42 @@ $$
 
 **64 维哈希没有学习 POI 或类别语义。** 两个向量接近不代表两个 POI 在地理或业务上相近；有限维编码、向量均值和后续量化都可能造成碰撞或信息损失。它提供的是计算简单、可重复的身份数值化基线。哈希维度与 seed 应进入配置，并通过不同 seed 的结果检查统计稳定性。
 
-### 4.3 T/L：6 维时间特征与 8 维位置特征
+### 4.3 T/L：STHGCN 对齐的时间 / 位置特征（`sthgcn_tl_features_v1`）
 
-T 的默认单事件向量为 6 维，与第 11.1 节一致。历史小时和星期使用周期编码，历史相邻时间间隔使用固定单位后的 log1p：
+实现默认与 Massive-STEPS 基线 **STHGCN**（Yan et al., SIGIR 2023）对齐，细节见仓库 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)。相对编码使用固定初始化的
+
+$$
+\Phi(\Delta)_i=\cos\bigl(\Delta\cdot 10^{-\mathrm{linspace}(0,9,d)}\bigr),\quad d=16,
+$$
+
+其中 Δt 以**小时**计（与官方 `delta_ts/(60·60)` 一致），Δs 为 Haversine **公里**（与 `distance_encoder_type: time` 一致）。绝对时间用小时 / 星期 **one-hot**（对应 STHGCN check-in Embedding 的 hour / weekday ID 输入）；随后的 MLP→`dim` 对应可学习投影 \(W_t\)/\(W_s\)。
 
 $$
 \psi_T(\tau_j)
 =
-\left[
-\sin(2\pi h_j/24),\cos(2\pi h_j/24),
-\sin(2\pi w_j/7),\cos(2\pi w_j/7),
-\log(1+\Delta\tau_j),
+\bigl[
+\mathrm{onehot}_{24}(h_j);\;
+\mathrm{onehot}_{7}(w_j);\;
+\Phi(\Delta\tau_j);\;
 \mathrm{gap\_valid}_j
-\right].
+\bigr]
+\in\mathbb{R}^{48}.
 $$
-
-统一时区和时间间隔单位，例如以小时计间隔。窗口第一步将间隔与 gap_valid 都置为 0；缺失 timestamp 按第 2 节的数据规则处理，不能以预测目标的时间替代。间隔只使用当前窗口内相邻的历史时间，不读取下一事件。
-
-L 的默认单事件向量为 8 维。经纬度先转换成弧度，记经度为 lambda、纬度为 phi；距离和方向只由相邻历史坐标得到：
 
 $$
 \psi_L(\ell_j)
 =
-\left[
-\cos\phi_j\cos\lambda_j,
-\cos\phi_j\sin\lambda_j,
-\sin\phi_j,
-\log(1+\Delta d_j),
-\sin b_j,\cos b_j,
-\mathrm{coord\_valid}_j,
+\bigl[
+\Phi(\Delta d_j);\;
+\mathrm{coord\_valid}_j;\;
 \mathrm{step\_valid}_j
-\right].
+\bigr]
+\in\mathbb{R}^{18}.
 $$
 
-距离统一成公里等预先声明的单位。无有效坐标时，位置数值用有限值填充并设置 coord_valid=0；第一步或缺少有效前序坐标时，位移和方向填 0、step_valid=0。零位移时方向未定义，使用零方向向量。缺失坐标不能被当作真实的经纬度原点。L 不读取时间间隔，也不计算需要 T 的速度。
+统一 UTC；窗口第一步将相对 Φ、gap_valid、step_valid 置 0（保留 hour/weekday 与 coord_valid）。无有效坐标时 Φ 与 step_valid 为 0、coord_valid=0。L **不再**使用单位球面坐标或方位角，以便与 STHGCN 相对距离编码一致。缺失 timestamp 按第 2 节处理；间隔只读当前窗口内相邻历史，不读目标时间。
 
-附录 D 的模块接收已经生成的数值张量，不在内部解析 timestamp 或经纬度；默认输入分别为 `T: [B,N,6]`、`L: [B,N,8]`。模块允许预先声明的其他固定维数，但一旦拟合，该统计版本的维数、字段顺序和数值单位就必须保持不变。
+附录 D 接收已生成数值张量；默认 `T: [B,N,48]`、`L: [B,N,18]`。`feature_method` / 维数进入 prepare 指纹；换 schema 必须重建缓存。
 
 ### 4.4 四个来源的摘要结构与维数来源
 
@@ -362,10 +362,10 @@ $$
 | --- | --- | --- | --- |
 | P | 固定哈希：64 | 3×64+1=193 | n×193 |
 | C | 固定哈希：64 | 3×64+1=193 | n×193 |
-| T | 小时周期 2＋星期周期 2＋间隔 1＋有效标记 1＝6 | 3×6+1=19 | n×19 |
-| L | 球面位置 3＋距离 1＋方向周期 2＋有效标记 2＝8 | 3×8+1=25 | n×25 |
+| T | 小时 one-hot 24＋星期 one-hot 7＋Φ(Δt) 16＋gap_valid 1＝48 | 3×48+1=145 | n×145 |
+| L | Φ(Δs) 16＋coord_valid＋step_valid＝18 | 3×18+1=55 | n×55 |
 
-**3 来自三组摘要，不是历史有三个事件；n 是预测样本数，后面的数字才是一条历史的摘要维数。** 历史长度和簇数改变，都不会改变已固定的摘要维数；标准化也保持形状不变。P/C 的 64 是可调整的 `hash_dim`，例如改为 32 时，其摘要维数变为 97。T/L 的 6/8 来自第 4.3 节声明的特征组成。每个样本独立摘要和量化，四路最终仍形成一行四个整数；不同目标前缀不能共用整条 trail 的同一个摘要。
+**3 来自三组摘要，不是历史有三个事件；n 是预测样本数，后面的数字才是一条历史的摘要维数。** 历史长度和簇数改变，都不会改变已固定的摘要维数；标准化也保持形状不变。P/C 的 64 是可调整的 `hash_dim`，例如改为 32 时，其摘要维数变为 97。T/L 的 48/18 来自第 4.3 节 STHGCN 对齐特征。每个样本独立摘要和量化，四路最终仍形成一行四个整数；不同目标前缀不能共用整条 trail 的同一个摘要。
 
 长度是四条对齐历史共同可见的结构信息，不是用户标识。但四路都包含 N_i/N_max，可能使量化后的来源共同携带与历史长度相关的信息，从而形成冗余。解释 SURD 时应把这项摘要设计算在内；需要检查时，可在相同切分下消融长度特征，而不能把相关冗余全部解释成 POI、类别、时间、位置之间的业务重叠。
 
@@ -614,7 +614,7 @@ P 的特征只读取历史 POI 身份，C 只读取历史类别，T 只读取历
 
 将附录 D 保存为 `basic_source_quantizer.py` 后，下面的玩具数据可在具备 PyTorch 的环境中运行，用于核对接口和保存/加载一致性。真实实验应将 `ref_history` 与 `ref_valid_mask` 替换成第 2 节构造的合法参考历史。这里只用 4 条样本演示接口；请求 4 簇时，某些来源可能每条摘要独占一簇，不能据此判断统计可靠性或推荐效果。
 
-示例的基础时间和位置固定，用于保持 6/8 维特征约定，但历史长度与 gap_valid/step_valid 有差别，因此 T/L 的摘要仍可能不同，不能预先断言它们都属于同一簇。第 4.6 节的 8 行教学状态是独立例子，不是下面代码的打印结果。
+示例的基础时间和位置固定，用于保持 STHGCN 对齐的 48/18 维特征约定，但历史长度与 gap_valid/step_valid 有差别，因此 T/L 的摘要仍可能不同，不能预先断言它们都属于同一簇。第 4.6 节的 8 行教学状态是独立例子，不是下面代码的打印结果。
 
 ```python
 from pathlib import Path
@@ -626,8 +626,8 @@ ref_history = {
                        [33, 11, 22], [11, 33, -1]]),
     "C": torch.tensor([[1, 2, 1], [2, 1, -1],
                        [1, 1, 2], [1, 1, -1]]),
-    "T": torch.zeros(4, 3, 6, dtype=torch.float64),
-    "L": torch.zeros(4, 3, 8, dtype=torch.float64),
+    "T": torch.zeros(4, 3, 48, dtype=torch.float64),
+    "L": torch.zeros(4, 3, 18, dtype=torch.float64),
 }
 ref_valid_mask = ref_history["P"].ne(-1)  # True = real history event
 # Toy events: Monday 00:00, zero gaps, valid identical coordinates (0, 0).
@@ -657,7 +657,7 @@ print("q_state (P, C, T, L):", q_state.tolist())
 print("effective clusters:", qz.effective_clusters)
 ```
 
-在默认配置下，摘要形状分别为 P/C 的 `(4,193)`、T 的 `(4,19)`、L 的 `(4,25)`；`q_state` 的形状为 `(4,4)`、类型为 `torch.int64`。具体簇编号以实际输出为准，不能手工要求某条历史必然属于编号 0 或 2。第一列是各样本的 P 状态，第二列是 C 状态，依次类推。
+在默认配置下，摘要形状分别为 P/C 的 `(4,193)`、T 的 `(4,145)`、L 的 `(4,55)`；`q_state` 的形状为 `(4,4)`、类型为 `torch.int64`。具体簇编号以实际输出为准，不能手工要求某条历史必然属于编号 0 或 2。第一列是各样本的 P 状态，第二列是 C 状态，依次类推。
 
 接下来只需把 `q_state` 与对齐的 `y_index` 交给第 16.1 节的 `build_offline_surd`。标准化/codebook 检查点与 SURD 缓存应保存为匹配版本，第 16–17 节记录配置及检查点摘要。
 
@@ -2433,7 +2433,7 @@ stats = build_offline_surd(
     target_rows=y_index,            # [n_ref], catalog row index
     poi_ids=target_catalog,
     manifest={
-        "feature_method": "basic_fixed_features_v1",
+        "feature_method": "sthgcn_tl_features_v1",
         "feature_manifest": qz.config,
         "quantizer_manifest": {
             "file": quantizer_path.name,
@@ -2471,7 +2471,7 @@ from surd_offline_torch import FrozenSURDTable, gather_fold_priors
 fold_tables = nn.ModuleList([
     FrozenSURDTable.from_file(path) for path in fold_cache_paths
 ]).to(device)
-assert all(t.manifest.get("feature_method") == "basic_fixed_features_v1"
+assert all(t.manifest.get("feature_method") == "sthgcn_tl_features_v1"
            for t in fold_tables)
 
 # External POI IDs must first be mapped to catalog row indices.
@@ -2491,7 +2491,7 @@ prior26, confidence = gather_fold_priors(
 
 # Validation/test: use the final strictly constructed training-scope table.
 final_table = FrozenSURDTable.from_file(final_cache_path).to(device)
-assert final_table.manifest.get("feature_method") == "basic_fixed_features_v1"
+assert final_table.manifest.get("feature_method") == "sthgcn_tl_features_v1"
 assert final_table.poi_ids == fold_tables[0].poi_ids
 prior26_eval, confidence_eval = final_table(candidate_rows)
 ```
@@ -2669,12 +2669,12 @@ source_project 包含来源 embedding/MLP 与位置编码。dispatch_selected_us
 | global_raw / global_prior | 全局 26 维原始与归一化信息 |
 | H_Y / H_cond / H_cond_via_mi | 目标熵、直接条件熵及互信息校验结果 |
 | joint_states / joint_count | 唯一五维联合状态及其频数，支持分解审计 |
-| feature_method / feature_manifest | basic_fixed_features_v1；固定 SHAKE-256 哈希、P/C salt、维度、摘要规则、长度与位置衰减参数 |
+| feature_method / feature_manifest | sthgcn_tl_features_v1；P/C SHAKE-256 salt 仍为 `*/basic_fixed_features_v1`；T/L 为 STHGCN Φ 维数与摘要规则 |
 | quantizer_manifest | 配套检查点文件名及 SHA-256、配置和实际每源簇数；检查点内保存标准化均值/尺度与 centers |
 | preprocessing_manifest | 类别映射、时区/间隔单位、坐标单位、缺失规则、事件排序和共同裁剪规则 |
 | split_manifest | 训练截止时间、合法参考范围、外层评分块、purge 规则及参考目标事件 ID 摘要 |
 
-加载缓存时核验 source_order、subset_order、atom_order 与 schema_version，并核验 feature_method=basic_fixed_features_v1；不能仅因为张量仍有 26 列就接受其他来源方案的缓存。重现统计时还要核验配套量化器文件的 SHA-256。类别映射、字段处理、摘要配置或 codebook 改变后，必须重建相关离散状态与整张概率表。
+加载缓存时核验 source_order、subset_order、atom_order 与 schema_version，并核验 feature_method=sthgcn_tl_features_v1；不能仅因为张量仍有 26 列就接受其他来源方案的缓存。重现统计时还要核验配套量化器文件的 SHA-256。类别映射、字段处理、T/L schema、摘要配置或 codebook 改变后，必须重建相关离散状态与整张概率表。
 
 原始联合频数建议保存为稀疏记录；体积过大时可以保存可重建的参考样本状态表与生成配置。第 16 节与附录 C 使用 torch.save 的 .pt 字典，内容为 tensor 与基础元数据；也可用 NumPy NPZ 加 JSON 保存同等信息。
 
@@ -2713,7 +2713,7 @@ def build_basic_cache(
         target_rows=target_rows,
         poi_ids=target_catalog,
         manifest={
-            "feature_method": "basic_fixed_features_v1",
+            "feature_method": "sthgcn_tl_features_v1",
             "source_fields": {
                 "P": ["venue_id"],
                 "C": ["venue_category_id_code"],
@@ -2748,7 +2748,7 @@ from basic_source_quantizer import BasicSourceQuantizer
 from surd_offline_torch import FrozenSURDTable
 
 table = FrozenSURDTable.from_file(cache_path)
-assert table.manifest["feature_method"] == "basic_fixed_features_v1"
+assert table.manifest["feature_method"] == "sthgcn_tl_features_v1"
 pair = table.manifest["quantizer_manifest"]
 assert quantizer_path.name == pair["file"]
 assert hashlib.sha256(quantizer_path.read_bytes()).hexdigest() == pair["sha256"]
@@ -2835,7 +2835,7 @@ $$
 | 温度 | 1.0 起步 |
 | 路径 A 平滑 | 主版本不加独立子集平滑 |
 | 离线 P/C 特征 | 每源 64 维固定 SHAKE-256 正负哈希；不同 salt；seed=0 |
-| 离线 T/L 特征 | 第 11.1 节的 6 维时间、8 维位置数值特征；不加 MLP |
+| 离线 T/L 特征 | 第 4.3 节 STHGCN 对齐的 48 维时间、18 维位置数值特征；不加 MLP |
 | 离线默认摘要 | 最后一步、位置衰减均值、普通均值、N/N_max；位置衰减 tau_pos=10 |
 | 标准化与 K-means | 每源独立；默认 4 簇，首轮比较 2/4/8，按第 4.5.6 节选择并记录实际簇数；最多 100 次迭代 |
 | 拟合/计数协议 | 同一合法 D_ref 的历史拟合量化器，再与 Y 配对计数；外层评分块留出 |
@@ -3040,7 +3040,7 @@ $$
 - [ ] 每个目标满足 26 项总守恒与四个单来源重建。
 - [ ] H_cond 的联合计数计算与 H_Y−MI 一致。
 - [ ] PyTorch 保存/加载后保持分量顺序、未知候选行为和冻结值。
-- [ ] 量化器和 SURD 缓存记录 basic_fixed_features_v1、配对文件摘要与实际簇数；重拟合后同步重算。
+- [ ] 量化器和 SURD 缓存记录 sthgcn_tl_features_v1、配对文件摘要与实际簇数；重拟合后同步重算。
 - [ ] 来源隔离、共同右侧 padding、常量特征、小样本与基础流水线连通检查通过。
 - [ ] case study 同时记录 raw/routing prior、learned logits、bias、dense/Top-K 权重与 gate。
 - [ ] 记录 exact tie、near tie、数值容差与版本信息。
@@ -3996,7 +3996,7 @@ T/L 接收第 11.1 节已构造的数值特征，默认维度分别为 6、8。P
 
 P/C: integer [B,N], PAD=-1 only in padding, UNK=-2 at missing real events.
 T/L: finite numeric [B,N,d] on real events; upstream implements Section 11's
-time/location schema, including finite fills and validity flags (default 6/8).
+time/location schema, including finite fills and validity flags (default 48/18 STHGCN).
 valid_mask: shared bool [B,N], right-padded and nonempty for every history.
 No user ID, target label, trainable embedding, or graph enters this module.
 """
@@ -4038,7 +4038,7 @@ class BasicSourceQuantizer:
     @property
     def config(self):
         """Serializable manifest; persist with the SURD table for reproducibility."""
-        return {**self._params, "feature_method": "basic_fixed_features_v1",
+        return {**self._params, "feature_method": "sthgcn_tl_features_v1",
                 "hash_algorithm": "SHAKE-256: byte parity -> +/-1/sqrt(hash_dim)",
                 "source_salts": dict(self._salts), "source_order": list(SOURCES),
                 "pad_id": -1, "unk_id": -2, "standardize_epsilon": 1e-12,

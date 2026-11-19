@@ -1,8 +1,8 @@
 """Basic, graph-free P/C/T/L history summaries and offline quantization.
 
 P/C: integer [B,N], PAD=-1 only in padding, UNK=-2 at missing real events.
-T/L: finite numeric [B,N,d] on real events; upstream implements Section 11's
-time/location schema, including finite fills and validity flags (default 6/8).
+T/L: finite numeric [B,N,d] on real events; upstream builds STHGCN-aligned
+features (FEATURE_METHOD=sthgcn_tl_features_v1; default d_T=48, d_L=18).
 valid_mask: shared bool [B,N], right-padded and nonempty for every history.
 No user ID, target label, trainable embedding, or graph enters this module.
 """
@@ -11,6 +11,8 @@ import math
 from pathlib import Path
 
 import torch
+
+from .data import FEATURE_METHOD
 
 SOURCES = ("P", "C", "T", "L")
 INT_DTYPES = (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64)
@@ -33,6 +35,7 @@ class BasicSourceQuantizer:
         self._params = dict(n_clusters=n_clusters, hash_dim=hash_dim,
                             max_length=max_length, seed=seed, tau_pos=float(tau_pos),
                             max_iter=max_iter, tol=float(tol))
+        # P/C hash salts stay on the identity encoding name (unchanged by T/L schema).
         self._salts = {s: f"{s}/basic_fixed_features_v1" for s in SOURCES[:2]}
         self._state = {}
         self._input_dims = {}
@@ -44,7 +47,7 @@ class BasicSourceQuantizer:
     @property
     def config(self):
         """Serializable manifest; persist with the SURD table for reproducibility."""
-        return {**self._params, "feature_method": "basic_fixed_features_v1",
+        return {**self._params, "feature_method": FEATURE_METHOD,
                 "hash_algorithm": "SHAKE-256: byte parity -> +/-1/sqrt(hash_dim)",
                 "source_salts": dict(self._salts), "source_order": list(SOURCES),
                 "pad_id": -1, "unk_id": -2, "standardize_epsilon": 1e-12,

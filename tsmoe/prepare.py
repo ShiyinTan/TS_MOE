@@ -17,7 +17,10 @@ from .candidates import (
     consecutive_visit_distances, pick_popular_radius_km, pick_radius_km,
     summarize_distances,
 )
-from .data import SPLITS, Categories, build_split, file_digest, make_batch, read_split
+from .data import (
+    FEATURE_METHOD, L_DIM, SPLITS, STHGCN_BASIS_DIM, T_DIM, Categories,
+    build_split, file_digest, make_batch, read_split,
+)
 from .quantizer import BasicSourceQuantizer, SOURCES
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, SUBSET_ORDER, build_offline_surd, save_surd_table
@@ -81,7 +84,10 @@ def prepare(args):
         "candidate_radius", "popular_radius", "popular_radius_multiplier", "popular_top_k",
         "popular_by", "user_frequent_top_k", "user_frequent_min_visits",
         "random_negatives", "random_negatives_seed")}
-    config.update(version="tsmoe.massivesteps.v1", files={s: file_digest(p) for s, p in paths.items()})
+    # feature_method is fingerprinted so T/L schema changes force re-prepare.
+    config.update(version="tsmoe.massivesteps.v1", feature_method=FEATURE_METHOD,
+                  t_dim=T_DIM, l_dim=L_DIM, sthgcn_basis_dim=STHGCN_BASIS_DIM,
+                  files={s: file_digest(p) for s, p in paths.items()})
     fingerprint = digest_json(config)
     if out.exists():
         if (out / "manifest.json").exists():
@@ -155,13 +161,17 @@ def build_cache(cfg, paths, fingerprint, stage):
     )
     preprocessing = dict(source_fields=["venue_id", "venue_category_id_code/venue_category_id",
                                         "timestamp", "latitude/longitude"],
-                         time="UTC; naive timestamps interpreted as UTC; interval in hours",
-                         location="WGS84 degrees; great-circle distance in km; bearing in radians",
+                         feature_method=FEATURE_METHOD,
+                         time=("UTC; naive timestamps as UTC; T = hour one-hot(24) + weekday one-hot(7) + "
+                               f"STHGCN Φ(Δt hours, basis={STHGCN_BASIS_DIM}) + gap_valid; dim={T_DIM}"),
+                         location=("WGS84 degrees; L = STHGCN Φ(Δs km, same TimeEncoder basis) + "
+                                   f"coord_valid + step_valid; dim={L_DIM}; distance_encoder_type=time"),
                          tie_break="input CSV row within trail", dedup_key=["user_id", "trail_id", "timestamp", "venue_id"],
                          missing="quarantine invalid timestamps; missing historical IDs use UNK; missing target ID skipped",
                          categories="training code via stable category ID; ambiguous/missing mapping uses SHA-256 stable ID",
                          category_mapping=cats.codes, ambiguous_category_codes=sorted(cats.ambiguous),
-                         max_length=cfg["max_length"], history="shared right-padding; first step/interval invalid",
+                         max_length=cfg["max_length"],
+                         history="shared right-padding; first step clears relative Φ / gap_valid / step_valid",
                          candidate_construction=candidate_construction)
     audit, owners, held_trails = {}, {}, set()
     for split in SPLITS:
@@ -212,7 +222,7 @@ def build_cache(cfg, paths, fingerprint, stage):
                           comparison="strict target timestamp < earliest scoring prediction timestamp" if cutoff is not None
                                      else "all official training reference events",
                           reference_event_sha256=event_digest(train, ref))
-        meta = dict(cache_id=fingerprint, feature_method="basic_fixed_features_v1",
+        meta = dict(cache_id=fingerprint, feature_method=FEATURE_METHOD,
                     source_fields=preprocessing["source_fields"], preprocessing_sha256=digest_json(preprocessing),
                     split_manifest=split_info, quantizer_manifest=None)
         if len(ref):

@@ -6,7 +6,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。多源候选细节见 [`docs/candidates.md`](docs/candidates.md)。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。多源候选细节见 [`docs/candidates.md`](docs/candidates.md)。T/L 数值特征按 Massive-STEPS 基线 **STHGCN** 对齐（见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)）；换特征 schema 须 **重新 prepare**。
 
 面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
@@ -132,8 +132,8 @@ data/tokyo/
 | `trail_id`、`user_id` | 轨迹归属、组织事件、划分隔离 |
 | `venue_id` | 历史 P、下一 POI 标签与候选目录中的原始整数 ID |
 | `venue_category_id_code`、`venue_category_id` | 历史 C；优先训练集一致的 code |
-| `timestamp` | 排序、周期特征、间隔、时间折边界 |
-| `latitude`、`longitude` | 历史 L 与空间候选锚点 |
+| `timestamp` | 排序、STHGCN 小时/星期 one-hot、相对间隔 Φ(Δt)、时间折边界 |
+| `latitude`、`longitude` | 历史 L 的 Φ(Δs km) 与空间候选锚点 |
 
 带时区时间戳转 UTC；等时事件按原文件行序稳定排序；以 `(user_id, trail_id, timestamp, venue_id)` 去重。审计写入缓存的 `manifest.json`。
 
@@ -453,6 +453,7 @@ TS_MOE/
   docs/results.md          # results/ 与 runs/ 分工、Acc@1
   docs/candidates.md       # 多源候选、抽样、回退、train/eval 一致
   docs/router-modes.md     # --router-mode hard_prior / surd_mlp / hybrid
+  docs/sthgcn-tl-features.md  # T/L ↔ STHGCN Φ(Δt)/Φ(Δs) 对齐
   tsmoe/                   # 包；入口 python -m tsmoe
   examples/                # download_city、make_demo
   scripts/                 # verify_city_checkins 等
@@ -516,13 +517,13 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 
 与设计文档一致、当前实现已落地：
 
-1. 四源历史摘要（P/C 哈希；T/L 数值）→ 每源标准化 + K-means 状态。
+1. 四源历史摘要（P/C 哈希；T/L 为 STHGCN 对齐数值 T=48、L=18）→ 每源标准化 + K-means 状态。
 2. 单一联合频数表边缘化 → 26 维（4 Unique + 11 Redundancy + 11 Synergy）；15 个 U/S 专家在线执行。
 3. 折外估计：默认最早 20% 训练样本暖启动，其后 3 个时间块；验证 / 测试 / 新轨迹用全训练 `final` 表。
-4. 在线：四源 Transformer 编码历史；**Router 默认 `hard_prior`**（仅候选 U/S SURD → π，无序列）；可选 `surd_mlp` / `hybrid`；Top-K 稀疏专家；`base + 门控 MoE 残差`。
+4. 在线：四源 Transformer 编码历史（T/L MLP→`dim`）；**Router 默认 `hard_prior`**（仅候选 U/S SURD → π，无序列）；可选 `surd_mlp` / `hybrid`；Top-K 稀疏专家；`base + 门控 MoE 残差`。
 5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
 
-缓存 `manifest.json` 记录字段约定、目录、分折、候选构造与文件摘要。
+缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、分折、候选构造与文件摘要。旧 `basic_fixed_features_v1` 缓存不兼容，须换 `--out` 重新 prepare。
 
 ---
 

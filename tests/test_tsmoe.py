@@ -22,7 +22,12 @@ from tsmoe.candidates import (
     summarize_distances, summarize_pool_sizes,
 )
 from tsmoe.prepare import dump_json
-from tsmoe.data import Categories, Event, build_split, make_batch, read_split
+from tsmoe.data import (
+    FEATURE_METHOD, L_DIM, L_STEP_VALID_INDEX, STHGCN_BASIS_DIM, T_DIM,
+    T_HOUR_DIM, T_RELATIVE_SLICE, T_WEEKDAY_DIM, Categories, Event,
+    build_split, make_batch, numeric_features, read_split, sthgcn_basis_freqs,
+    sthgcn_phi,
+)
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, candidates, format_eval_report, metric_row,
     model_config_from_checkpoint, ranks_of, results_run_dir,
@@ -70,13 +75,20 @@ class TestDesign(unittest.TestCase):
             h, v, _ = make_batch(data, torch.arange(3), offline=True)
             self.assertEqual(h["P"].tolist(), [[1, -1], [1, 3], [3, 5]])
             self.assertEqual(data["P"][data["end"]].tolist(), [3, 5, 7])
-            self.assertTrue((h["T"][:, 0, 4:] == 0).all())
-            self.assertTrue((h["L"][:, 0, 7] == 0).all())
-            self.assertEqual(h["L"][2, 0, 6].item(), 0)
-            self.assertEqual(h["L"][2, 1, 7].item(), 0)
+            self.assertEqual(tuple(h["T"].shape[-1:]), (T_DIM,))
+            self.assertEqual(tuple(h["L"].shape[-1:]), (L_DIM,))
+            self.assertTrue((h["T"][:, 0, T_RELATIVE_SLICE] == 0).all())
+            self.assertTrue((h["L"][:, 0, :STHGCN_BASIS_DIM] == 0).all())
+            self.assertTrue((h["L"][:, 0, L_STEP_VALID_INDEX] == 0).all())
+            self.assertEqual(h["L"][2, 0, STHGCN_BASIS_DIM].item(), 0)  # missing coord
+            self.assertEqual(h["L"][2, 1, L_STEP_VALID_INDEX].item(), 0)
             q = BasicSourceQuantizer(max_length=2, n_clusters=8)
             summary = q.summarize(h, v)
-            self.assertEqual([a.shape[1] for a in summary.values()], [193, 193, 19, 25])
+            self.assertEqual(q.config["feature_method"], FEATURE_METHOD)
+            self.assertEqual(
+                [a.shape[1] for a in summary.values()],
+                [193, 193, 3 * T_DIM + 1, 3 * L_DIM + 1],
+            )
             changed = {**h, "C": h["C"].masked_fill(v, 17)}
             alt = q.summarize(changed, v)
             for s in "PTL":
@@ -86,13 +98,59 @@ class TestDesign(unittest.TestCase):
             q2 = BasicSourceQuantizer.load(Path(temp) / "q.pt")
             self.assertTrue(torch.equal(q.transform(changed, v), q2.transform(changed, v)))
 
+    def test_sthgcn_tl_feature_dims_and_phi(self):
+        from datetime import datetime, timezone, timedelta
+
+        freqs = sthgcn_basis_freqs()
+        self.assertEqual(len(freqs), STHGCN_BASIS_DIM)
+        self.assertAlmostEqual(freqs[0], 1.0)
+        self.assertAlmostEqual(freqs[-1], 1e-9)
+        phi0 = sthgcn_phi(0.0)
+        self.assertEqual(len(phi0), STHGCN_BASIS_DIM)
+        self.assertTrue(all(abs(v - 1.0) < 1e-12 for v in phi0))
+        # Δt=1 hour: cos(1 * 1) on the first basis (matches TimeEncoder init).
+        self.assertAlmostEqual(sthgcn_phi(1.0)[0], math.cos(1.0), places=12)
+
+        t0 = datetime(2018, 1, 1, 15, 0, tzinfo=timezone.utc)  # Monday hour 15
+        a = Event(1, "cat", 0, t0, (35.0, 139.0), 1)
+        b = Event(2, "cat", 0, t0 + timedelta(hours=2), (35.1, 139.1), 2)
+        t_feat, l_feat = numeric_features(b, a)
+        self.assertEqual(len(t_feat), T_DIM)
+        self.assertEqual(len(l_feat), L_DIM)
+        self.assertEqual(sum(t_feat[:T_HOUR_DIM]), 1.0)
+        self.assertEqual(t_feat[b.time.hour], 1.0)
+        self.assertEqual(sum(t_feat[T_HOUR_DIM:T_HOUR_DIM + T_WEEKDAY_DIM]), 1.0)
+        self.assertEqual(t_feat[T_HOUR_DIM + b.time.weekday()], 1.0)
+        self.assertEqual(t_feat[-1], 1.0)
+        torch.testing.assert_close(
+            torch.tensor(t_feat[T_HOUR_DIM + T_WEEKDAY_DIM:-1]),
+            torch.tensor(sthgcn_phi(2.0)),
+        )
+        self.assertEqual(l_feat[STHGCN_BASIS_DIM], 1.0)
+        self.assertEqual(l_feat[L_STEP_VALID_INDEX], 1.0)
+        from tsmoe.candidates import haversine_km
+        dist = haversine_km(*a.coord, *b.coord)
+        torch.testing.assert_close(
+            torch.tensor(l_feat[:STHGCN_BASIS_DIM]),
+            torch.tensor(sthgcn_phi(dist)),
+        )
+        t0_feat, l0_feat = numeric_features(a, None)
+        self.assertEqual(t0_feat[-1], 0.0)
+        self.assertTrue(all(v == 0.0 for v in t0_feat[T_HOUR_DIM + T_WEEKDAY_DIM:-1]))
+        self.assertEqual(l0_feat[L_STEP_VALID_INDEX], 0.0)
+        self.assertTrue(all(v == 0.0 for v in l0_feat[:STHGCN_BASIS_DIM]))
+        self.assertEqual(FEATURE_METHOD, "sthgcn_tl_features_v1")
+        model = TSMoE(3, 2, 2, ModelConfig(8, 2, 1, 0., 2, use_surd=False))
+        self.assertEqual(model.projections["T"][0].in_features, T_DIM)
+        self.assertEqual(model.projections["L"][0].in_features, L_DIM)
+
     def test_sparse_dispatch_masks_and_gradients(self):
         torch.manual_seed(1)
         # Hybrid + zeroed sequence router isolates λ_prior · SURD bias (legacy path).
         model = TSMoE(5, 3, 3, ModelConfig(8, 2, 1, 0., 4, router_mode="hybrid",
                                            hybrid_lambda=1.))
         h = {"P": torch.tensor([[2, 3, 0]]), "C": torch.tensor([[2, 4, 0]]),
-             "T": torch.randn(1, 3, 6), "L": torch.randn(1, 3, 8)}
+             "T": torch.randn(1, 3, T_DIM), "L": torch.randn(1, 3, L_DIM)}
         valid = torch.tensor([[True, True, False]])
         rows = torch.tensor([[0, 3, -1]])
         mask = rows >= 0
@@ -122,7 +180,7 @@ class TestDesign(unittest.TestCase):
     def test_router_modes_dispatch_and_shapes(self):
         torch.manual_seed(0)
         h = {"P": torch.tensor([[2, 3, 0]]), "C": torch.tensor([[2, 4, 0]]),
-             "T": torch.randn(1, 3, 6), "L": torch.randn(1, 3, 8)}
+             "T": torch.randn(1, 3, T_DIM), "L": torch.randn(1, 3, L_DIM)}
         valid = torch.tensor([[True, True, False]])
         rows = torch.tensor([[0, 1, 2]])
         prior = torch.zeros(1, 3, 26)
@@ -189,7 +247,7 @@ class TestDesign(unittest.TestCase):
         model = TSMoE(6, 3, 3, ModelConfig(8, 2, 1, 0., 4, use_surd=False)).eval()
         valid = torch.tensor([[True, True, False]])
         h = {"P": torch.tensor([[2, 3, 0]]), "C": torch.tensor([[3, 4, 0]]),
-             "T": torch.randn(1, 3, 6), "L": torch.randn(1, 3, 8)}
+             "T": torch.randn(1, 3, T_DIM), "L": torch.randn(1, 3, L_DIM)}
         rows = torch.arange(6)[None, :]
         with torch.no_grad():
             p, w = torch.rand(1, 6, 26).softmax(-1), torch.rand(1, 6)
