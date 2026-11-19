@@ -6,7 +6,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。因果在线计数 + `--transition-attn` 见 [`docs/causal-counts.md`](docs/causal-counts.md)（§3.8；**默认 on**）。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。因果在线计数 + `--transition-attn` 见 [`docs/causal-counts.md`](docs/causal-counts.md)（§3.8；**默认 on**）。系统对照实验（因子表、可复制命令、结果登记）：[`docs/ablation.md`](docs/ablation.md)。
 
 面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
@@ -35,6 +35,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 8. [算法要点（简要）](#8-算法要点简要)
 9. [测试与东京烟雾参考](#9-测试与东京烟雾参考)
 10. [当前局限](#10-当前局限)
+11. [Ablation 实验手册](#11-ablation-实验手册)
 
 ---
 
@@ -577,6 +578,9 @@ TS_MOE/
   docs/router-modes.md        # --router-mode hard_prior / surd_mlp / hybrid
   docs/sthgcn-tl-features.md  # T/L ↔ STHGCN Φ(Δt)/Φ(Δs) 对齐
   docs/causal-counts.md       # 因果在线计数 + --transition-attn
+  docs/ablation.md            # 消融协议、因子表、可复制命令、结果登记
+  docs/ablation_log.template.md  # 结果表模板（可复制到 results/）
+  docs/ablation_log.template.csv
   tsmoe/                      # 包；入口 python -m tsmoe
   examples/                   # download_city、make_demo
   scripts/                    # verify_city_checkins 等
@@ -596,6 +600,8 @@ TS_MOE/
 | `docs/router-modes.md` | `--router-mode`：hard_prior / surd_mlp / hybrid |
 | `docs/sthgcn-tl-features.md` | T/L 与 STHGCN 对齐；换 schema 须重 prepare |
 | `docs/causal-counts.md` | 因果在线计数、等频分箱、`--transition-attn` |
+| `docs/ablation.md` | 消融实验手册（开关总表、顺序、命令、结果登记） |
+| `docs/ablation_log.template.md` / `.csv` | 结果登记模板（建议复制到 `results/` 再填） |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
@@ -683,3 +689,14 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 - **大数据内存**：大型城市 prepare 峰值随训练前缀增长；无分片 / 外存统计路径。
 - **换候选构造或目标协议须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives，也不能覆盖 `--train-targets` / `--eval-targets`（见 §3.3、§3.4）。
 - **换 T/L 特征 schema 须重 prepare**：旧 `basic_fixed_features_v1` 与当前 `sthgcn_tl_features_v1` 不兼容（见 §3.7）。
+
+---
+
+## 11. Ablation 实验手册
+
+近期改动多，应用对照实验分清贡献：固定同一 prepare 指纹（能复用则复用）、以 **Acc@1** 为主、结果写入 `results/<run>/`。
+
+完整内容（因子/开关总表、推荐顺序、Tokyo 可复制命令、结果登记空表、如何读 `metrics.json`）：
+
+- [`docs/ablation.md`](docs/ablation.md)
+- 结果模板（建议 `cp` 到 gitignore 的 `results/` 再填）：[`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`docs/ablation_log.template.csv`](docs/ablation_log.template.csv)
