@@ -34,15 +34,18 @@ def main():
     for name in ("train-targets", "eval-targets"):
         p.add_argument("--" + name, choices=("all", "last"), default="all")
     p.add_argument(
-        "--candidate-radius", choices=("p90", "mean", "max", "full"), default="p90",
+        "--candidate-radius",
+        choices=("p70", "p80", "p90", "mean", "max", "full"), default="p90",
         help="local spatial neighborhood radius from consecutive visit distances "
-             "(default p90); full = global catalog only (disables popular / "
-             "user-frequent sources). Stored in the cache so train and evaluate "
-             "share the same construction.")
+             "(default p90; also p70/p80/mean/max); full = global catalog only "
+             "(disables popular / user-frequent / random-negative sources). "
+             "Stored in the cache so train and evaluate share the same construction.")
     p.add_argument(
-        "--popular-radius", choices=("max", "p90", "mean", "multiplier"), default="max",
+        "--popular-radius",
+        choices=("max", "p90", "p80", "p70", "mean", "multiplier"), default="max",
         help="larger radius for popular-POI source (default max of consecutive "
-             "distances); multiplier = local radius × --popular-radius-multiplier")
+             "distances; also p90/p80/p70/mean); multiplier = local radius × "
+             "--popular-radius-multiplier")
     p.add_argument(
         "--popular-radius-multiplier", type=float, default=2.0,
         help="scale for --popular-radius multiplier (default 2.0)")
@@ -62,6 +65,15 @@ def main():
         "--user-frequent-min-visits", type=positive, default=2,
         help="minimum training visits for a venue to count as user-frequent "
              "(default 2)")
+    p.add_argument(
+        "--random-negatives", type=int, default=50,
+        help="extra uniform random catalog negatives added to each constructed "
+             "pool (default 50; 0 disables). Seeded and fingerprinted; ignored "
+             "for --candidate-radius full / empty-union fallback")
+    p.add_argument(
+        "--random-negatives-seed", type=int, default=0,
+        help="seed mixed with sample index for deterministic random negatives "
+             "(default 0)")
     p.set_defaults(func=prepare)
 
     a = commands.add_parser("inspect", help="trace a training prefix, sparse joint counts and one POI's 26 atoms")
@@ -99,9 +111,10 @@ def main():
     e = commands.add_parser(
         "evaluate",
         help="rank within the full constructed cache candidate pool "
-             "(multi-source neighborhood+popular+user-frequent by default, or "
-             "full catalog); report Acc@1 / NDCG@1 / MRR (+ full @K tables and "
-             "Head/Mid/Tail groups) to metrics.json + report.txt")
+             "(multi-source neighborhood+popular+user-frequent+random by "
+             "default, or full catalog; in-catalog GT always present); report "
+             "Acc@1 / NDCG@1 / MRR (+ full @K tables and Head/Mid/Tail groups) "
+             "to metrics.json + report.txt")
     e.set_defaults(func=evaluate_cli)
     e.add_argument("--out", help="directory for metrics.json and report.txt "
                    "(default: results/<run_from_checkpoint>/eval_<split>)")
@@ -133,9 +146,10 @@ def main():
         root.error("warmup must be in [0,1); tau-pos and reliability scales must be positive")
     if args.command == "prepare" and (
             args.popular_top_k < 0 or args.user_frequent_top_k < 0
+            or args.random_negatives < 0
             or not math.isfinite(args.popular_radius_multiplier)
             or args.popular_radius_multiplier <= 0):
-        root.error("popular-top-k / user-frequent-top-k must be >= 0; "
+        root.error("popular-top-k / user-frequent-top-k / random-negatives must be >= 0; "
                    "popular-radius-multiplier must be positive and finite")
     if args.command == "train" and (args.negatives < -1 or args.negatives == 0 or
                                     args.max_train_candidates == 0 or args.max_train_candidates < -1 or

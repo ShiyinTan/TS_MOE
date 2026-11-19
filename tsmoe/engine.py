@@ -79,12 +79,18 @@ class Cache:
             self.popular_top_k = 0
             self.popularity = None
             self.user_frequent = {}
+            self.random_negatives = 0
+            self.random_negatives_seed = 0
             self.poi_coords = torch.full((len(self.pois), 2), float("nan"), dtype=torch.float64)
         else:
             self.candidate_construction = construction
             self.radius_km = construction.get("radius_km")
             self.popular_radius_km = construction.get("popular_radius_km")
             self.popular_top_k = int(construction.get("popular_top_k") or 0)
+            self.random_negatives = int(construction.get("random_negatives") or 0)
+            self.random_negatives_seed = int(
+                construction.get("random_negatives_seed")
+                if construction.get("random_negatives_seed") is not None else 0)
             coords = self.meta.get("poi_coordinates")
             if coords is None or len(coords) != len(self.pois):
                 raise ValueError("cache missing poi_coordinates aligned with poi_ids; re-run prepare")
@@ -133,13 +139,19 @@ class Cache:
         return self.radius_km is None or self.candidate_construction.get("method") == "full_catalog"
 
     def candidate_pools(self, data):
-        """Same multi-source (or full-catalog) pools for train and evaluate."""
+        """Same multi-source (or full-catalog) pools for train and evaluate.
+
+        In-catalog ground-truth targets are always present (verified inside
+        ``pools_for_split``); val/test ranking never drops the true next POI.
+        """
         return pools_for_split(
             data, self.poi_coords, self.radius_km, len(self.pois),
             popular_radius_km=self.popular_radius_km,
             popularity=self.popularity,
             popular_top_k=self.popular_top_k,
             user_frequent=self.user_frequent,
+            random_negatives=self.random_negatives,
+            random_negatives_seed=self.random_negatives_seed,
         )
 
     def pool_size_stats(self, data):
@@ -478,7 +490,8 @@ def report_candidate_pool_stats(cache, splits):
         f"popular_top_k={cache.popular_top_k} "
         f"popular_by={radius_info.get('popular_by')} "
         f"user_frequent_top_k={radius_info.get('user_frequent_top_k')} "
-        f"eval_pool=full_constructed",
+        f"random_negatives={cache.random_negatives} "
+        f"eval_pool=full_constructed ground_truth_in_pool=always",
         flush=True,
     )
     all_stats = {}
@@ -586,6 +599,7 @@ def train(args):
     settings["candidate_radius"] = cache.cfg.get("candidate_radius", "full")
     settings["candidate_radius_km"] = cache.radius_km
     settings["popular_radius_km"] = cache.popular_radius_km
+    settings["random_negatives"] = cache.random_negatives
     settings["max_train_candidates"] = args.max_train_candidates
     max_train_candidates = None if args.max_train_candidates < 0 else args.max_train_candidates
     category_frequency = Counter(data["C"].tolist())
@@ -607,7 +621,8 @@ def train(args):
             eval_uses_full_pool=True,
         ),
         definition=("per-sample pool size after multi-source union "
-                    "(neighborhood + popular + user-frequent) + force-include target "
+                    "(neighborhood + popular + user-frequent + random negatives) "
+                    "+ force-include in-catalog target (always, including val/test) "
                     "+ empty-union fallback to full catalog; stats match the full "
                     "constructed pool used at evaluation (train may subsample)"),
         splits=pool_stats,

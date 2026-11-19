@@ -175,7 +175,13 @@ class TestDesign(unittest.TestCase):
         self.assertAlmostEqual(stats["mean_km"], sum(distances) / 3)
         self.assertAlmostEqual(pick_radius_km(stats, "max"), stats["max_km"])
         self.assertAlmostEqual(pick_radius_km(stats, "p90"), stats["p90_km"])
+        self.assertAlmostEqual(pick_radius_km(stats, "p80"), stats["p80_km"])
+        self.assertAlmostEqual(pick_radius_km(stats, "p70"), stats["p70_km"])
+        self.assertLessEqual(stats["p70_km"], stats["p80_km"])
+        self.assertLessEqual(stats["p80_km"], stats["p90_km"])
         self.assertIsNone(pick_radius_km(stats, "full"))
+        self.assertAlmostEqual(pick_popular_radius_km(stats, 10.0, "p80", 2.0), stats["p80_km"])
+        self.assertAlmostEqual(pick_popular_radius_km(stats, 10.0, "p70", 2.0), stats["p70_km"])
         pois = [1, 2, 3, 4]
         coord_list, audit = catalog_coordinates(groups, pois)
         self.assertEqual(coord_list[0], [0.0, 0.0])
@@ -200,6 +206,17 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(full.tolist(), [0, 1, 2, 3])
         empty, how = resolve_candidate_pool(10.0, 10.0, 0, coords, 0.01, 4)
         self.assertEqual(how, "fallback_full_catalog")
+        # Sparse neighborhood + random negatives enlarges the pool; GT stays.
+        with_random, how = resolve_candidate_pool(
+            0.0, 0.0, target_row=3, catalog_coords=coords, radius_km=1.0, catalog_size=4,
+            random_negatives=2, random_negatives_seed=7, sample_index=0)
+        self.assertEqual(how, "multi_source")
+        self.assertIn(3, with_random.tolist())
+        self.assertGreaterEqual(int(with_random.numel()), 3)  # origin + target + ≥1 random
+        again, _ = resolve_candidate_pool(
+            0.0, 0.0, target_row=3, catalog_coords=coords, radius_km=1.0, catalog_size=4,
+            random_negatives=2, random_negatives_seed=7, sample_index=0)
+        self.assertEqual(sorted(with_random.tolist()), sorted(again.tolist()))
         # Popular + user-frequent enrich an otherwise tiny neighborhood.
         popularity = torch.tensor([1.0, 50.0, 5.0, 2.0], dtype=torch.float64)
         rich, how = resolve_candidate_pool(
@@ -402,6 +419,10 @@ class TestDesign(unittest.TestCase):
             self.assertEqual(cache.cfg["popular_top_k"], 100)
             self.assertEqual(cache.cfg["popular_by"], "visit")
             self.assertEqual(cache.cfg["user_frequent_top_k"], 50)
+            self.assertEqual(cache.cfg["random_negatives"], 50)
+            self.assertEqual(cache.cfg["random_negatives_seed"], 0)
+            self.assertEqual(cache.random_negatives, 50)
+            self.assertTrue(cache.candidate_construction.get("ground_truth_always_in_pool"))
             self.assertIsNotNone(cache.popular_radius_km)
             self.assertTrue((cache.path / "user_frequent.pt").is_file())
             self.assertEqual(len(cache.meta["poi_coordinates"]), len(cache.pois))
@@ -414,6 +435,21 @@ class TestDesign(unittest.TestCase):
             pools, resolutions = cache.candidate_pools(train)
             self.assertEqual(len(pools), len(train["end"]))
             self.assertTrue(any(r in ("multi_source", "fallback_full_catalog") for r in resolutions))
+            # In-catalog GT must be present in every supervised pool (train/val/test).
+            for split_name in ("train", "validation", "test"):
+                split = cache.split(split_name)
+                split_pools, _ = cache.candidate_pools(split)
+                n_events = len(split["poi_token"])
+                for i, pool in enumerate(split_pools):
+                    end = int(split["end"][i])
+                    if end >= n_events:
+                        continue
+                    target_row = int(split["poi_token"][end]) - 2
+                    if target_row < 0:
+                        continue
+                    self.assertTrue(
+                        (pool == target_row).any(),
+                        msg=f"{split_name} sample {i} missing GT row {target_row}")
             run_cli("inspect", "--cache", cache_path, "--poi-id", cache.pois[0], "--sample-index", 0,
                     "--output", root / "trace.json")
             trace = json.loads((root / "trace.json").read_text())

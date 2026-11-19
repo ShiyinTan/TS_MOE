@@ -1,10 +1,12 @@
 # Multi-source candidates
 
-Train and evaluate share one candidate construction, fixed at `prepare` time and stored in the cache manifest. The default pool is the **union** of three sources (deduped). Evaluation ranks inside that **full constructed pool**; training may subsample negatives from it.
+Train and evaluate share one candidate construction, fixed at `prepare` time and stored in the cache manifest. The default pool is the **union** of four sources (deduped). Evaluation ranks inside that **full constructed pool**; training may subsample negatives from it.
+
+**Ground truth:** whenever the true next POI is in the training catalog, it is **always** present in the val/test (and train) candidate pool. No resolution path may omit it (`full_catalog` / `fallback_full_catalog` contain every row; `multi_source` force-appends the target). OOV targets (not in the catalog) cannot appear in the pool and are scored as outside-catalog misses. Pool construction verifies this invariant.
 
 ## Why (vs a fixed global catalog)
 
-**Yes — preferred for this next-POI setup:** candidates are **dynamic and location-aware** (anchored at the last observed check-in), enriched with popular and user-habitual venues, and **train/eval stay consistent** because both read the same construction from the cache. A fixed global set scores many geographically implausible venues and can mismatch sampled training negatives.
+**Yes — preferred for this next-POI setup:** candidates are **dynamic and location-aware** (anchored at the last observed check-in), enriched with popular, user-habitual, and random negatives, and **train/eval stay consistent** because both read the same construction from the cache. A fixed global set scores many geographically implausible venues and can mismatch sampled training negatives.
 
 ## Construction rule (default)
 
@@ -14,9 +16,10 @@ For each sample, with anchor = lat/lon of the check-in immediately before the ta
 2. **Larger-range popular** — within `popular_radius_km`, take top `--popular-top-k` POIs by train `--popular-by` frequency (`visit` = check-in counts, or `target` = next-POI target counts).
 3. **User-frequent** — this user’s top `--user-frequent-top-k` training venues with at least `--user-frequent-min-visits` visits.
 4. **Union + dedupe**; **always add the true target** when it is in the catalog.
-5. **Fallback** — if none of (1)–(3) contribute any member (empty union before the target include) → use the **full catalog** for that sample only.
+5. **Random negatives** — up to `--random-negatives` uniform catalog rows not already in the union (deterministic from `--random-negatives-seed` + sample index). Enlarges sparse spatial pools.
+6. **Fallback** — if none of (1)–(3) contribute any member (empty union before the target include) → use the **full catalog** for that sample only (random negatives unused; target already included).
 
-`--candidate-radius full` disables spatial / popular / user-frequent sources and uses the full training catalog for every sample.
+`--candidate-radius full` disables spatial / popular / user-frequent / random sources and uses the full training catalog for every sample.
 
 ## Prepare knobs (fingerprint)
 
@@ -24,13 +27,15 @@ Changing any of these **requires a new cache** (`prepare --out …`); train/eval
 
 ```bash
 python -m tsmoe prepare ... \
-  --candidate-radius p90 \              # local neighborhood: p90|mean|max|full (default p90)
-  --popular-radius max \                # larger popular radius: max|p90|mean|multiplier (default max)
+  --candidate-radius p90 \              # local: p70|p80|p90|mean|max|full (default p90)
+  --popular-radius max \                # popular: max|p90|p80|p70|mean|multiplier (default max)
   --popular-radius-multiplier 2.0 \     # only when --popular-radius multiplier
   --popular-top-k 100 \                 # 0 disables popular source
   --popular-by visit \                  # visit|target
   --user-frequent-top-k 50 \            # 0 disables user-frequent source
-  --user-frequent-min-visits 2
+  --user-frequent-min-visits 2 \
+  --random-negatives 50 \               # 0 disables; default 50
+  --random-negatives-seed 0
 ```
 
 | Flag | Default | Meaning |
@@ -42,16 +47,20 @@ python -m tsmoe prepare ... \
 | `--popular-by` | `visit` | Rank by train visit count or next-POI target count |
 | `--user-frequent-top-k` | `50` | Per-user top venues from **training** history (`0` = off) |
 | `--user-frequent-min-visits` | `2` | Min train visits to count as user-frequent |
+| `--random-negatives` | `50` | Extra uniform random catalog negatives per sample (`0` = off) |
+| `--random-negatives-seed` | `0` | Seed mixed with sample index for deterministic random negatives |
 
-Local / popular radius statistics:
+### Which radii work where
 
-| Value | Radius |
-| --- | --- |
-| `p90` | 90th percentile of consecutive train check-in great-circle distances (km) |
-| `mean` | mean of those distances |
-| `max` | maximum |
-| `multiplier` (popular only) | `local_radius_km × --popular-radius-multiplier` |
-| `full` (local only) | disable multi-source filtering; candidates = entire training POI catalog |
+| Statistic | `--candidate-radius` | `--popular-radius` | Distance stats key |
+| --- | --- | --- | --- |
+| `p70` | yes | yes | `p70_km` |
+| `p80` | yes | yes | `p80_km` |
+| `p90` (local default) | yes | yes | `p90_km` |
+| `mean` | yes | yes | `mean_km` |
+| `max` (popular default) | yes | yes | `max_km` |
+| `multiplier` | no | yes only | `local_radius_km × --popular-radius-multiplier` |
+| `full` | yes only | no | disables multi-source (full catalog) |
 
 ## Train sampling vs eval
 
@@ -71,17 +80,17 @@ python -m tsmoe train ... --negatives 63 --max-train-candidates -1
 At the start of `train` (and again at the start of standalone `evaluate`), the code builds the same **full** resolved pools used for scoring and prints per-split size statistics:
 
 ```text
-candidates method=multi_source radius_statistic=p90 radius_km=1.23 popular_radius=max popular_radius_km=5.67 popular_top_k=100 popular_by=visit user_frequent_top_k=50 eval_pool=full_constructed
+candidates method=multi_source radius_statistic=p90 radius_km=1.23 popular_radius=max popular_radius_km=5.67 popular_top_k=100 popular_by=visit user_frequent_top_k=50 random_negatives=50 eval_pool=full_constructed ground_truth_in_pool=always
 candidates train: n=5855 min=12 max=2494 mean=180.45 median=95.00  (fallback_full_catalog=3 multi_source=5852)
 candidates validation: n=808 min=8 max=2494 mean=165.20 median=88.00  (multi_source=808)
 candidates test: n=1694 min=10 max=2494 mean=172.11 median=90.00  (fallback_full_catalog=1 multi_source=1693)
 ```
 
-Counts are **after** union, force-including the in-catalog target, and empty-union fallback. A JSON copy is written to `results/<run>/candidate_pool_stats.json`; each `eval_*/metrics.json` also carries that split’s `candidate_pool_stats`.
+Counts are **after** union, force-including the in-catalog target, random negatives, and empty-union fallback. A JSON copy is written to `results/<run>/candidate_pool_stats.json`; each `eval_*/metrics.json` also carries that split’s `candidate_pool_stats`.
 
 ## Re-prepare
 
-Existing caches from the neighborhood-only era are incompatible (fingerprint now includes popular / user-frequent knobs, and `user_frequent.pt` is part of the cache). Use a **new** `--out`:
+Fingerprint now includes random-negative knobs (and p70/p80 choices). Use a **new** `--out` when those change:
 
 ```bash
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_ms \
@@ -90,7 +99,9 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_ms 
   --popular-top-k 100 \
   --popular-by visit \
   --user-frequent-top-k 50 \
-  --user-frequent-min-visits 2
+  --user-frequent-min-visits 2 \
+  --random-negatives 50 \
+  --random-negatives-seed 0
 
 python -m tsmoe train --cache runs/tokyo/cache_ms --out runs/tokyo/model_ms \
   --negatives 63 --max-train-candidates -1 --device cuda
@@ -108,8 +119,8 @@ python -m tsmoe train --cache runs/demo/cache --out runs/demo/model \
 
 `manifest.json` records:
 
-- `config.candidate_radius`, `popular_radius`, `popular_radius_multiplier`, `popular_top_k`, `popular_by`, `user_frequent_top_k`, `user_frequent_min_visits` — fingerprint inputs
-- `candidate_construction` — method `multi_source` (or `full_catalog`), both radii, source list, distance stats, fallback notes, visit/target count vectors
+- `config.candidate_radius`, `popular_radius`, `popular_radius_multiplier`, `popular_top_k`, `popular_by`, `user_frequent_top_k`, `user_frequent_min_visits`, `random_negatives`, `random_negatives_seed` — fingerprint inputs
+- `candidate_construction` — method `multi_source` (or `full_catalog`), both radii, sources (incl. `random_negatives`), `ground_truth_always_in_pool`, distance stats (`p70_km`/`p80_km`/`p90_km`/…), fallback notes, visit/target count vectors
 - `poi_coordinates` — finite mean lat/lon per catalog POI (imputed when check-ins lack coords)
 - `candidate_construction.coordinate_imputation` — counts per fallback source
 - `user_frequent.pt` — map `user_id → [catalog_row, …]` (digested in `files`)

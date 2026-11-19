@@ -1,6 +1,6 @@
 # TS-MoE · Massive-STEPS 下一 POI 推荐
 
-Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域内的训练目录 POI（半径取自连续访问距离的 P90；也可用 `mean` / `max`，或 `full` 退回全目录）。训练负采样与评估排名共用同一构造。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
+Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域、更大半径热门 POI、用户训练常去地点与随机负例的并集（去重；**目录内真目标必入池**，含 val/test；半径可选 `p70`/`p80`/`p90`/`mean`/`max`，或 `full` 退回全目录）。训练可从该池负采样 / 封顶；**评估对完整构造池排名**。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
 
 算法设计见 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
 
@@ -17,6 +17,12 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 1. [安装](#1-安装)
 2. [数据准备](#2-数据准备)
 3. [运行（可复制命令）](#3-运行可复制命令)
+   - [3.1 Demo](#31-demo无需下载)
+   - [3.2 Tokyo](#32-tokyo下载--核对--prepare--cuda-训练)
+   - [3.3 半径变体 prepare（p70 / p80 / p90 …）](#33-半径变体-preparep70--p80--p90-)
+   - [3.4 训练抽样](#34-训练抽样)
+   - [3.5 独立评估](#35-独立评估)
+   - [3.6 GPU 占用与中断](#36-gpu-占用与中断)
 4. [配置 knobs](#4-配置-knobs)
 5. [结果目录](#5-结果目录)
 6. [仓库 / 代码布局](#6-仓库--代码布局)
@@ -132,7 +138,7 @@ data/tokyo/
 
 ### 多源候选池（prepare 时固定）
 
-默认候选 = **邻域 ∪ 大半径热门 ∪ 用户常去**（去重；目录内真目标必入池）。`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）定局部邻域；另有 `--popular-radius` / `--popular-top-k` / `--popular-by` 与 `--user-frequent-top-k` / `--user-frequent-min-visits`（均写入指纹）。**train / evaluate 不覆盖**；改构造须换 `--out` 并重新 prepare。三源皆空才回退全目录。`train --negatives` / `--max-train-candidates` 仅训练抽样；**evaluate 用完整构造池**。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全。`train` 启动时打印各 split 池大小统计并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
+默认候选 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重；**目录内真目标必入池**，含 val/test）。`prepare --candidate-radius {p70,p80,p90,mean,max,full}`（**默认 `p90`**）定局部邻域；`--popular-radius` 可用 `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`；另有 `--popular-top-k` / `--popular-by`、`--user-frequent-*`、`--random-negatives`（默认 **50**，`0` 关闭）均写入指纹。**train / evaluate 不覆盖**；改构造须换 `--out` 并重新 prepare。邻域/热门/用户常去皆空才回退全目录。`train --negatives` / `--max-train-candidates` 仅训练抽样；**evaluate 用完整构造池**。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全。`train` 启动时打印各 split 池大小统计并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
 
 `download_city.py` 支持城市：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
 
@@ -161,7 +167,7 @@ python -m tsmoe train --cache runs/demo/cache --out runs/demo/model \
 
 ### 3.2 Tokyo：下载 → 核对 → prepare → CUDA 训练
 
-默认 `--candidate-radius p90`（可省略）。成功 prepare 后应有 `runs/tokyo/cache/manifest.json` 与各 split `.pt`。
+默认邻域 `p90` + popular@max + user-frequent + `--random-negatives 50`。成功 prepare 后应有 `runs/tokyo/cache/manifest.json` 与各 split `.pt`。
 
 ```bash
 conda activate tsmoe
@@ -172,10 +178,13 @@ python examples/download_city.py --city tokyo --data-root data
 # 2) 核对文件名与列（stdlib；不 import torch）
 python scripts/verify_city_checkins.py --data-root data --city tokyo
 
-# 3) 构建样本 + 折外 SURD + 多源候选（默认邻域 p90 + popular max/top-100 + user-frequent）
+# 3) 构建样本 + 折外 SURD + 多源候选
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
-# 等价显式：... --candidate-radius p90 --popular-radius max --popular-top-k 100 \
-#   --popular-by visit --user-frequent-top-k 50 --user-frequent-min-visits 2
+# 等价显式：
+# python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache \
+#   --candidate-radius p90 --popular-radius max --popular-top-k 100 \
+#   --popular-by visit --user-frequent-top-k 50 --user-frequent-min-visits 2 \
+#   --random-negatives 50 --random-negatives-seed 0
 # 日志：`fold_*: N reference targets; M scored` — reference=该折拟合 SURD/量化器的训练事件；scored=划入该折评分的样本；`final` 用全部训练事件作 reference、scored=0。
 
 # 4) GPU 训练（默认 --device auto；也可显式 cuda）
@@ -186,9 +195,86 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device c
 
 手动下载：从 [Massive-STEPS-Tokyo](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo) 取得同名三个 CSV 放到 `data/tokyo/`（或扁平放在 `data/`），再跑上面第 2–4 步。固定版本：`python examples/download_city.py --city tokyo --data-root data --revision <commit-or-branch>`。
 
-### 3.3 独立评估（standalone evaluate）
+### 3.3 半径变体 prepare（p70 / p80 / p90 …）
 
-对已有 cache + checkpoint 重跑排名；默认写出 `results/<run>/eval_<split>/`。
+每种半径 / 构造用**独立** `--out`（及对应 train `--out`），否则指纹 / 缓存会混用。改 popular / user-frequent / random-negatives 同样要重 prepare。
+
+```bash
+conda activate tsmoe
+
+# p90（默认局部邻域）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p90 \
+  --candidate-radius p90 --popular-radius max --popular-top-k 100 \
+  --random-negatives 50
+
+# p80
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p80 \
+  --candidate-radius p80 --popular-radius max --popular-top-k 100 \
+  --random-negatives 50
+
+# p70
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p70 \
+  --candidate-radius p70 --popular-radius max --popular-top-k 100 \
+  --random-negatives 50
+
+# mean / max 局部邻域
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_mean \
+  --candidate-radius mean --random-negatives 50
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_max \
+  --candidate-radius max --random-negatives 50
+
+# popular 半径也可用 p80 / p70（或 multiplier）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_pop_p80 \
+  --candidate-radius p90 --popular-radius p80 --popular-top-k 100
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_pop2x \
+  --candidate-radius p90 --popular-radius multiplier --popular-radius-multiplier 2.0
+
+# 仅邻域 + 随机负例（关掉 popular / user-frequent）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_nbhd \
+  --candidate-radius p90 --popular-top-k 0 --user-frequent-top-k 0 \
+  --random-negatives 50
+
+# full = 全训练目录（无空间 / 随机源）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_full \
+  --candidate-radius full
+```
+
+| `--candidate-radius` | 局部邻域 |
+| --- | --- |
+| `p90`（默认） | 连续签到距离的 90 分位（km） |
+| `p80` / `p70` | 80 / 70 分位 |
+| `mean` / `max` | 均值 / 最大值 |
+| `full` | 关闭多源过滤；候选 = 整个训练 POI 目录 |
+
+| `--popular-radius` | 大半径热门 |
+| --- | --- |
+| `max`（默认） / `p90` / `p80` / `p70` / `mean` | 同上统计量 |
+| `multiplier` | `local_radius_km × --popular-radius-multiplier` |
+
+### 3.4 训练抽样
+
+训练从**完整构造池**里抽负例；评估仍用完整池。Acc@1 等写入 `results/`。
+
+```bash
+conda activate tsmoe
+
+# 默认：每例 63 个负例；不额外封顶
+python -m tsmoe train --cache runs/tokyo/cache_p90 --out runs/tokyo/model_p90 \
+  --negatives 63 --max-train-candidates -1 --device cuda
+
+# 池内其余全部作负例（仍可用 max-train-candidates 封顶）
+python -m tsmoe train --cache runs/tokyo/cache_p90 --out runs/tokyo/model_p90_allneg \
+  --negatives -1 --max-train-candidates 256 --device cuda
+
+# 小模型连通性烟雾（见 §9）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
+  --epochs 1 --dim 16 --heads 2 --layers 1 --negatives 15 \
+  --batch-size 64 --eval-batch-size 32 --chunk 256 --threads 3 --device cuda
+```
+
+### 3.5 独立评估
+
+对已有 cache + checkpoint 重跑排名（**完整构造池**；目录内 GT 必在池内）；默认写出 `results/<run>/eval_<split>/`。
 
 ```bash
 conda activate tsmoe
@@ -209,40 +295,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache \
 python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
 ```
 
-### 3.4 可选：候选构造 prepare 变体
-
-每种构造用**独立** `--out`（及对应 train `--out`），否则指纹 / 缓存会混用。改 popular / user-frequent 同样要重 prepare。
-
-```bash
-conda activate tsmoe
-
-# 默认多源（邻域 p90 + popular@max top-100 + user-frequent）
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_ms \
-  --candidate-radius p90 --popular-radius max --popular-top-k 100
-python -m tsmoe train --cache runs/tokyo/cache_ms --out runs/tokyo/model_ms \
-  --negatives 63 --max-train-candidates -1 --device cuda
-
-# 更大 popular 半径 = 局部半径 × 2
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_pop2x \
-  --candidate-radius p90 --popular-radius multiplier --popular-radius-multiplier 2.0
-
-# 仅邻域（关掉 popular / user-frequent）
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_nbhd \
-  --candidate-radius p90 --popular-top-k 0 --user-frequent-top-k 0
-
-# full = 全训练目录
-python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_full \
-  --candidate-radius full
-python -m tsmoe train --cache runs/tokyo/cache_full --out runs/tokyo/model_full --device cuda
-```
-
-| `--candidate-radius` | 局部邻域 |
-| --- | --- |
-| `p90`（默认） | 训练集连续签到球面距离的 90 分位（km） |
-| `mean` / `max` | 均值 / 最大值 |
-| `full` | 关闭多源过滤；候选 = 整个训练 POI 目录 |
-
-### 3.5 GPU 占用与中断
+### 3.6 GPU 占用与中断
 
 ```bash
 # 多卡时常显式指定
@@ -262,11 +315,12 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | --- | --- |
 | `prepare --max-length`、`--hash-dim`、`--tau-pos` | 50、64、10 |
 | `prepare --clusters`、`--folds`、`--warmup` | 4、3、0.2 |
-| `prepare --candidate-radius` | `p90` / `mean` / `max` / `full`；局部邻域；写入缓存 |
-| `prepare --popular-radius` | `max` / `p90` / `mean` / `multiplier`（默认 `max`） |
+| `prepare --candidate-radius` | `p70` / `p80` / `p90` / `mean` / `max` / `full`；局部邻域；写入缓存 |
+| `prepare --popular-radius` | `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`（默认 `max`） |
 | `prepare --popular-radius-multiplier` | 默认 `2.0`（仅 `multiplier`） |
 | `prepare --popular-top-k` / `--popular-by` | 默认 `100` / `visit`（`0` 关闭热门源） |
 | `prepare --user-frequent-top-k` / `--user-frequent-min-visits` | 默认 `50` / `2`（`0` 关闭用户常去） |
+| `prepare --random-negatives` / `--random-negatives-seed` | 默认 `50` / `0`（`0` 关闭随机负例） |
 | `prepare --train-targets` / `--eval-targets` | `all` 或 `last`（默认均为 `all`） |
 | `train --dim`、`--heads`、`--layers` | 128、4、2 |
 | `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
@@ -287,7 +341,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 训练与评估均用每条轨迹末站 | `--train-targets last --eval-targets last` |
 | 全部前缀训练，仅评估末站 | `--train-targets all --eval-targets last` |
 
-改变簇数、窗口、目标选取或候选构造（`--candidate-radius` / popular / user-frequent）时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。
+改变簇数、窗口、目标选取或候选构造（`--candidate-radius` / popular / user-frequent / random-negatives）时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。
 
 训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。`history.json` 仍在 `runs/.../model/`。
 
@@ -342,7 +396,7 @@ TS_MOE/
 | `environment.yml` | Conda 骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124） |
 | `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
 | `docs/results.md` | 评估结果目录约定 |
-| `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去） |
+| `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去 + 随机负例；GT 必入池） |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
@@ -393,7 +447,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 2. 单一联合频数表边缘化 → 26 维（4 Unique + 11 Redundancy + 11 Synergy）；15 个 U/S 专家在线执行。
 3. 折外估计：默认最早 20% 训练样本暖启动，其后 3 个时间块；验证 / 测试 / 新轨迹用全训练 `final` 表。
 4. 在线：四源 Transformer 编码历史；Router 读候选 + 上下文 + 置信度缩放的 26 维先验；Top-K 稀疏专家；`base + 门控 MoE 残差`。
-5. 候选：prepare 写入的空间邻域（或 `full`）；train 负采样与 evaluate 排名共用。
+5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
 
 缓存 `manifest.json` 记录字段约定、目录、分折、候选构造与文件摘要。
 
@@ -426,4 +480,4 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 - **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118；不自动探测本机 CUDA。
 - **无多进程 / 多卡数据并行开关**：可选单卡 `--device cuda:0`；无 `--gpus` / DDP CLI。
 - **大数据内存**：大型城市 prepare 峰值随训练前缀增长；无分片 / 外存统计路径。
-- **换候选构造须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent。
+- **换候选构造须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives。
