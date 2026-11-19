@@ -15,6 +15,9 @@ from tqdm.auto import tqdm
 from .candidates import (
     format_pool_size_line, pools_for_split, sample_candidates, summarize_pool_sizes,
 )
+from .counts import (
+    DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
+)
 from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_batch, read_split
 from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
@@ -30,19 +33,77 @@ def model_config_from_checkpoint(raw):
         # with an implicit learned scale of 1 (logits = learned + λ_prior · bias).
         cfg["router_mode"] = "hybrid"
         cfg.setdefault("hybrid_lambda", 1.0)
+    # Pre-causal-count checkpoints lack the new modules → keep the feature off.
+    if "causal_counts" not in cfg:
+        cfg["causal_counts"] = False
+    cfg.setdefault("transition_attn", "bias")
+    cfg.setdefault("transition_lambda", 1.0)
+    cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     return ModelConfig(**cfg)
 
 
+_COUNT_WEIGHT_PREFIXES = (
+    "poi_count_mlp.", "cat_count_mlp.", "visit_bin_emb.", "transition_attn.",
+)
+
+
 def load_weights(model, weights):
-    """Load weights; allow missing surd_* modules on legacy hybrid checkpoints."""
+    """Load weights; allow missing surd_* / causal-count modules on legacy checkpoints."""
     missing, unexpected = model.load_state_dict(weights, strict=False)
     if unexpected:
         raise ValueError(f"checkpoint has unexpected keys: {sorted(unexpected)[:8]}")
-    allowed = [k for k in missing if k.startswith("surd_router.") or k.startswith("surd_gate.")]
+    allowed = [
+        k for k in missing
+        if k.startswith("surd_router.") or k.startswith("surd_gate.")
+        or any(k.startswith(p) for p in _COUNT_WEIGHT_PREFIXES)
+    ]
     if len(allowed) != len(missing):
         raise ValueError(f"checkpoint missing required keys: "
                          f"{sorted(set(missing) - set(allowed))[:8]}")
     return missing
+
+
+def count_ctx_to_device(ctx, device):
+    if ctx is None:
+        return None
+    return {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in ctx.items()}
+
+
+def slice_count_ctx(ctx, start, end):
+    """Slice candidate-aligned count features for a scoring chunk."""
+    if ctx is None:
+        return None
+    return dict(
+        hist_poi_feat=ctx["hist_poi_feat"],
+        hist_cat_feat=ctx["hist_cat_feat"],
+        visit_bin=ctx["visit_bin"],
+        cand_poi_feat=ctx["cand_poi_feat"][:, start:end],
+        poi_transition=ctx["poi_transition"][:, start:end],
+        cat_transition=ctx["cat_transition"][:, start:end],
+    )
+
+
+def masked_candidate_lists(rows, mask):
+    """Per-sample candidate rows with ``-1`` where masked (aligns with padded rows)."""
+    out = []
+    for row, m in zip(rows.tolist(), mask.tolist()):
+        out.append([r if keep else -1 for r, keep in zip(row, m)])
+    return out
+
+
+def new_count_tables(cache, cfg, visit_bin_edges=None):
+    return CausalCountTables(
+        len(cache.pois), len(cache.meta["cat_vocab"]),
+        visit_bins=cfg.visit_bins, visit_bin_edges=visit_bin_edges)
+
+
+def replay_train_tables(cache, cfg, train_data, visit_bin_edges=None):
+    """Rebuild train-end tables by chronological score-less updates."""
+    tables = new_count_tables(cache, cfg, visit_bin_edges=visit_bin_edges)
+    if visit_bin_edges is None:
+        tables.fit_visit_bins(train_data, cfg.visit_bins)
+    tables.replay(train_data)
+    return tables
 
 # Cutoffs used for Acc/Hit/Recall/NDCG/MRR/MAP tables (next-POI papers often include @20).
 METRIC_KS = (1, 5, 10, 20)
@@ -224,21 +285,24 @@ def candidates(targets, size, negatives, rng, pools=None):
     return rows, labels
 
 
-def all_scores(model, table, encoded, valid, size, chunk):
+def all_scores(model, table, encoded, valid, size, chunk, count_ctx=None):
     """Keep only scalar scores on the CPU across chunks. Encode the batch history once."""
     parts = []
     for start in range(0, size, chunk):
         check_interrupt()
-        rows = torch.arange(start, min(size, start + chunk), device=valid.device).expand(len(valid), -1)
+        end = min(size, start + chunk)
+        rows = torch.arange(start, end, device=valid.device).expand(len(valid), -1)
         prior, confidence = table(rows)
-        parts.append(model.score(encoded, valid, rows, prior, confidence)["score"].cpu())
+        scored = model.score(encoded, valid, rows, prior, confidence,
+                             count_ctx=slice_count_ctx(count_ctx, start, end))
+        parts.append(scored["score"].cpu())
     scores = torch.cat(parts, 1)
     if not torch.isfinite(scores).all():
         raise FloatingPointError("nonfinite full-catalog scores")
     return scores
 
 
-def score_pools(model, table, encoded, valid, pools, chunk):
+def score_pools(model, table, encoded, valid, pools, chunk, count_ctx=None):
     """Score variable-size candidate pools; pad with mask (shared train/eval path)."""
     width = max(int(pool.numel()) for pool in pools)
     rows = torch.zeros(len(pools), width, dtype=torch.long, device=valid.device)
@@ -250,11 +314,14 @@ def score_pools(model, table, encoded, valid, pools, chunk):
     parts = []
     for start in range(0, width, chunk):
         check_interrupt()
-        sl = slice(start, min(width, start + chunk))
+        end = min(width, start + chunk)
+        sl = slice(start, end)
         chunk_rows, chunk_mask = rows[:, sl], mask[:, sl]
         safe = chunk_rows.masked_fill(~chunk_mask, -1)
         prior, confidence = table(safe)
-        scored = model.score(encoded, valid, chunk_rows, prior, confidence, candidate_mask=chunk_mask)
+        scored = model.score(
+            encoded, valid, chunk_rows, prior, confidence, candidate_mask=chunk_mask,
+            count_ctx=slice_count_ctx(count_ctx, start, end))
         part = scored["score"].cpu()
         part = part.masked_fill(~chunk_mask.cpu(), float("-inf"))
         parts.append(part)
@@ -547,31 +614,72 @@ def save_eval_results(payload, out_dir, legacy_output=None):
 
 
 @torch.inference_mode()
-def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, desc="eval"):
+def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, desc="eval",
+             count_tables=None):
+    """Rank samples; with ``count_tables``, walk chronologically (score then update)."""
     model.eval()
     ranks, grouped = [], defaultdict(list)
     counts = table.target_count.cpu()
     device = table.routing_prior.device
     pools, _resolutions = cache.candidate_pools(data)
-    batches = list(torch.arange(len(data["end"])).split(batch_size))
+    use_counts = count_tables is not None and model.cfg.causal_counts
+    if use_counts:
+        order = chronological_indices(data)
+        batches = list(order.split(batch_size))
+        # Collect ranks in original sample order for stable group reporting.
+        rank_by_index = [0] * len(data["end"])
+    else:
+        batches = list(torch.arange(len(data["end"])).split(batch_size))
+        rank_by_index = None
     for idx in tqdm(batches, desc=desc, leave=False, dynamic_ncols=True):
         check_interrupt()
         h, valid, target = device_batch(data, idx, device)
-        encoded = model.encode(h, valid)
+        count_ctx = None
+        if use_counts:
+            seq_len = int(valid.shape[1])
+            if cache.uses_full_catalog_pools():
+                cand_lists = [list(range(len(cache.pois))) for _ in idx.tolist()]
+            else:
+                cand_lists = [pools[i].tolist() for i in idx.tolist()]
+            # Read features causally, then update tables with GT (same protocol as train).
+            count_ctx = gather_batch_context(
+                count_tables, data, idx, cand_lists, seq_len, update=True)
+            count_ctx = count_ctx_to_device(count_ctx, device)
+        encoded = model.encode(h, valid, count_ctx)
         if cache.uses_full_catalog_pools():
-            scores = all_scores(model, table, encoded, valid, len(cache.pois), chunk)
+            scores = all_scores(model, table, encoded, valid, len(cache.pois), chunk,
+                                count_ctx=count_ctx)
             batch_ranks = ranks_of(scores, target).tolist()
         else:
             # Eval always ranks inside the full constructed multi-source pool.
             batch_pools = [pools[i] for i in idx.tolist()]
             pool_scores, pool_rows, pool_mask = score_pools(
-                model, table, encoded, valid, batch_pools, chunk)
+                model, table, encoded, valid, batch_pools, chunk, count_ctx=count_ctx)
             batch_ranks = ranks_in_pools(pool_scores, pool_rows, pool_mask, target.cpu())
-        ranks.extend(batch_ranks)
-        if cat_frequency is not None:
+        if rank_by_index is not None:
+            for i, rank in zip(idx.tolist(), batch_ranks):
+                rank_by_index[i] = rank
+        else:
+            ranks.extend(batch_ranks)
+        if cat_frequency is not None and rank_by_index is None:
             # Slice ranks into Head/Mid/Tail-style popularity bins plus context bins.
             # count = SURD target_count (# times this POI is a train next-POI target).
             for i, row, rank in zip(idx.tolist(), target.tolist(), batch_ranks):
+                end = int(data["end"][i])
+                length = end - int(data["start"][i])
+                count = int(counts[row]) if row >= 0 else 0
+                cat_count = cat_frequency[int(data["C"][end - 1])]
+                popularity = ("outside_catalog" if row < 0 else "no_train_target" if count == 0 else
+                              "tail_1_2" if count <= 2 else "mid_3_9" if count < 10 else "head_10_plus")
+                length_bin = "1" if length == 1 else "2_5" if length <= 5 else "6_plus"
+                cat_bin = "0" if not cat_count else "1_9" if cat_count < 10 else "10_plus"
+                for key in (f"poi/{popularity}", f"history/{length_bin}", f"last_category/{cat_bin}"):
+                    grouped[key].append(rank)
+    if rank_by_index is not None:
+        ranks = rank_by_index
+        if cat_frequency is not None:
+            for i, rank in enumerate(ranks):
+                row = int(data["poi_token"][int(data["end"][i])]) - 2
                 end = int(data["end"][i])
                 length = end - int(data["start"][i])
                 count = int(counts[row]) if row >= 0 else 0
@@ -599,9 +707,15 @@ def save_checkpoint(payload, path):
 def train(args):
     install_interrupt_handler()
     cache = Cache(args.cache)
+    causal_counts = not bool(getattr(args, "no_causal_counts", False))
+    transition_attn = getattr(args, "transition_attn", "bias")
+    transition_lambda = float(getattr(args, "transition_lambda", 1.0))
+    visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
     cfg = ModelConfig(args.dim, args.heads, args.layers, args.dropout, args.top_k,
                       args.temperature, args.lambda_prior, use_surd=not args.no_surd,
-                      router_mode=args.router_mode, hybrid_lambda=args.hybrid_lambda)
+                      router_mode=args.router_mode, hybrid_lambda=args.hybrid_lambda,
+                      causal_counts=causal_counts, transition_attn=transition_attn,
+                      transition_lambda=transition_lambda, visit_bins=visit_bins)
     device = select_device(args.device)
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
@@ -609,7 +723,9 @@ def train(args):
     model = cache.model(cfg).to(device)
     param_device = next(model.parameters()).device
     print(f"model_param_device={param_device} router_mode={cfg.router_mode} "
-          f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior}", flush=True)
+          f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior} "
+          f"causal_counts={cfg.causal_counts} transition_attn={cfg.transition_attn} "
+          f"visit_bins={cfg.visit_bins}", flush=True)
     if param_device.type != device.type or (
             device.index is not None and param_device.index not in (None, device.index)):
         raise RuntimeError(f"model landed on {param_device}, expected {device}")
@@ -626,12 +742,26 @@ def train(args):
     settings["popular_radius_km"] = cache.popular_radius_km
     settings["random_negatives"] = cache.random_negatives
     settings["max_train_candidates"] = args.max_train_candidates
+    settings["causal_counts"] = cfg.causal_counts
+    settings["transition_attn"] = cfg.transition_attn
+    settings["transition_lambda"] = cfg.transition_lambda
+    settings["visit_bins"] = cfg.visit_bins
     max_train_candidates = None if args.max_train_candidates < 0 else args.max_train_candidates
     category_frequency = Counter(data["C"].tolist())
     test = cache.split("test")
     pool_stats, pools_by_split = report_candidate_pool_stats(
         cache, {"train": data, "validation": val, "test": test})
     train_pools = pools_by_split["train"]
+    # Causal online tables: fit visit-bin edges on the train stream once; freeze for val/test.
+    online_tables = None
+    visit_bin_edges = None
+    if cfg.causal_counts:
+        online_tables = new_count_tables(cache, cfg)
+        visit_bin_edges = online_tables.fit_visit_bins(data, cfg.visit_bins)
+        print(f"causal_counts=on transition_attn={cfg.transition_attn} "
+              f"visit_bins={cfg.visit_bins} bin_edges={visit_bin_edges.tolist()} "
+              f"(train chronological, no shuffle; val/test start from train-end tables)",
+              flush=True)
     # Persist pool-size audit under results/ (not beside checkpoints).
     stats_dir = results_run_dir(out)
     stats_dir.mkdir(parents=True, exist_ok=True)
@@ -645,6 +775,13 @@ def train(args):
             max_train_candidates=args.max_train_candidates,
             eval_uses_full_pool=True,
         ),
+        causal_counts=dict(
+            enabled=cfg.causal_counts,
+            transition_attn=cfg.transition_attn,
+            transition_lambda=cfg.transition_lambda,
+            visit_bins=cfg.visit_bins,
+            visit_bin_edges=None if visit_bin_edges is None else visit_bin_edges.tolist(),
+        ),
         definition=("per-sample pool size after multi-source union "
                     "(neighborhood + popular + user-frequent + random negatives) "
                     "+ force-include in-catalog target (always, including val/test) "
@@ -654,12 +791,18 @@ def train(args):
     ), stats_dir / "candidate_pool_stats.json")
     print(f"Wrote {stats_dir / 'candidate_pool_stats.json'}", flush=True)
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
+    train_end_state = None
     for epoch in epoch_bar:
         check_interrupt()
         model.train()
         loss_sum, components = 0., torch.zeros(3, dtype=torch.float64)
         counts = torch.zeros(15, dtype=torch.long, device=device)
-        steps = list(torch.randperm(len(data["end"]), generator=batches).split(args.batch_size))
+        if cfg.causal_counts:
+            online_tables.reset()
+            # Chronological batches (stable by prediction timestamp); no shuffle.
+            steps = list(chronological_indices(data).split(args.batch_size))
+        else:
+            steps = list(torch.randperm(len(data["end"]), generator=batches).split(args.batch_size))
         for idx in tqdm(steps, desc=f"train ep{epoch}", leave=False, dynamic_ncols=True):
             check_interrupt()
             h, valid, target = device_batch(data, idx, device)
@@ -667,10 +810,18 @@ def train(args):
             rows, positive, cand_mask = sample_candidates(
                 target.detach().cpu(), len(cache.pois), args.negatives, rng,
                 pools=batch_pools, max_candidates=max_train_candidates)
+            count_ctx = None
+            if cfg.causal_counts:
+                # Per-sample read from current tables, then update with GT next hop.
+                cand_lists = masked_candidate_lists(rows, cand_mask)
+                count_ctx = gather_batch_context(
+                    online_tables, data, idx, cand_lists, int(valid.shape[1]), update=True)
+                count_ctx = count_ctx_to_device(count_ctx, device)
             rows, cand_mask = rows.to(device), cand_mask.to(device)
             prior, confidence = gather_fold_priors(
                 tables, data["fold"][idx], rows.masked_fill(~cand_mask, -1))
-            result = model(h, valid, rows, prior, confidence, candidate_mask=cand_mask)
+            result = model(h, valid, rows, prior, confidence, candidate_mask=cand_mask,
+                           count_ctx=count_ctx)
             loss, parts = objective(result, positive.to(device), args.lambda_surd, args.lambda_balance)
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -679,9 +830,13 @@ def train(args):
             counts += torch.bincount(result["top"].detach().reshape(-1), minlength=15)
             loss_sum += float(loss.detach()) * len(idx)
             components += torch.stack(parts).double().cpu() * len(idx)
+        # Val starts from a clone of tables at end of this training epoch.
+        val_tables = online_tables.clone() if cfg.causal_counts else None
+        if cfg.causal_counts:
+            train_end_state = online_tables.state_dict()
         # Pass category_frequency so val (and saved best) always include groups + Acc@1.
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
-                           category_frequency, desc=f"val ep{epoch}")
+                           category_frequency, desc=f"val ep{epoch}", count_tables=val_tables)
         score = metrics["all_targets"]["NDCG@10"]
         record = dict(epoch=epoch, loss=loss_sum / len(data["end"]),
                       loss_terms=dict(zip(("rec", "surd", "balance"), (components / len(data["end"])).tolist())),
@@ -690,8 +845,12 @@ def train(args):
         if score > best:
             best = score
             best_metrics = metrics
-            save_checkpoint(dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
-                                 epoch=epoch, validation_ndcg10=score, training_args=settings), out / "best.pt")
+            payload = dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
+                           epoch=epoch, validation_ndcg10=score, training_args=settings)
+            if train_end_state is not None:
+                payload["count_tables"] = train_end_state
+                payload["visit_bin_edges"] = visit_bin_edges.tolist()
+            save_checkpoint(payload, out / "best.pt")
         dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
                    "epochs": history}, out / "history.json")
         row = metrics["all_targets"]
@@ -713,8 +872,21 @@ def train(args):
         checkpoint = load_file(best_path)
         model.load_state_dict(checkpoint["weights"])
         model.eval()
+        test_tables = None
+        if cfg.causal_counts:
+            # Test starts from train-end tables stored with the best checkpoint
+            # (same snapshot as val would clone; independent of val updates).
+            if checkpoint.get("count_tables") is not None:
+                test_tables = new_count_tables(cache, cfg)
+                test_tables.load_state_dict(checkpoint["count_tables"])
+            else:
+                edges = checkpoint.get("visit_bin_edges")
+                test_tables = replay_train_tables(
+                    cache, cfg, data,
+                    visit_bin_edges=None if edges is None else torch.tensor(edges))
         test_metrics = evaluate(model, final, test, cache, args.eval_batch_size,
-                                args.chunk, category_frequency, desc="eval test")
+                                args.chunk, category_frequency, desc="eval test",
+                                count_tables=test_tables)
         test_payload = build_eval_payload(args, cache, test_metrics, device,
                                           checkpoint_path=best_path, checkpoint=checkpoint)
         test_payload["split"] = "test"
@@ -733,8 +905,23 @@ def load_model(args):
     model = cache.model(cfg).to(device)
     load_weights(model, checkpoint["weights"])
     print(f"model_param_device={next(model.parameters()).device} "
-          f"router_mode={cfg.router_mode}", flush=True)
+          f"router_mode={cfg.router_mode} causal_counts={cfg.causal_counts} "
+          f"transition_attn={cfg.transition_attn}", flush=True)
     return cache, model.eval(), cache.table("final", device), checkpoint
+
+
+def train_end_count_tables(cache, cfg, checkpoint, train_data):
+    """Tables at end of training: prefer checkpoint snapshot, else replay train."""
+    if not cfg.causal_counts:
+        return None
+    if checkpoint.get("count_tables") is not None:
+        tables = new_count_tables(cache, cfg)
+        tables.load_state_dict(checkpoint["count_tables"])
+        return tables
+    edges = checkpoint.get("visit_bin_edges")
+    return replay_train_tables(
+        cache, cfg, train_data,
+        visit_bin_edges=None if edges is None else torch.tensor(edges))
 
 
 def report(value, dest):
@@ -750,12 +937,20 @@ def evaluate_cli(args):
     install_interrupt_handler()
     cache, model, table, checkpoint = load_model(args)
     device = table.routing_prior.device
+    cfg = model.cfg
     training = cache.split("train")
     category_frequency = Counter(training["C"].tolist())
     data = cache.split(args.split)
     pool_stats, _ = report_candidate_pool_stats(cache, {args.split: data})
+    # Val/test: clone tables at end of training, then chronological score→update.
+    count_tables = train_end_count_tables(cache, cfg, checkpoint, training)
+    if count_tables is not None:
+        print(f"causal_counts: loaded train-end tables "
+              f"(visit_bins={cfg.visit_bins}); continuing chronological updates on "
+              f"{args.split}", flush=True)
     metrics = evaluate(model, table, data, cache, args.eval_batch_size,
-                       args.chunk, category_frequency, desc=f"eval {args.split}")
+                       args.chunk, category_frequency, desc=f"eval {args.split}",
+                       count_tables=count_tables)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
     payload["candidate_pool_stats"] = pool_stats.get(args.split)
@@ -767,19 +962,40 @@ def evaluate_cli(args):
 @torch.inference_mode()
 def explain(args):
     install_interrupt_handler()
-    cache, model, table, _ = load_model(args)
+    cache, model, table, checkpoint = load_model(args)
+    cfg = model.cfg
     data = cache.split(args.split)
     i = args.sample_index
     if not 0 <= i < len(data["end"]):
         raise ValueError("sample-index outside split")
-    h, valid, target = device_batch(data, torch.tensor([i]), table.routing_prior.device)
-    encoded = model.encode(h, valid)
+    device = table.routing_prior.device
+    # Bring causal tables to the state just before sample i (train-end + prior samples).
+    count_tables = train_end_count_tables(cache, cfg, checkpoint, cache.split("train"))
+    count_ctx = None
+    if count_tables is not None:
+        order = chronological_indices(data)
+        for j in order.tolist():
+            if j == i:
+                break
+            count_tables.update_sample(data, j)
+    h, valid, target = device_batch(data, torch.tensor([i]), device)
     pools, resolutions = cache.candidate_pools(data)
     pool, resolution = pools[i], resolutions[i]
+    if count_tables is not None:
+        if cache.uses_full_catalog_pools():
+            cand_lists = [list(range(len(cache.pois)))]
+        else:
+            cand_lists = [pool.tolist()]
+        count_ctx = gather_batch_context(
+            count_tables, data, torch.tensor([i]), cand_lists, int(valid.shape[1]),
+            update=False)
+        count_ctx = count_ctx_to_device(count_ctx, device)
+    encoded = model.encode(h, valid, count_ctx)
     if args.poi_id is not None and args.poi_id not in table.row_of:
         raise ValueError("candidate POI outside the training catalog")
     if cache.uses_full_catalog_pools():
-        scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk)
+        scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk,
+                            count_ctx=count_ctx)
         if args.poi_id is None:
             row = int(target[0]) if target[0] >= 0 else int(scores.argmax())
         else:
@@ -787,7 +1003,7 @@ def explain(args):
         candidate_rank = int(ranks_of(scores, torch.tensor([row]))[0])
     else:
         pool_scores, pool_rows, pool_mask = score_pools(
-            model, table, encoded, valid, [pool], args.chunk)
+            model, table, encoded, valid, [pool], args.chunk, count_ctx=count_ctx)
         if args.poi_id is None:
             if target[0] >= 0:
                 row = int(target[0])
@@ -799,7 +1015,21 @@ def explain(args):
         candidate_rank = ranks_in_pools(pool_scores, pool_rows, pool_mask, torch.tensor([row]))[0]
     rows = torch.tensor([[row]], device=valid.device)
     prior, confidence = table(rows)
-    result = model.score(encoded, valid, rows, prior, confidence, details=True)
+    # Single-candidate slice of count context for the detailed score path.
+    detail_ctx = None
+    if count_ctx is not None:
+        # Find column of `row` inside the gathered candidate list, or rebuild.
+        if cache.uses_full_catalog_pools():
+            detail_ctx = slice_count_ctx(count_ctx, row, row + 1)
+        else:
+            pos = (pool == row).nonzero(as_tuple=False)
+            if pos.numel():
+                j = int(pos[0])
+                detail_ctx = slice_count_ctx(count_ctx, j, j + 1)
+            else:
+                detail_ctx = None
+    result = model.score(encoded, valid, rows, prior, confidence, details=True,
+                         count_ctx=detail_ctx)
     def get(key):
         return result[key][0, 0].tolist()
     top = [EXPERT_ORDER[j] for j in get("top")]
@@ -834,19 +1064,33 @@ def explain(args):
 @torch.inference_mode()
 def recommend(args):
     install_interrupt_handler()
-    cache, model, table, _ = load_model(args)
+    cache, model, table, checkpoint = load_model(args)
+    cfg = model.cfg
     groups, _ = read_split(args.history)
     cats = Categories.from_manifest(cache.meta["preprocessing"])
     data = build_split(groups, cats, cache.pois, cache.meta["cat_vocab"], cache.cfg["max_length"], "predict")
     pools, resolutions = cache.candidate_pools(data)
+    # Use frozen train-end tables (no GT updates on recommend histories).
+    base_tables = train_end_count_tables(cache, cfg, checkpoint, cache.split("train"))
     records = []
     batches = list(torch.arange(len(data["end"])).split(args.eval_batch_size))
     for idx in tqdm(batches, desc="recommend", dynamic_ncols=True):
         check_interrupt()
         h, valid, _ = device_batch(data, idx, table.routing_prior.device, labels=False)
-        encoded = model.encode(h, valid)
+        count_ctx = None
+        if base_tables is not None:
+            if cache.uses_full_catalog_pools():
+                cand_lists = [list(range(len(cache.pois))) for _ in idx.tolist()]
+            else:
+                cand_lists = [pools[i].tolist() for i in idx.tolist()]
+            # Read-only: do not mutate the shared train-end snapshot across batches.
+            count_ctx = gather_batch_context(
+                base_tables, data, idx, cand_lists, int(valid.shape[1]), update=False)
+            count_ctx = count_ctx_to_device(count_ctx, table.routing_prior.device)
+        encoded = model.encode(h, valid, count_ctx)
         if cache.uses_full_catalog_pools():
-            scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk)
+            scores = all_scores(model, table, encoded, valid, len(cache.pois), args.chunk,
+                                count_ctx=count_ctx)
             top = torch.argsort(scores, descending=True, stable=True)[:, :args.top_n]
             for i, js, row_scores in zip(idx.tolist(), top.tolist(), scores):
                 user, trail = data["trails"][data["trail"][data["end"][i] - 1]]
@@ -858,7 +1102,7 @@ def recommend(args):
         else:
             batch_pools = [pools[i] for i in idx.tolist()]
             pool_scores, pool_rows, pool_mask = score_pools(
-                model, table, encoded, valid, batch_pools, args.chunk)
+                model, table, encoded, valid, batch_pools, args.chunk, count_ctx=count_ctx)
             for bi, i in enumerate(idx.tolist()):
                 active = pool_mask[bi]
                 scores = pool_scores[bi][active]

@@ -5,6 +5,7 @@ import sys
 
 import torch
 
+from .counts import DEFAULT_VISIT_BINS, TRANSITION_ATTN_MODES
 from .engine import evaluate_cli, explain, recommend, train
 from .prepare import prepare
 from .inspect import inspect_prior
@@ -111,6 +112,28 @@ def main():
              "(default -1 = no extra cap beyond --negatives); evaluation always "
              "uses the full constructed pool")
     t.add_argument("--no-surd", action="store_true", help="context-only U/S MoE ablation: disable all statistical guidance")
+    t.add_argument(
+        "--causal-counts", dest="no_causal_counts", action="store_false",
+        help="enable causal online visit/transition count tables + transition "
+             "cross-attn (default: on). Train is chronological (no shuffle); "
+             "val/test start from train-end tables. See docs/causal-counts.md")
+    t.add_argument(
+        "--no-causal-counts", dest="no_causal_counts", action="store_true",
+        help="disable the causal count module (restore shuffled minibatches)")
+    t.set_defaults(no_causal_counts=False)
+    t.add_argument(
+        "--transition-attn", choices=TRANSITION_ATTN_MODES, default="bias",
+        help="how global transition counts enter P/C cross-attn: "
+             "bias (default) = λ·log1p(count) on logits; "
+             "gate = sigmoid MLP gate; rel_key = MLP(φ) added to keys. "
+             "P-source uses POI→POI; C-source uses category→POI")
+    t.add_argument(
+        "--transition-lambda", type=float, default=1.0,
+        help="scale on log1p(transition) bias terms (default 1.0; bias mode)")
+    t.add_argument(
+        "--visit-bins", type=positive, default=DEFAULT_VISIT_BINS,
+        help=f"equal-frequency bins of user cumulative visit count for T/L "
+             f"(default {DEFAULT_VISIT_BINS}; fit on train stream, freeze for val/test)")
     t.add_argument("--seed", type=int, default=42)
     t.set_defaults(func=train)
 
@@ -161,9 +184,11 @@ def main():
                                     args.max_train_candidates == 0 or args.max_train_candidates < -1 or
                                     min(args.lambda_prior, args.hybrid_lambda, args.lambda_surd,
                                         args.lambda_balance, args.weight_decay) < 0
-                                    or min(args.lr, args.grad_clip) <= 0):
+                                    or min(args.lr, args.grad_clip) <= 0
+                                    or getattr(args, "transition_lambda", 1.0) < 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
-                   "nonnegative strengths and positive lr/grad-clip")
+                   "nonnegative strengths and positive lr/grad-clip; "
+                   "transition-lambda must be nonnegative")
     torch.set_num_threads(args.threads)
     try:
         args.func(args)

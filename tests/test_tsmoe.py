@@ -22,6 +22,10 @@ from tsmoe.candidates import (
     summarize_distances, summarize_pool_sizes,
 )
 from tsmoe.prepare import dump_json
+from tsmoe.counts import (
+    COUNT_FEAT_DIM, DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices,
+    equal_frequency_edges, gather_batch_context, sample_hop, visit_bin_id,
+)
 from tsmoe.data import (
     FEATURE_METHOD, L_DIM, L_STEP_VALID_INDEX, STHGCN_BASIS_DIM, T_DIM,
     T_HOUR_DIM, T_RELATIVE_SLICE, T_WEEKDAY_DIM, Categories, Event,
@@ -32,7 +36,7 @@ from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, candidates, format_eval_report, metric_row,
     model_config_from_checkpoint, ranks_of, results_run_dir,
 )
-from tsmoe.model import ModelConfig, TSMoE, objective
+from tsmoe.model import ModelConfig, TSMoE, TransitionCrossAttention, objective
 from tsmoe.quantizer import BasicSourceQuantizer
 from tsmoe.surd import _self_test
 
@@ -691,6 +695,146 @@ class TestDesign(unittest.TestCase):
             for split in ("train", "validation", "test"):
                 info = Cache(alt).meta["audit"][split]
                 self.assertEqual(info["samples"], info["trails"])
+
+
+class TestCausalCounts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        torch.set_num_threads(1)
+
+    def _tiny_split(self):
+        """Two users, overlapping timestamps so order is nontrivial."""
+        from datetime import datetime, timedelta, timezone
+        t0 = datetime(2018, 1, 1, tzinfo=timezone.utc)
+
+        def ev(poi, cat, hour, line):
+            return Event(poi, f"c{cat}", cat, t0 + timedelta(hours=hour), (0.0, 0.0), line)
+
+        groups = {
+            ("u1", "t1"): [ev(1, 0, 0, 1), ev(2, 1, 1, 2), ev(3, 0, 4, 3)],
+            ("u2", "t2"): [ev(2, 1, 2, 4), ev(1, 0, 3, 5), ev(4, 1, 5, 6)],
+        }
+        cats = Categories(groups)
+        pois = [1, 2, 3, 4]
+        cat_vocab = sorted({cats(e) for events in groups.values() for e in events})
+        return build_split(groups, cats, pois, cat_vocab, 4, "all"), len(pois), len(cat_vocab)
+
+    def test_chronological_order_no_shuffle(self):
+        data, _, _ = self._tiny_split()
+        order = chronological_indices(data)
+        stamps = data["us"][data["end"]][order]
+        self.assertTrue(torch.all(stamps[1:] >= stamps[:-1]))
+        # Must not match a random permutation in general; at least sorted.
+        self.assertEqual(order.tolist(), torch.argsort(data["us"][data["end"]], stable=True).tolist())
+
+    def test_causal_update_score_then_write(self):
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        order = chronological_indices(data)
+        first = int(order[0])
+        user, prev_p, prev_c, next_p, next_c = sample_hop(data, first)
+        # Before any update, counts are zero.
+        self.assertEqual(tables.poi_poi_count(prev_p, next_p), 0.0)
+        self.assertEqual(int(tables.user_visits[user]), 0)
+        feat_before = tables.poi_feat(user, next_p)
+        tables.update_sample(data, first)
+        self.assertEqual(tables.poi_poi_count(prev_p, next_p), 1.0)
+        self.assertEqual(int(tables.user_visits[user]), 1)
+        self.assertGreater(tables.poi_feat(user, next_p)[0], feat_before[0])
+        # Replay of remaining samples is strictly increasing global mass.
+        before = float(tables.global_poi.sum())
+        for i in order[1:].tolist():
+            tables.update_sample(data, i)
+        self.assertGreater(float(tables.global_poi.sum()), before)
+
+    def test_equal_frequency_binning(self):
+        values = list(range(20))
+        edges = equal_frequency_edges(values, 5)
+        self.assertTrue(torch.all(edges[1:] >= edges[:-1]))
+        bins = [visit_bin_id(v, edges) for v in values]
+        self.assertEqual(min(bins), 0)
+        self.assertLessEqual(max(bins), 5)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=DEFAULT_VISIT_BINS)
+        edges = tables.fit_visit_bins(data)
+        self.assertEqual(tables.visit_bins, DEFAULT_VISIT_BINS)
+        # After fit, tables are reset but edges frozen.
+        self.assertEqual(int(tables.global_poi.sum()), 0)
+        self.assertIsNotNone(tables.visit_bin_edges)
+        clone = tables.clone()
+        tables.replay(data)
+        # Val/test start from train-end clone, not the live mutating table mid-stream.
+        frozen = tables.clone()
+        self.assertEqual(float(frozen.global_poi.sum()), float(tables.global_poi.sum()))
+        self.assertEqual(clone.visit_bin_edges.tolist(), tables.visit_bin_edges.tolist())
+
+    def test_transition_attn_modes_shapes(self):
+        torch.manual_seed(0)
+        b, c, length, d, heads = 2, 3, 4, 8, 2
+        query = torch.randn(b, c, d)
+        key = torch.randn(b, length, d)
+        valid = torch.tensor([[True, True, True, False], [True, True, False, False]])
+        counts = torch.randint(0, 5, (b, c, length)).float()
+        for mode in ("bias", "gate", "rel_key"):
+            layer = TransitionCrossAttention(d, heads, 0.0, mode, transition_lambda=1.0)
+            out = layer(query, key, key, ~valid, counts)
+            self.assertEqual(tuple(out.shape), (b, c, d), msg=mode)
+            self.assertTrue(torch.isfinite(out).all(), msg=mode)
+
+    def test_model_forward_with_count_ctx_all_modes(self):
+        torch.manual_seed(2)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:2]
+        h, valid, target = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(len(idx), -1)
+        cand_lists = [list(range(n_pois)) for _ in idx.tolist()]
+        ctx = gather_batch_context(tables, data, idx, cand_lists, int(valid.shape[1]), update=True)
+        prior = torch.zeros(len(idx), n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(len(idx), n_pois)
+        for mode in ("bias", "gate", "rel_key"):
+            cfg = ModelConfig(8, 2, 1, 0., 2, router_mode="hard_prior",
+                              causal_counts=True, transition_attn=mode, visit_bins=4)
+            model = TSMoE(n_pois, n_cats, 4, cfg).eval()
+            with torch.no_grad():
+                out = model(h, valid, cand, prior, conf, count_ctx=ctx)
+            self.assertEqual(tuple(out["score"].shape), (len(idx), n_pois), msg=mode)
+            self.assertTrue(torch.isfinite(out["score"]).all(), msg=mode)
+            # Count feature dims feed the MLPs.
+            self.assertEqual(model.poi_count_mlp[0].in_features, COUNT_FEAT_DIM)
+            self.assertEqual(model.visit_bin_emb.num_embeddings, 4)
+
+    def test_legacy_checkpoint_disables_causal_counts(self):
+        legacy = model_config_from_checkpoint(dict(
+            dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,
+            lambda_prior=.1, use_surd=True))
+        self.assertFalse(legacy.causal_counts)
+        self.assertEqual(legacy.transition_attn, "bias")
+        self.assertEqual(ModelConfig().causal_counts, True)
+        self.assertEqual(ModelConfig().transition_attn, "bias")
+        self.assertEqual(ModelConfig().visit_bins, DEFAULT_VISIT_BINS)
+
+    def test_cli_causal_train_smoke(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = generate(root / "data")
+            cache_path, run = root / "cache", root / "run_causal"
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path)
+            run_cli("train", "--cache", cache_path, "--out", run, "--epochs", 1,
+                    "--dim", 8, "--layers", 1, "--heads", 2, "--device", "cpu",
+                    "--negatives", 3, "--threads", 1, "--transition-attn", "bias",
+                    "--visit-bins", 4)
+            ckpt = torch.load(run / "best.pt", map_location="cpu", weights_only=False)
+            self.assertTrue(ckpt["config"]["causal_counts"])
+            self.assertEqual(ckpt["config"]["transition_attn"], "bias")
+            self.assertEqual(ckpt["config"]["visit_bins"], 4)
+            self.assertIn("count_tables", ckpt)
+            self.assertIn("visit_bin_edges", ckpt)
+            # evaluate rebuilds / loads train-end tables
+            run_cli("evaluate", "--cache", cache_path, "--checkpoint", run / "best.pt",
+                    "--device", "cpu", "--split", "test", "--chunk", 3)
 
 
 if __name__ == "__main__":
