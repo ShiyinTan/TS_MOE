@@ -13,7 +13,12 @@ import torch
 
 from examples.make_demo import generate
 from tsmoe.__main__ import main
-from tsmoe.data import Categories, build_split, make_batch, read_split
+from tsmoe.candidates import (
+    catalog_coordinates, consecutive_visit_distances, haversine_km,
+    neighborhood_indices, pick_radius_km, resolve_candidate_pool,
+    sample_candidates, summarize_distances,
+)
+from tsmoe.data import Categories, Event, build_split, make_batch, read_split
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, candidates, format_eval_report, metric_row,
     ranks_of, results_run_dir,
@@ -145,6 +150,50 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(row["Acc@1"], 1 / 3)
         self.assertEqual(row["NDCG@1"], 1 / 3)
 
+    def test_distance_stats_and_spatial_pools(self):
+        # ~111 km per degree latitude; controlled consecutive hops.
+        from datetime import datetime, timezone
+        t0 = datetime(2018, 1, 1, tzinfo=timezone.utc)
+
+        def event(poi, lat, lon, line):
+            return Event(poi, "cat", 0, t0, (lat, lon), line)
+
+        groups = {
+            ("u", "a"): [event(1, 0.0, 0.0, 1), event(2, 0.0, 1.0, 2), event(3, 0.0, 2.0, 3)],
+            ("u", "b"): [event(2, 0.0, 1.0, 4), event(4, 1.0, 1.0, 5)],
+        }
+        distances = consecutive_visit_distances(groups)
+        self.assertEqual(len(distances), 3)
+        self.assertAlmostEqual(distances[0], haversine_km(0.0, 0.0, 0.0, 1.0), places=6)
+        stats = summarize_distances(distances)
+        self.assertEqual(stats["count"], 3)
+        self.assertAlmostEqual(stats["max_km"], max(distances))
+        self.assertAlmostEqual(stats["mean_km"], sum(distances) / 3)
+        self.assertAlmostEqual(pick_radius_km(stats, "max"), stats["max_km"])
+        self.assertAlmostEqual(pick_radius_km(stats, "p90"), stats["p90_km"])
+        self.assertIsNone(pick_radius_km(stats, "full"))
+        pois = [1, 2, 3, 4]
+        coords = torch.tensor(catalog_coordinates(groups, pois), dtype=torch.float64)
+        near = neighborhood_indices(0.0, 0.0, coords, radius_km=stats["mean_km"] * 0.5)
+        # Only POI 1 is at the origin; mean_km/2 should exclude the ~111 km neighbors.
+        self.assertEqual(near.tolist(), [0])
+        pool, how = resolve_candidate_pool(0.0, 0.0, target_row=3, catalog_coords=coords,
+                                           radius_km=1.0, catalog_size=4)
+        self.assertEqual(how, "spatial")
+        self.assertIn(0, pool.tolist())  # origin POI
+        self.assertIn(3, pool.tolist())  # force-included target
+        full, how = resolve_candidate_pool(float("nan"), 0.0, 1, coords, 10.0, 4)
+        self.assertEqual(how, "fallback_full_catalog")
+        self.assertEqual(full.tolist(), [0, 1, 2, 3])
+        empty, how = resolve_candidate_pool(10.0, 10.0, 0, coords, 0.01, 4)
+        self.assertEqual(how, "fallback_full_catalog")
+        rows, labels, mask = sample_candidates(
+            torch.tensor([0]), 4, 1, random.Random(0), pools=[pool])
+        self.assertTrue(mask[0, 0].item())
+        self.assertEqual(int(rows[0, 0]), 0)
+        self.assertEqual(int(labels[0]), 0)
+        self.assertEqual(int(mask[0].sum()), 2)
+
     def test_results_run_dir_strips_runs_prefix(self):
         with tempfile.TemporaryDirectory() as temp:
             cwd = Path(temp)
@@ -189,6 +238,15 @@ class TestDesign(unittest.TestCase):
             run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path)
             cache = Cache(cache_path)
             train = cache.split("train")
+            self.assertEqual(cache.cfg["candidate_radius"], "p90")
+            self.assertIsNotNone(cache.radius_km)
+            self.assertEqual(cache.candidate_construction["method"], "spatial_radius")
+            self.assertEqual(len(cache.meta["poi_coordinates"]), len(cache.pois))
+            self.assertIn("lat", train)
+            self.assertIn("lon", train)
+            pools, resolutions = cache.candidate_pools(train)
+            self.assertEqual(len(pools), len(train["end"]))
+            self.assertTrue(any(r in ("spatial", "fallback_full_catalog") for r in resolutions))
             run_cli("inspect", "--cache", cache_path, "--poi-id", cache.pois[0], "--sample-index", 0,
                     "--output", root / "trace.json")
             trace = json.loads((root / "trace.json").read_text())
@@ -218,6 +276,8 @@ class TestDesign(unittest.TestCase):
             self.assertIn("Acc@1", train_test["all_targets"])
             self.assertIn("Acc@10", train_test["all_targets"])
             self.assertEqual(train_test["primary_metrics"], ["Acc@1", "NDCG@1", "MRR"])
+            self.assertEqual(train_test["candidate_construction"]["method"], "spatial_radius")
+            self.assertEqual(train_test["candidate_construction"]["radius_statistic"], "p90")
             self.assertIn("group_notes", train_test)
             self.assertTrue(train_test.get("groups"))
             self.assertIn("poi/head_10_plus", train_test["group_labels"])

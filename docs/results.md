@@ -13,8 +13,10 @@ Final evaluation **metrics and reports** are stored under a top-level `results/`
 
 Each `eval_*` directory contains:
 
-- `metrics.json` — full payload (Acc/Hit/Recall, NDCG, MRR, MAP @1/5/10/20, groups, device, cache id, timestamp, model config, …)
+- `metrics.json` — full payload (Acc/Hit/Recall, NDCG, MRR, MAP @1/5/10/20, groups, device, cache id, timestamp, model config, `candidate_construction`, …)
 - `report.txt` — same summary printed to the terminal (Acc@1 headline + tables)
+
+Ranking is over the cache candidate set (spatial neighborhood by default; see [`candidates.md`](candidates.md)), not necessarily the full POI catalog.
 
 Optional: `evaluate --output path.json` still mirrors the JSON to an extra path.
 

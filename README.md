@@ -1,6 +1,6 @@
 # TS-MoE · Massive-STEPS 下一 POI 推荐
 
-Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。支持全目录评估、新轨迹推荐，以及从联合计数到单个候选得分的追踪。
+Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域内的训练目录 POI（半径取自连续访问距离的 P90；也可用 mean / max，或 `full` 退回全目录）。训练负采样与评估排名共用同一构造。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
 
 算法设计见仓库根目录 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
 
@@ -242,7 +242,11 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 训练与评估均用每条轨迹末站 | `--train-targets last --eval-targets last` |
 | 全部前缀训练，仅评估末站 | `--train-targets all --eval-targets last` |
 
-改变簇数、窗口或目标选取时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。
+改变簇数、窗口、目标选取或 `--candidate-radius` 时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估（半径写进 `manifest.json`，**必须重新 prepare** 后 train / evaluate 才会一致）。
+
+### 空间邻域候选（默认）
+
+`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）在训练集上统计连续 check-in 的球面距离，把所选分位数（或均值 / 最大值）存为 `radius_km`。每个样本的锚点是**目标前一签**的经纬度；候选 = 训练目录中落在该半径内的 POI（始终包含目录内真实目标）。若锚点无坐标或邻域为空，该样本回退为**全目录**。详情见 [`docs/candidates.md`](docs/candidates.md)。
 
 ---
 
@@ -254,7 +258,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | --- | --- |
 | `prepare` | 读 CSV → 样本、折外量化器、逐 POI SURD 表 → 写入 `--out` 缓存 |
 | `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `results/.../eval_validation/`，并对最佳模型跑一次 test → `results/.../eval_test/`（摘要以 Acc@1 打头） |
-| `evaluate` | 全目录精确排名；默认写入 `results/.../eval_<split>/{metrics.json,report.txt}`；终端 / 报告以 Acc@1 / NDCG@1 / MRR 为头条；完整 Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20 + groups |
+| `evaluate` | 在缓存候选集上排名（默认空间邻域，与训练一致；`--candidate-radius full` 时为全目录）；默认写入 `results/.../eval_<split>/{metrics.json,report.txt}`；终端 / 报告以 Acc@1 / NDCG@1 / MRR 为头条；完整 Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20 + groups |
 | `inspect` | 查看某 POI 的 26 维 SURD；可选某训练前缀的簇与联合计数 |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
 | `explain` | 审计一个候选的先验、路由与得分贡献 |
@@ -284,11 +288,12 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 | --- | --- |
 | `prepare --max-length`、`--hash-dim`、`--tau-pos` | 50、64、10 |
 | `prepare --clusters`、`--folds`、`--warmup` | 4、3、0.2 |
+| `prepare --candidate-radius` | `p90`（默认）/ `mean` / `max` / `full`；写入缓存，train 与 evaluate 共用 |
 | `train --dim`、`--heads`、`--layers` | 128、4、2 |
 | `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
 | `train --top-k`、`--temperature` | 4、1.0 |
 | `train --lambda-prior`、`--lambda-surd`、`--lambda-balance` | 0.1、0.05、0.001 |
-| `train --negatives` | 每例 63 个均匀负例；`-1` 为全目录 |
+| `train --negatives` | 每例从**候选池**抽 63 个负例；`-1` 为池内其余全部（空间模式下非全局目录） |
 | `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督（结构仍保留） |
 | `--device`（仅 train / evaluate / explain / recommend） | 默认 `auto`：`cuda.is_available()` 则为 CUDA，否则 CPU（并 WARNING）；也可 `cpu`、`cuda`、`cuda:0`、`mps`；启动打印 `Using device=...` |
 | `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128（可按显存下调） |
@@ -349,10 +354,12 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 | `environment.yml` | Conda 环境骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124 安装） |
 | `requirements.txt` | pip 版本约束（`numpy`、`tqdm`、`torch`；CUDA 轮子见上文索引 URL） |
 | `docs/results.md` | `results/` 与 `runs/` 分工、默认路径、如何读 Acc@1 |
+| `docs/candidates.md` | 空间邻域候选：`--candidate-radius`、回退规则、train/eval 一致性 |
 | `examples/download_city.py` | 从 Hugging Face 拉取某城市三个 `*_checkins_*.csv` |
 | `examples/make_demo.py` | 合成 demo CSV（无需下载） |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列（不 import torch） |
 | `tsmoe/data.py` | CSV 读取、类别对齐、时间与地理特征、窗口 |
+| `tsmoe/candidates.py` | 连续访问距离统计、空间邻域池、负采样 |
 | `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
 | `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
 | `tsmoe/prepare.py`、`tsmoe/inspect.py` | 折外估计、缓存、逐样本追踪 |
