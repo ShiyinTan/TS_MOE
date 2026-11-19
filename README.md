@@ -1,20 +1,39 @@
 # TS-MoE · Massive-STEPS 下一 POI 推荐
 
-Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域内的训练目录 POI（半径取自连续访问距离的 P90；也可用 mean / max，或 `full` 退回全目录）。训练负采样与评估排名共用同一构造。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
+Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域内的训练目录 POI（半径取自连续访问距离的 P90；也可用 `mean` / `max`，或 `full` 退回全目录）。训练负采样与评估排名共用同一构造。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
 
-算法设计见仓库根目录 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
+算法设计见 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
 
-**依赖是 Python 标准库 + NumPy + tqdm + PyTorch**（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：请在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
+**依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-面向 **NVIDIA GPU 服务器**：用 conda 建 Python 环境，再用 **pip** 装 NumPy、tqdm 与 **CUDA 12.4 轮子**的 PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（检测到 CUDA 时用 GPU）；训练开始会打印 `Using device=...`。东京连通性烟雾曾在 CPU 上跑通；GPU 上用同一 CLI，换 `--device` 即可。进度条默认开启（`tqdm`；无 TTY 时仍会按行刷新）。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（见 [`docs/results.md`](docs/results.md)）。空间候选细节见 [`docs/candidates.md`](docs/candidates.md)。
+
+面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
 ---
 
-## 1. 用 Conda 创建 CUDA 环境（推荐）
+## 目录
 
-需要已安装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 或 Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。`environment.yml` 创建 **Python 3.12 + pip + NumPy + tqdm**；随后从 PyTorch 官方 cu124 索引安装 GPU 轮子（**无需**本机再装完整 CUDA Toolkit）。
+1. [安装](#1-安装)
+2. [数据准备](#2-数据准备)
+3. [运行（可复制命令）](#3-运行可复制命令)
+4. [配置 knobs](#4-配置-knobs)
+5. [结果目录](#5-结果目录)
+6. [仓库 / 代码布局](#6-仓库--代码布局)
+7. [命令一览与其它入口](#7-命令一览与其它入口)
+8. [算法要点（简要）](#8-算法要点简要)
+9. [测试与东京烟雾参考](#9-测试与东京烟雾参考)
+10. [当前局限](#10-当前局限)
 
-为何不用 `conda install pytorch pytorch-cuda`：conda 版 `libtorch_cpu.so` 动态链接 MKL / `intel-openmp`，solver 若拉到不兼容的 MKL（常见于 2024.1+ / 2025.x）会在 `import torch` 时报 `undefined symbol: iJIT_NotifyEvent`。官方 **pip CUDA 轮子静态链接 MKL**，可避开该冲突。
+---
+
+## 1. 安装
+
+需要 [Miniconda](https://docs.conda.io/en/latest/miniconda.html) / Anaconda，以及可用的 NVIDIA 驱动（`nvidia-smi` 正常）。`environment.yml` 创建 **Python 3.12 + pip + NumPy + tqdm**；再用官方 **cu124** 索引装 GPU 版 PyTorch（**无需**本机完整 CUDA Toolkit）。
+
+为何不用 `conda install pytorch pytorch-cuda`：conda 版 `libtorch_cpu.so` 动态链接 MKL，易与不兼容的 `mkl` / `intel-openmp` 冲突（`undefined symbol: iJIT_NotifyEvent`）。官方 **pip CUDA 轮子静态链接 MKL**，可避开该问题。
+
+### 1.1 Conda + pip cu124（推荐）
 
 ```bash
 cd TS_MOE   # 仓库根目录
@@ -22,82 +41,48 @@ cd TS_MOE   # 仓库根目录
 conda env create -f environment.yml
 conda activate tsmoe
 
-# NumPy + tqdm（PyPI；与 requirements.txt 一致）。已有 env 缺依赖时可单独跑。
+# NumPy + tqdm（与 requirements.txt 一致；已有 env 缺依赖时可单独跑）
 python -m pip install "numpy>=1.26,<3" "tqdm>=4.66,<5"
 
-# CUDA 12.4 构建；与 requirements.txt 的版本范围一致
+# CUDA 12.4 轮子
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
 
 # 确认：应打印 True，且 device 为 cuda:0（或同类）
 python -c "import numpy, tqdm, torch; print(numpy.__version__, tqdm.__version__, torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
 ```
 
-之后若只改了 `environment.yml`（Python / pip / NumPy / tqdm）：
+只改了 `environment.yml`（Python / pip / NumPy / tqdm）时：
 
 ```bash
 conda env update -f environment.yml --prune
 ```
 
-PyTorch 本身请继续用上面的 `pip install ... --index-url .../cu124`（或下文 CPU / 其它 CUDA 索引）管理，不要再 `conda install pytorch`。
+PyTorch 请继续用上面的 `pip install ... --index-url .../cu124`（或下文 CPU / 其它 CUDA 索引），不要 `conda install pytorch`。
 
-**CUDA 版本假设：** 默认按常见 GPU 服务器选用 **cu124**。若驱动偏旧，把索引改成 `https://download.pytorch.org/whl/cu121` 或 `.../cu118` 后重装 torch；对照 [PyTorch 安装页](https://pytorch.org/get-started/locally/) 选择匹配组合。
+**CUDA 版本：** 默认 **cu124**。驱动偏旧时改用 `https://download.pytorch.org/whl/cu121` 或 `.../cu118`；对照 [PyTorch 安装页](https://pytorch.org/get-started/locally/)。
 
-### 修复已有损坏的 `tsmoe` 环境（`iJIT_NotifyEvent`）
+### 1.2 修复已有损坏环境（`iJIT_NotifyEvent`）
 
-若已按旧 README 用 conda 装过 `pytorch` / `pytorch-cuda`，且出现：
-
-`ImportError: .../torch/lib/libtorch_cpu.so: undefined symbol: iJIT_NotifyEvent`
-
-在**现有**环境里卸掉 conda 的 PyTorch 栈，改用 pip 轮子（不必删整个 env）：
+若曾用 conda 装过 `pytorch` / `pytorch-cuda` 并出现上述符号错误，在现有环境里改用 pip 轮子：
 
 ```bash
 conda activate tsmoe
-
-# 卸掉旧 README 用 conda 装上的动态链接 torch 栈
 conda remove -y pytorch pytorch-cuda
-
-# 用官方 CUDA 12.4 轮子重装（静态链接 MKL）
 python -m pip install --force-reinstall "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
-
 python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
 ```
 
-若仍报同样符号错误，多半是环境里残留了冲突的 OpenMP/MKL；可再执行：
+仍报错时可再钉旧 OpenMP/MKL 后重装 torch：
 
 ```bash
 conda activate tsmoe
 conda install -y "mkl<2024.1" "intel-openmp<2024.1"
 python -m pip install --force-reinstall "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
-python -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))"
 ```
 
-仍不行则重建：`conda env remove -n tsmoe` 后按本节开头的「创建」步骤重来。
+仍不行则 `conda env remove -n tsmoe` 后按 §1.1 重建。
 
-### 在 GPU 上跑（与 CLI 一致）
-
-仅 `train`、`evaluate`、`explain`、`recommend` 接受 `--device`（`prepare` / `inspect` 为 CPU 侧数据与 SURD 构建，无该参数）。合法取值与 `__main__.py` 一致：`auto`（默认）、`cpu`、`cuda`、`cuda:0`、`mps`。
-
-```bash
-conda activate tsmoe
-
-# --cache 须先由 prepare 写出（含 manifest.json），例如：
-#   python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
-# 默认 --device auto：有 CUDA 则用 GPU；启动应看到 Using device=cuda ... gpu='...'
-python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model
-python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --split test
-
-# 显式指定 GPU（多卡时常用 cuda:0）
-python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
-python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --device cuda:0
-```
-
-用 `nvidia-smi` 对照进程 GPU 占用；日志里找 `Using device=cuda` / `model_param_device=cuda:...`。若 `--device auto` 静默落到 CPU，会打印 `WARNING: --device auto fell back to CPU...`。训练 / 评估过程中 **Ctrl+C** 会在当前 step 结束后干净退出（再按一次强制退出）。
-
-显存紧张时可减小 `--eval-batch-size` / `--chunk`（评估）或 `--batch-size` / `--negatives`（训练）；这些标志已存在于 CLI。
-
-### CPU / 无 GPU 回退
-
-无 GPU 或只需 CPU 时：仍可用同一 conda 环境，对训练与评估等命令传 `--device cpu`。装 CPU 版 PyTorch：
+### 1.3 CPU / 无 GPU
 
 ```bash
 conda activate tsmoe
@@ -105,46 +90,28 @@ python -m pip install "numpy>=1.26,<3" "tqdm>=4.66,<5"
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cpu
 ```
 
-### 备选：venv + pip（CUDA）
+训练 / 评估等命令加 `--device cpu`（或依赖默认 `auto` 回退）。
 
-不需要 conda 时：
+### 1.4 备选：venv + pip（CUDA）
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 python -m pip install "numpy>=1.26,<3" "tqdm>=4.66,<5"
-# 与上文 conda 路径相同的 CUDA 12.4 轮子；其它版本见 pytorch.org
 python -m pip install "torch>=2.4,<3" --index-url https://download.pytorch.org/whl/cu124
 ```
 
-`requirements.txt` 声明 `numpy>=1.26,<3`、`tqdm>=4.66,<5` 与 `torch>=2.4,<3`，不锁定 CUDA/CPU 轮子；GPU 服务器请用上面的 cu124 索引装 torch。
+`requirements.txt` 声明版本范围，不锁定 CUDA/CPU 轮子；GPU 服务器请用 cu124 索引装 torch。
 
 ---
 
-## 2. 目录约定
+## 2. 数据准备
 
-所有命令均在**仓库根目录**执行。典型布局：
+所有命令在**仓库根目录**执行。`prepare` **没有** `--raw`：只读已切好的 Massive-STEPS 签到 CSV（Foursquare 风格字段）。
 
-```text
-TS_MOE/
-  environment.yml
-  requirements.txt
-  docs/results.md        # 评估结果目录约定（metrics / report）
-  tsmoe/                 # 包；入口 python -m tsmoe
-  examples/              # 下载城市数据、生成 demo CSV
-  scripts/               # 布局核对等辅助脚本（不改 prepare CLI）
-  tests/
-  data/<city>/           # 下载或自备的签到 CSV（可按城市分子目录）
-  runs/<city>/cache/     # prepare 产出的样本与 SURD 缓存
-  runs/<city>/model/     # train 产出的 best.pt、history.json（不含 metrics）
-  results/<city>/model/  # 最终评估 metrics.json / report.txt
-```
+`prepare --data-root` 先找 `<data-root>/<city>_checkins_train.csv`；找不到再试 `<data-root>/<city>/<city>_checkins_train.csv`。因此下载到 `data/tokyo/` 时可用 `--data-root data --city tokyo`。
 
-评估产物的目录约定、如何读 Acc@1、与 `runs/` 的关系见 [`docs/results.md`](docs/results.md)。
-
-`prepare --data-root` 会先找 `<data-root>/<city>_checkins_train.csv`；找不到则再试 `<data-root>/<city>/<city>_checkins_train.csv`。因此下载脚本写到 `data/tokyo/` 时，可直接用 `--data-root data --city tokyo`。东京逐步命令见 **§4 Prepare Tokyo data**（`prepare` 无 `--raw`）。
-
-期望的城市签到文件：
+### 期望文件
 
 ```text
 data/tokyo/
@@ -155,86 +122,159 @@ data/tokyo/
 
 | CSV 字段 | 用途 |
 | --- | --- |
-| `trail_id`、`user_id` | 轨迹归属、组织事件、划分隔离、案例定位 |
-| `venue_id` | 历史 P、下一 POI 标签与候选目录中的原始整数 ID（保留有效值 0） |
-| `venue_category_id_code`、`venue_category_id` | 历史 C；优先训练集中一致的 code；支持只含其中一个字段的 CSV |
+| `trail_id`、`user_id` | 轨迹归属、组织事件、划分隔离 |
+| `venue_id` | 历史 P、下一 POI 标签与候选目录中的原始整数 ID |
+| `venue_category_id_code`、`venue_category_id` | 历史 C；优先训练集一致的 code |
 | `timestamp` | 排序、周期特征、间隔、时间折边界 |
-| `latitude`、`longitude` | 历史 L 的球面坐标、位移、方向及有效位 |
+| `latitude`、`longitude` | 历史 L 与空间候选锚点 |
 
-采用官方预处理生成的**逐签到 CSV**（Massive-STEPS / Foursquare 风格字段）。带时区的时间戳转成 UTC，无时区按 UTC 解释。等时事件按原文件行序稳定排序。以 `(user_id, trail_id, timestamp, venue_id)` 去重（保留第一条）。不可解析时间戳整行隔离；缺失类别或坐标仍保留事件并编码。审计写入缓存的 `manifest.json`。
+带时区时间戳转 UTC；等时事件按原文件行序稳定排序；以 `(user_id, trail_id, timestamp, venue_id)` 去重。审计写入缓存的 `manifest.json`。
+
+### 空间候选半径（prepare 时固定）
+
+`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）把半径写入缓存；**train / evaluate 不覆盖**，换半径须换 `--out` 并重新 prepare。锚点 = 目标前一签坐标；邻域空或锚点无效则该样本回退全目录。详见 [`docs/candidates.md`](docs/candidates.md)。
+
+`download_city.py` 支持城市：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
+
+完整可复制流水线见下一节。
 
 ---
 
-## 3. 最快跑通：合成 demo（无需下载）
+## 3. 运行（可复制命令）
+
+先 `conda activate tsmoe`，并在仓库根目录执行。仅 `train` / `evaluate` / `explain` / `recommend` 接受 `--device`（`auto` / `cpu` / `cuda` / `cuda:0` / `mps`）；`prepare` / `inspect` 为 CPU 侧。
+
+### 3.1 Demo（无需下载）
+
+`train` 结束会对最佳 checkpoint 自动跑 validation + **test**，并写入 `results/demo/model/eval_*`。
 
 ```bash
 conda activate tsmoe
 
 python examples/make_demo.py --data-root data
 python -m tsmoe prepare --data-root data --city demo --out runs/demo/cache
-# train / evaluate 默认 --device auto（GPU 可用则走 CUDA）
-python -m tsmoe train --cache runs/demo/cache --out runs/demo/model --epochs 1 --dim 16 --heads 2 --layers 1
-# 评估结果默认写入 results/demo/model/eval_<split>/{metrics.json,report.txt}（见 docs/results.md）
-python -m tsmoe evaluate --cache runs/demo/cache --checkpoint runs/demo/model/best.pt
-# 等价显式写法：在上述两条命令末尾加 --device cuda 或 --device cuda:0
+python -m tsmoe train --cache runs/demo/cache --out runs/demo/model \
+  --epochs 1 --dim 16 --heads 2 --layers 1
+# → checkpoint: runs/demo/model/best.pt
+# → metrics:    results/demo/model/eval_validation/ 与 eval_test/
 ```
 
----
+### 3.2 Tokyo：下载 → 核对 → prepare → CUDA 训练
 
-## 4. Prepare Tokyo data
-
-`prepare` **没有** `--raw`（或其它“从原始 dump 转换”）标志。它只读已经切好的 Massive-STEPS 签到 CSV（Foursquare 风格字段，与设计文档 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md) §2.1 一致）。仓库不附带东京原始数据；请先下载公开 CSV，再本地跑 `prepare`。
-
-### 期望目录与文件名
-
-`prepare` 先找 `<data-root>/tokyo_checkins_train.csv`；没有则用 `<data-root>/tokyo/`（`examples/download_city.py` 默认写这里）：
-
-```text
-data/tokyo/
-  tokyo_checkins_train.csv
-  tokyo_checkins_validation.csv
-  tokyo_checkins_test.csv
-```
-
-每个 CSV 至少需要：`trail_id`、`user_id`、`venue_id`、`latitude`、`longitude`、`timestamp`，以及 `venue_category_id_code` 和/或 `venue_category_id`。公开东京文件还含 `name`、`address`、`venue_category`、`venue_city*`、`venue_country` 等展示字段（`prepare` 不依赖它们）。
-
-### 从公开文件到 cache（复制即可）
-
-在**仓库根目录**、已 `conda activate tsmoe`（且已装好 torch）时：
+默认 `--candidate-radius p90`（可省略）。成功 prepare 后应有 `runs/tokyo/cache/manifest.json` 与各 split `.pt`。
 
 ```bash
+conda activate tsmoe
+
 # 1) 下载 Massive-STEPS Tokyo 三个 split（Hugging Face；需出网）
 python examples/download_city.py --city tokyo --data-root data
 
-# 2) 可选：核对文件名与列（stdlib；不 import torch）
+# 2) 核对文件名与列（stdlib；不 import torch）
 python scripts/verify_city_checkins.py --data-root data --city tokyo
 
-# 3) 构建样本 + 折外 SURD 缓存（真实 CLI；无 --raw）
+# 3) 构建样本 + 折外 SURD + 空间候选半径（默认 p90）
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
+# 等价显式：... --candidate-radius p90
+
+# 4) GPU 训练（默认 --device auto；也可显式 cuda）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
+# → runs/tokyo/model/best.pt
+# → results/tokyo/model/eval_validation/ 与 eval_test/
 ```
 
-成功后应看到 `runs/tokyo/cache/manifest.json` 以及 `train.pt` / `validation.pt` / `test.pt` 等。同一配置可重复跑 `prepare`（指纹一致则复用缓存）。
+手动下载：从 [Massive-STEPS-Tokyo](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo) 取得同名三个 CSV 放到 `data/tokyo/`（或扁平放在 `data/`），再跑上面第 2–4 步。固定版本：`python examples/download_city.py --city tokyo --data-root data --revision <commit-or-branch>`。
 
-### 手动下载（跳过 `download_city.py`）
+### 3.3 独立评估（standalone evaluate）
 
-从 [Massive-STEPS-Tokyo](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo) 取得同名三个 CSV，放到 `data/tokyo/`（或扁平放在 `data/` 下且文件名仍为 `tokyo_checkins_*.csv`），然后只跑上面的第 2–3 步。固定版本可：`python examples/download_city.py --city tokyo --data-root data --revision <commit-or-branch>`。
-
-### 下载之后：训练 / 评估
+对已有 cache + checkpoint 重跑排名；默认写出 `results/<run>/eval_<split>/`。
 
 ```bash
-python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda
-# 默认写出 results/tokyo/model/eval_test/{metrics.json,report.txt}；也可用 --out / --output
-python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
-  --split test --device cuda
-python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
-  --split test --out results/tokyo/eval_test --output results/tokyo/test.json --device cuda
+conda activate tsmoe
+
+python -m tsmoe evaluate --cache runs/tokyo/cache \
+  --checkpoint runs/tokyo/model/best.pt --split test --device cuda
+# → results/tokyo/model/eval_test/{metrics.json,report.txt}
+
+# 可选：覆盖输出目录，并额外镜像一份 JSON
+python -m tsmoe evaluate --cache runs/tokyo/cache \
+  --checkpoint runs/tokyo/model/best.pt --split test --device cuda \
+  --out results/tokyo/eval_test --output results/tokyo/test.json
 ```
 
-省略 `--device` 时默认为 `auto`。其它城市把 `--city` / 路径里的 `tokyo` 换成对应前缀即可；`download_city.py` 支持：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
+读 Acc@1：
 
-### 选择预测目标
+```bash
+python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.json')); print(m['all_targets']['Acc@1'])"
+```
 
-默认 `--train-targets all --eval-targets all`（与设计文档一致）。一条 `A → B → C → D` 产生三个样本，目标分别为 B、C、D；每个样本输入止于前一事件。训练 / 验证 / 测试沿用官方 CSV 的轨迹成员关系。
+### 3.4 可选：不同 `--candidate-radius` 的 prepare 变体
+
+每种半径用**独立** `--out`（及对应 train `--out`），否则指纹 / 缓存会混用。
+
+```bash
+conda activate tsmoe
+
+# p90（默认）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_p90 \
+  --candidate-radius p90
+python -m tsmoe train --cache runs/tokyo/cache_p90 --out runs/tokyo/model_p90 --device cuda
+
+# mean
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_mean \
+  --candidate-radius mean
+python -m tsmoe train --cache runs/tokyo/cache_mean --out runs/tokyo/model_mean --device cuda
+
+# max
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_max \
+  --candidate-radius max
+python -m tsmoe train --cache runs/tokyo/cache_max --out runs/tokyo/model_max --device cuda
+
+# full = 全训练目录（无空间过滤）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_full \
+  --candidate-radius full
+python -m tsmoe train --cache runs/tokyo/cache_full --out runs/tokyo/model_full --device cuda
+```
+
+| 取值 | 半径 |
+| --- | --- |
+| `p90`（默认） | 训练集连续签到球面距离的 90 分位（km） |
+| `mean` | 上述距离的均值 |
+| `max` | 最大值 |
+| `full` | 关闭空间过滤；候选 = 整个训练 POI 目录 |
+
+### 3.5 GPU 占用与中断
+
+```bash
+# 多卡时常显式指定
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda:0
+python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt --device cuda:0
+```
+
+用 `nvidia-smi` 对照占用；日志找 `Using device=cuda`。若 `--device auto` 落到 CPU，会打印 `WARNING: --device auto fell back to CPU...`。显存紧时减小 `--eval-batch-size` / `--chunk`（评估）或 `--batch-size` / `--negatives`（训练）。**Ctrl+C** 在当前 step 边界干净退出（再按一次强制）。
+
+---
+
+## 4. 配置 knobs
+
+与 `__main__.py` 默认值一致。入口：`python -m tsmoe <command> --help`。
+
+| 参数 | 默认与含义 |
+| --- | --- |
+| `prepare --max-length`、`--hash-dim`、`--tau-pos` | 50、64、10 |
+| `prepare --clusters`、`--folds`、`--warmup` | 4、3、0.2 |
+| `prepare --candidate-radius` | `p90` / `mean` / `max` / `full`；写入缓存，train 与 evaluate 共用 |
+| `prepare --train-targets` / `--eval-targets` | `all` 或 `last`（默认均为 `all`） |
+| `train --dim`、`--heads`、`--layers` | 128、4、2 |
+| `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
+| `train --top-k`、`--temperature` | 4、1.0 |
+| `train --lambda-prior`、`--lambda-surd`、`--lambda-balance` | 0.1、0.05、0.001 |
+| `train --negatives` | 每例 63 个负例（从缓存候选池抽样）；`-1` 为池内其余全部 |
+| `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督 |
+| `--device`（train / evaluate / explain / recommend） | 默认 `auto`；也可 `cpu`、`cuda`、`cuda:0`、`mps` |
+| `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128 |
+| `--threads` | PyTorch CPU 线程数，默认 2 |
+
+**目标协议：**
 
 | 协议 | `prepare` 参数 |
 | --- | --- |
@@ -242,78 +282,104 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | 训练与评估均用每条轨迹末站 | `--train-targets last --eval-targets last` |
 | 全部前缀训练，仅评估末站 | `--train-targets all --eval-targets last` |
 
-改变簇数、窗口、目标选取或 `--candidate-radius` 时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估（半径写进 `manifest.json`，**必须重新 prepare** 后 train / evaluate 才会一致）。
+改变簇数、窗口、目标选取或 `--candidate-radius` 时，请换新的 `--out` 缓存目录，并用配套缓存训练与评估。
 
-### 空间邻域候选（默认）
+训练用 AdamW；按验证 **NDCG@10** 选 `best.pt`；终端 / 报告头条为 **Acc@1**（及 NDCG@1、MRR）。`history.json` 仍在 `runs/.../model/`。
 
-`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）在训练集上统计连续 check-in 的球面距离，把所选分位数（或均值 / 最大值）存为 `radius_km`。每个样本的锚点是**目标前一签**的经纬度；候选 = 训练目录中落在该半径内的 POI（始终包含目录内真实目标）。若锚点无坐标或邻域为空，该样本回退为**全目录**。详情见 [`docs/candidates.md`](docs/candidates.md)。
+**`groups` 切片（非训练特征）：** 按真实下一站汇总 Acc@1 / NDCG@1 / MRR：
+
+| 键前缀 | 依据 | 桶 |
+| --- | --- | --- |
+| `poi/` | 目标在训练 SURD 表中的 `target_count` | `outside_catalog`；`no_train_target`；`tail_1_2`；`mid_3_9`；`head_10_plus` |
+| `history/` | 观测前缀长度 | `1`；`2_5`；`6_plus` |
+| `last_category/` | 历史最后一签类别频次 | `0`；`1_9`；`10_plus` |
+
+单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅目录内目标）。K ∈ {1,5,10,20}。
 
 ---
 
-## 5. 命令一览
+## 5. 结果目录
 
-入口：`python -m tsmoe <command> ...`（`python -m tsmoe --help` / `python -m tsmoe <command> --help`）。
+| 位置 | 内容 |
+| --- | --- |
+| `runs/<city>/cache/` | prepare 缓存（`manifest.json`、split `.pt`、SURD、候选构造） |
+| `runs/<city>/model/` | `best.pt`、`history.json`（**不含**最终 metrics） |
+| `results/<run>/eval_validation/` | train 结束后最佳模型的 validation metrics |
+| `results/<run>/eval_test/` | train 自动 test，或独立 `evaluate --split test` 的默认输出 |
+
+每个 `eval_*` 含 `metrics.json` + `report.txt`。`<run>` 由 train `--out` / checkpoint 路径去掉前缀 `runs/` 得到，例如 `runs/tokyo/model` → `results/tokyo/model/`。可用 `evaluate --out <dir>` 覆盖。
+
+完整说明与 Acc@1 读法：[`docs/results.md`](docs/results.md)。候选构造与 Acc@1 的池内含义：[`docs/candidates.md`](docs/candidates.md)。
+
+---
+
+## 6. 仓库 / 代码布局
+
+```text
+TS_MOE/
+  environment.yml
+  requirements.txt
+  docs/results.md          # results/ 与 runs/ 分工、Acc@1
+  docs/candidates.md       # --candidate-radius、回退、train/eval 一致
+  tsmoe/                   # 包；入口 python -m tsmoe
+  examples/                # download_city、make_demo
+  scripts/                 # verify_city_checkins 等
+  tests/
+  data/<city>/             # 签到 CSV（下载或自备）
+  runs/<city>/cache/       # prepare 缓存
+  runs/<city>/model/       # checkpoint（非 metrics）
+  results/<city>/model/    # metrics.json / report.txt
+```
+
+| 路径 | 内容 |
+| --- | --- |
+| `environment.yml` | Conda 骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124） |
+| `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
+| `docs/results.md` | 评估结果目录约定 |
+| `docs/candidates.md` | 空间邻域候选 |
+| `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
+| `examples/make_demo.py` | 合成 demo CSV |
+| `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
+| `tsmoe/data.py` | CSV 读取、类别对齐、时间与地理特征 |
+| `tsmoe/candidates.py` | 连续访问距离、空间邻域池、负采样 |
+| `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
+| `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
+| `tsmoe/prepare.py`、`tsmoe/inspect.py` | 折外估计、缓存、逐样本追踪 |
+| `tsmoe/model.py` | Transformer、稀疏专家、Router、损失 |
+| `tsmoe/engine.py`、`tsmoe/__main__.py` | 训练、评估、推荐、解释与 CLI |
+
+数据来源：[Massive-STEPS](https://github.com/CRUISEResearchGroup/Massive-STEPS) · [next-POI 划分脚本](https://github.com/CRUISEResearchGroup/Massive-STEPS/blob/main/src/create_next_poi_dataset.py) · [Tokyo 数据集](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo)。
+
+---
+
+## 7. 命令一览与其它入口
 
 | 命令 | 作用 |
 | --- | --- |
-| `prepare` | 读 CSV → 样本、折外量化器、逐 POI SURD 表 → 写入 `--out` 缓存 |
-| `train` | 用缓存训练；按验证集 NDCG@10 保存 `best.pt`；结束时写 `results/.../eval_validation/`，并对最佳模型跑一次 test → `results/.../eval_test/`（摘要以 Acc@1 打头） |
-| `evaluate` | 在缓存候选集上排名（默认空间邻域，与训练一致；`--candidate-radius full` 时为全目录）；默认写入 `results/.../eval_<split>/{metrics.json,report.txt}`；终端 / 报告以 Acc@1 / NDCG@1 / MRR 为头条；完整 Acc/Hit/Recall、NDCG、MRR、MAP @1/5/10/20 + groups |
-| `inspect` | 查看某 POI 的 26 维 SURD；可选某训练前缀的簇与联合计数 |
+| `prepare` | CSV → 样本、折外 SURD、候选半径 → `--out` 缓存 |
+| `train` | 训练；按验证 NDCG@10 存 `best.pt`；写 `results/.../eval_validation/` 与 `eval_test/` |
+| `evaluate` | 在缓存候选集上排名；默认 `results/.../eval_<split>/` |
+| `inspect` | 查看某 POI 的 26 维 SURD |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
-| `explain` | 审计一个候选的先验、路由与得分贡献 |
-
-### 离线 SURD 检查
+| `explain` | 审计一个候选的先验、路由与得分 |
 
 ```bash
-python -m tsmoe inspect --cache runs/tokyo/cache --table final --poi-id 3 --sample-index 0 --output runs/tokyo/offline_trace.json
-```
+# 离线 SURD
+python -m tsmoe inspect --cache runs/tokyo/cache --table final --poi-id 3 \
+  --sample-index 0 --output runs/tokyo/offline_trace.json
 
-### 推荐与案例解释
-
-`--history` 需与官方签到 CSV 字段相同。每条 trail 至少一条已观测签到；输出使用原始 `venue_id`。
-
-```bash
+# 推荐 / 案例解释（--history 字段与官方签到 CSV 相同）
 python -m tsmoe recommend --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
   --history my_history.csv --top-n 10 --output recommendations.json --device cuda
 python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/best.pt \
   --split test --sample-index 0 --output case.json --device cuda
 ```
 
-`explain` 默认解释真实目标；若目标不在训练目录，则解释最高分候选并记录真实目标。可用 `--poi-id` 指定目录内候选。
-
-### 重要配置（与代码默认值一致）
-
-| 参数 | 默认与含义 |
-| --- | --- |
-| `prepare --max-length`、`--hash-dim`、`--tau-pos` | 50、64、10 |
-| `prepare --clusters`、`--folds`、`--warmup` | 4、3、0.2 |
-| `prepare --candidate-radius` | `p90`（默认）/ `mean` / `max` / `full`；写入缓存，train 与 evaluate 共用 |
-| `train --dim`、`--heads`、`--layers` | 128、4、2 |
-| `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
-| `train --top-k`、`--temperature` | 4、1.0 |
-| `train --lambda-prior`、`--lambda-surd`、`--lambda-balance` | 0.1、0.05、0.001 |
-| `train --negatives` | 每例从**候选池**抽 63 个负例；`-1` 为池内其余全部（空间模式下非全局目录） |
-| `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督（结构仍保留） |
-| `--device`（仅 train / evaluate / explain / recommend） | 默认 `auto`：`cuda.is_available()` 则为 CUDA，否则 CPU（并 WARNING）；也可 `cpu`、`cuda`、`cuda:0`、`mps`；启动打印 `Using device=...` |
-| `--eval-batch-size`、`--chunk` | 评估批大小 16、每块候选 128（可按显存下调） |
-| `--threads` | PyTorch CPU 线程数，默认 2 |
-
-训练使用 AdamW；每轮损失、专家派发与验证指标写入 `history.json`（仍在 `--out`，通常为 `runs/.../model/`）。验证集仅用于按 NDCG@10 选 `best.pt`（选模指标不变）；每轮与最终报告的**默认头条指标是 Acc@1**（同时打印 NDCG@1 与无截断 MRR）。训练结束后对最佳 checkpoint 再跑一次 **test**，并打印表格。**最终 metrics / report 写在 `results/`**（由 `--out` 去掉前缀 `runs/` 得到 run 名），例如 `results/tokyo/model/eval_validation/` 与 `results/tokyo/model/eval_test/`，各含 `metrics.json` + `report.txt`（详见 [`docs/results.md`](docs/results.md)）。`train` / `evaluate` / `prepare` 默认显示 `tqdm` 进度（epochs、steps、评估批、SURD）。独立 `evaluate` 默认写出 `results/<run>/eval_<split>/`（可用 `--out` 覆盖；`--output` 可再镜像一份 JSON）。JSON / 报告含 `all_targets` 与 `known_only`、`groups`、`primary_metrics`、`group_notes` / `group_labels`、`device` / `cache` / `cache_id` / `timestamp_utc` / 模型配置等复现字段。并列得分按目录行升序排名。单目标下一 POI：`Acc@K = Hit@K = Recall@K`，`MAP@K = MRR@K`；另报无截断 `MRR`、`mean_rank`、`median_rank`（仅对目录内目标）。K ∈ {1,5,10,20}。终端打印紧凑表格与分组摘要，避免整份 JSON 刷屏。Ctrl+C 在当前 step 边界退出（再按一次强制）。
-
-**`groups` 含义（评估切片，非训练特征）：** 每个样本按真实下一站与上下文落入三组桶，每桶单独汇总 Acc@1 / NDCG@1 / MRR：
-
-| 键前缀 | 依据 | 桶 |
-| --- | --- | --- |
-| `poi/` | 真实目标 POI 在训练 SURD 表中的 `target_count`（作为 next-POI 目标出现次数） | `outside_catalog`（不在训练目录）；`no_train_target`（在目录但 0 次）；`tail_1_2`（1–2，长尾）；`mid_3_9`（3–9）；`head_10_plus`（≥10，热门） |
-| `history/` | 观测前缀长度 | `1`；`2_5`；`6_plus` |
-| `last_category/` | 历史最后一签类别在训练集中的出现频次 | `0`；`1_9`；`10_plus` |
-
-`report.txt` / 终端对上述键附带可读标签（如 `poi/head — ≥10 train targets (popular)`）；JSON 仍保留稳定短键，并写入 `group_labels` / `group_notes`。
+`explain` 默认解释真实目标；目标不在训练目录时解释最高分候选。可用 `--poi-id` 指定目录内候选。
 
 ---
 
-## 6. 离线 SURD 与在线模型（简要）
+## 8. 算法要点（简要）
 
 与设计文档一致、当前实现已落地：
 
@@ -321,21 +387,20 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 2. 单一联合频数表边缘化 → 26 维（4 Unique + 11 Redundancy + 11 Synergy）；15 个 U/S 专家在线执行。
 3. 折外估计：默认最早 20% 训练样本暖启动，其后 3 个时间块；验证 / 测试 / 新轨迹用全训练 `final` 表。
 4. 在线：四源 Transformer 编码历史；Router 读候选 + 上下文 + 置信度缩放的 26 维先验；Top-K 稀疏专家；`base + 门控 MoE 残差`。
+5. 候选：prepare 写入的空间邻域（或 `full`）；train 负采样与 evaluate 排名共用。
 
-缓存 `manifest.json` 记录字段约定、目录、分折与文件摘要。离线摘要与标准化矩阵在主存中；较大城市峰值内存随训练前缀数增长。
+缓存 `manifest.json` 记录字段约定、目录、分折、候选构造与文件摘要。
 
 ---
 
-## 7. 测试与东京连通性参考
+## 9. 测试与东京烟雾参考
 
 ```bash
 python -m unittest discover -s tests -v
 python -m tsmoe.surd
 ```
 
-自测覆盖解析分布、折外边界、稀疏派发、零置信度、候选分块、目录外目标与完整 CLI 流程。
-
-**东京烟雾结果**（详见 [`examples/tokyo_smoke.json`](examples/tokyo_smoke.json)）：训练 / 验证 / 测试全部前缀样本 5,855 / 808 / 1,694；训练目录 2,494 个 POI。连通性命令示例（原记录在 CPU；GPU 服务器把 `--device cpu` 改成 `cuda` 或省略以用默认 `auto`）：
+**东京烟雾**（[`examples/tokyo_smoke.json`](examples/tokyo_smoke.json)）：训练 / 验证 / 测试前缀 5,855 / 808 / 1,694；训练目录 2,494 POI。连通性示例：
 
 ```bash
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
@@ -347,34 +412,12 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 
 ---
 
-## 8. 文件索引
+## 10. 当前局限
 
-| 路径 | 内容 |
-| --- | --- |
-| `environment.yml` | Conda 环境骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124 安装） |
-| `requirements.txt` | pip 版本约束（`numpy`、`tqdm`、`torch`；CUDA 轮子见上文索引 URL） |
-| `docs/results.md` | `results/` 与 `runs/` 分工、默认路径、如何读 Acc@1 |
-| `docs/candidates.md` | 空间邻域候选：`--candidate-radius`、回退规则、train/eval 一致性 |
-| `examples/download_city.py` | 从 Hugging Face 拉取某城市三个 `*_checkins_*.csv` |
-| `examples/make_demo.py` | 合成 demo CSV（无需下载） |
-| `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列（不 import torch） |
-| `tsmoe/data.py` | CSV 读取、类别对齐、时间与地理特征、窗口 |
-| `tsmoe/candidates.py` | 连续访问距离统计、空间邻域池、负采样 |
-| `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
-| `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
-| `tsmoe/prepare.py`、`tsmoe/inspect.py` | 折外估计、缓存、逐样本追踪 |
-| `tsmoe/model.py` | Transformer、稀疏专家、Router、损失 |
-| `tsmoe/engine.py`、`tsmoe/__main__.py` | 训练、评估、推荐、解释与 CLI |
-
-数据格式与来源：[Massive-STEPS](https://github.com/CRUISEResearchGroup/Massive-STEPS) · [next-POI 划分脚本](https://github.com/CRUISEResearchGroup/Massive-STEPS/blob/main/src/create_next_poi_dataset.py) · [Tokyo 数据集](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo)（Foursquare 风格签到字段，见设计文档 §2.1）。
-
----
-
-## 9. 当前局限（与代码一致）
-
-- **未打包安装**：无 `pip install -e .`；必须在仓库根目录用 `python -m tsmoe`。
-- **无独立配置文件**：超参均通过 CLI 传入；无 YAML/JSON 训练配置入口。
-- **无服务化推理 API**：推理入口是 `recommend` / `explain` CLI，不是 HTTP 服务。
-- **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118 索引重装 torch；本仓库不自动探测本机 CUDA。
-- **无多进程 / 多卡数据并行开关**：`--device cuda:0` 等可选单卡；没有 `--gpus`、DDP 或 DataParallel 专用 CLI。
-- **大数据内存**：大型城市 prepare 的峰值内存随训练前缀增长；本仓库未提供分片 / 外存统计路径。
+- **未打包安装**：无 `pip install -e .`；须在仓库根目录用 `python -m tsmoe`。
+- **无独立配置文件**：超参均通过 CLI；无 YAML/JSON 训练配置入口。
+- **无服务化推理 API**：入口是 `recommend` / `explain` CLI。
+- **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118；不自动探测本机 CUDA。
+- **无多进程 / 多卡数据并行开关**：可选单卡 `--device cuda:0`；无 `--gpus` / DDP CLI。
+- **大数据内存**：大型城市 prepare 峰值随训练前缀增长；无分片 / 外存统计路径。
+- **换候选半径须重 prepare**：train / evaluate 不能单独改 `--candidate-radius`。
