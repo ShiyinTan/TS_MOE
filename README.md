@@ -6,7 +6,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。因果在线计数 + `--transition-attn` 见 [`docs/causal-counts.md`](docs/causal-counts.md)（实现落地于开放 PR [#20](https://github.com/ShiyinTan/TS_MOE/pull/20)；§3.8）。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。因果在线计数 + `--transition-attn` 见 [`docs/causal-counts.md`](docs/causal-counts.md)（§3.8；**默认 on**）。
 
 面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
@@ -24,7 +24,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
    - [3.5 训练抽样](#35-训练抽样)
    - [3.6 Router 模式（`--router-mode`）](#36-router-模式--router-mode)
    - [3.7 STHGCN T/L 特征（须重 prepare）](#37-sthgcn-tl-特征须重-prepare)
-   - [3.8 因果在线计数 + `--transition-attn`（开放 PR #20）](#38-因果在线计数--transition-attn开放-pr-20)
+   - [3.8 因果在线计数 + `--transition-attn`](#38-因果在线计数--transition-attn)
    - [3.9 结果目录与 Acc@1](#39-结果目录与-acc1)
    - [3.10 独立评估](#310-独立评估)
    - [3.11 GPU 占用与中断](#311-gpu-占用与中断)
@@ -393,9 +393,9 @@ python -m tsmoe train --cache runs/tokyo/cache_sthgcn --out runs/tokyo/model_sth
 # → results/tokyo/model_sthgcn/eval_validation/ 与 eval_test/
 ```
 
-### 3.8 因果在线计数 + `--transition-attn`（开放 PR #20）
+### 3.8 因果在线计数 + `--transition-attn`
 
-> **状态：** 下列 flag / 行为来自开放实现 PR [#20](https://github.com/ShiyinTan/TS_MOE/pull/20)（`cursor/causal-online-counts-d7fe`），**尚未合并进 `main`**。本 README 分支（[#19](https://github.com/ShiyinTan/TS_MOE/pull/19)）已收录配套说明 [`docs/causal-counts.md`](docs/causal-counts.md)。合并 #20 后本节即为默认训练行为；当前 `main` 仍无这些 CLI。
+运行时特征（**无需重新 prepare**）。默认 **开启**。配套说明：[`docs/causal-counts.md`](docs/causal-counts.md)。
 
 **白话：** 运行时维护「预测时刻之前」已见过的访问 / 转移计数（先打分，再写入真实下一跳）。开启时训练按**预测时间戳升序、不 shuffle**；每个 epoch 重置计数表；val/test 从 **训练结束时的表**（checkpoint `count_tables`，或按序重放 train）克隆后继续同样协议。**无需重新 prepare**。
 
@@ -408,7 +408,7 @@ python -m tsmoe train --cache runs/tokyo/cache_sthgcn --out runs/tokyo/model_sth
 
 P 源用全局 **POI→POI**；C 源用 **cat→POI**。写入 checkpoint `config`（及 `count_tables` / `visit_bin_edges`），`evaluate` / `explain` / `recommend` 与训练一致。
 
-**Demo（可复制；需 #20 已合并或检出其分支）：**
+**Demo（可复制）：**
 
 ```bash
 conda activate tsmoe
@@ -436,7 +436,7 @@ python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_nocounts \
 
 ```bash
 conda activate tsmoe
-# 需已有 runs/tokyo/cache（见 §3.2）+ #20 代码
+# 需已有 runs/tokyo/cache（见 §3.2）
 
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_causal \
   --transition-attn bias --device cuda
@@ -451,7 +451,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_nocounts \
 
 | 模式 | 含义 |
 | --- | --- |
-| `bias`（默认） | 注意力 logit 加 `λ · log1p(转移计数)` |
+| `bias`（默认） | 注意力 logit 加 `λ · log1p(转移计数)`；P 用 POI→POI，C 用 cat→POI |
 | `gate` | `[历史; 候选; φ(count)]` → sigmoid 门控缩放注意力权重 |
 | `rel_key` | `MLP(φ(count))` 注入 key（随候选变化） |
 
@@ -526,7 +526,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `train --negatives` | 每例 63 个负例（从构造池抽样）；`-1` 为池内其余全部 |
 | `train --max-train-candidates` | 训练时每例候选总数上限（含正例）；`-1` 不额外封顶；**eval 不抽样** |
 | `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督 |
-| `train --causal-counts` / `--no-causal-counts` | 因果在线计数 + transition 交叉注意力（**默认 on**；见 §3.8 / [#20](https://github.com/ShiyinTan/TS_MOE/pull/20)） |
+| `train --causal-counts` / `--no-causal-counts` | 因果在线计数 + transition 交叉注意力（**默认 on**；见 §3.8） |
 | `train --transition-attn` | `bias`（默认）/ `gate` / `rel_key` |
 | `train --transition-lambda` | bias 项尺度，默认 `1.0` |
 | `train --visit-bins` | T/L 用户累计访问等频分箱数，默认 `10` |
@@ -576,7 +576,7 @@ TS_MOE/
   docs/candidates.md          # 多源候选、抽样、回退、train/eval 一致
   docs/router-modes.md        # --router-mode hard_prior / surd_mlp / hybrid
   docs/sthgcn-tl-features.md  # T/L ↔ STHGCN Φ(Δt)/Φ(Δs) 对齐
-  docs/causal-counts.md       # 因果在线计数 + --transition-attn（PR #20）
+  docs/causal-counts.md       # 因果在线计数 + --transition-attn
   tsmoe/                      # 包；入口 python -m tsmoe
   examples/                   # download_city、make_demo
   scripts/                    # verify_city_checkins 等
@@ -595,7 +595,7 @@ TS_MOE/
 | `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去 + 随机负例；GT 必入池） |
 | `docs/router-modes.md` | `--router-mode`：hard_prior / surd_mlp / hybrid |
 | `docs/sthgcn-tl-features.md` | T/L 与 STHGCN 对齐；换 schema 须重 prepare |
-| `docs/causal-counts.md` | 因果在线计数、等频分箱、`--transition-attn`（实现见 [#20](https://github.com/ShiyinTan/TS_MOE/pull/20)） |
+| `docs/causal-counts.md` | 因果在线计数、等频分箱、`--transition-attn` |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
@@ -604,7 +604,8 @@ TS_MOE/
 | `tsmoe/quantizer.py` | 四源摘要、标准化、K-means |
 | `tsmoe/surd.py` | 联合频数表、26 项 SURD、冻结先验 |
 | `tsmoe/prepare.py`、`tsmoe/inspect.py` | 折外估计、缓存、逐样本追踪 |
-| `tsmoe/model.py` | Transformer、稀疏专家、Router、损失 |
+| `tsmoe/counts.py` | 因果在线访问 / 转移计数表、等频分箱 |
+| `tsmoe/model.py` | Transformer、稀疏专家、Router、损失、transition 交叉注意力 |
 | `tsmoe/engine.py`、`tsmoe/__main__.py` | 训练、评估、推荐、解释与 CLI |
 
 数据来源：[Massive-STEPS](https://github.com/CRUISEResearchGroup/Massive-STEPS) · [next-POI 划分脚本](https://github.com/CRUISEResearchGroup/Massive-STEPS/blob/main/src/create_next_poi_dataset.py) · [Tokyo 数据集](https://huggingface.co/datasets/CRUISEResearchGroup/Massive-STEPS-Tokyo)。
@@ -647,7 +648,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 3. 折外估计：默认最早 20% 训练样本暖启动，其后 3 个时间块；验证 / 测试 / 新轨迹用全训练 `final` 表。
 4. 在线：四源 Transformer 编码历史（T/L MLP→`dim`）；**Router 默认 `hard_prior`**（仅候选 U/S SURD → π，无序列）；可选 `surd_mlp` / `hybrid`；Top-K 稀疏专家；`base + 门控 MoE 残差`。
 5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
-6. **因果在线计数**（开放 [#20](https://github.com/ShiyinTan/TS_MOE/pull/20)；默认 on）：按时间戳训练；用户/全局访问与转移表先读后写；POI/C 嵌入加计数 MLP；T/L 加等频访问分箱；P/C 交叉注意力默认 `bias` 注入转移（可选 `gate` / `rel_key`）。见 [`docs/causal-counts.md`](docs/causal-counts.md) 与 §3.8。
+6. **因果在线计数**（默认 on）：按时间戳训练；用户/全局访问与转移表先读后写；POI/C 嵌入加计数 MLP；T/L 加等频访问分箱；P/C 交叉注意力默认 `bias` 注入转移（可选 `gate` / `rel_key`）。见 [`docs/causal-counts.md`](docs/causal-counts.md) 与 §3.8。
 
 缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、分折、候选构造与文件摘要。旧 `basic_fixed_features_v1` 缓存不兼容，须换 `--out` 重新 prepare。
 
