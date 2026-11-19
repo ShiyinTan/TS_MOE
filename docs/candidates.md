@@ -51,6 +51,8 @@ When a catalog POI never has a valid training lat/lon, prepare fills a finite lo
 3. **trail_mean** — mean of check-in coordinates on trails where the POI appears
 4. **global_mean** — mean of all observed catalog POI means
 
+Prepare prints one console line from this audit, e.g. `coordinate_imputation: observed=… adjacent_midpoint=… trail_mean=… global_mean=… (imputed=…/…)`.
+
 Empty-neighborhood fallback at **train/eval** is separate: it only expands that sample's candidate pool to the full catalog when the anchor is invalid or no catalog POI lies inside `radius_km`.
 
 `metrics.json` echoes `candidate_construction` for reproducibility.

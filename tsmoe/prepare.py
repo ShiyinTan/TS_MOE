@@ -110,6 +110,13 @@ def build_cache(cfg, paths, fingerprint, stage):
     radius_method = cfg.get("candidate_radius", DEFAULT_RADIUS)
     radius_km = pick_radius_km(distance_stats, radius_method)
     poi_coordinates, coordinate_imputation = catalog_coordinates(train_groups, pois)
+    counts = coordinate_imputation["counts"]
+    print(
+        "coordinate_imputation: "
+        + " ".join(f"{name}={counts[name]}" for name in coordinate_imputation["fallback_order"])
+        + f" (imputed={coordinate_imputation['imputed']}/{coordinate_imputation['catalog_size']})",
+        flush=True,
+    )
     candidate_construction = candidate_construction_record(
         radius_method, distance_stats, radius_km, coordinate_imputation)
     preprocessing = dict(source_fields=["venue_id", "venue_category_id_code/venue_category_id",
@@ -194,9 +201,7 @@ def build_cache(cfg, paths, fingerprint, stage):
     assert (train["fold"] >= 0).all()
     torch.save(train, stage / "train.pt")
     print(f"candidate_radius={radius_method} radius_km={radius_km} "
-          f"consecutive_pairs={distance_stats['count']} "
-          f"coord_imputed={coordinate_imputation['imputed']}/"
-          f"{coordinate_imputation['catalog_size']}", flush=True)
+          f"consecutive_pairs={distance_stats['count']}", flush=True)
     manifest = dict(fingerprint=fingerprint, config=cfg, poi_ids=pois, cat_vocab=cat_vocab,
                     poi_coordinates=poi_coordinates,
                     candidate_construction=candidate_construction,

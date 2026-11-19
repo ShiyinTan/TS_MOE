@@ -132,7 +132,7 @@ data/tokyo/
 
 ### 空间候选半径（prepare 时固定）
 
-`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）把半径写入缓存；**train / evaluate 不覆盖**，换半径须换 `--out` 并重新 prepare。锚点 = 目标前一签坐标；邻域空或锚点无效则该样本回退全目录。详见 [`docs/candidates.md`](docs/candidates.md)。
+`prepare --candidate-radius {p90,mean,max,full}`（**默认 `p90`**）把半径写入缓存；**train / evaluate 不覆盖**，换半径须换 `--out` 并重新 prepare。锚点 = 目标前一签坐标；邻域空或锚点无效则该样本回退全目录。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全，并打印 `coordinate_imputation: …` 计数行。详见 [`docs/candidates.md`](docs/candidates.md)。
 
 `download_city.py` 支持城市：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
 
@@ -175,6 +175,7 @@ python scripts/verify_city_checkins.py --data-root data --city tokyo
 # 3) 构建样本 + 折外 SURD + 空间候选半径（默认 p90）
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache
 # 等价显式：... --candidate-radius p90
+# 日志：`fold_*: N reference targets; M scored` — reference=该折拟合 SURD/量化器的训练事件；scored=划入该折评分的样本；`final` 用全部训练事件作 reference、scored=0。
 
 # 4) GPU 训练（默认 --device auto；也可显式 cuda）
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --device cuda

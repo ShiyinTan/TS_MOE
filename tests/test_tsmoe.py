@@ -205,6 +205,40 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(int(labels[0]), 0)
         self.assertEqual(int(mask[0].sum()), 2)
 
+    def test_prepare_prints_coordinate_imputation_counts(self):
+        """prepare logs per-source catalog coordinate counts from the imputation audit."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = generate(root / "data")
+            train_csv = directory / "demo_checkins_train.csv"
+            with train_csv.open(encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            fields = list(rows[0])
+            for row in rows:
+                if row["venue_id"] == "0":
+                    row["latitude"] = row["longitude"] = ""
+            with train_csv.open("w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
+            buf = io.StringIO()
+            with patch.object(sys, "argv", ["tsmoe", "prepare", "--data-root", str(directory),
+                                            "--city", "demo", "--out", str(root / "cache")]), \
+                    contextlib.redirect_stdout(buf):
+                main()
+            text = buf.getvalue()
+            self.assertRegex(
+                text,
+                r"coordinate_imputation: observed=\d+ adjacent_midpoint=\d+ "
+                r"trail_mean=\d+ global_mean=\d+ \(imputed=\d+/\d+\)",
+            )
+            self.assertIn("adjacent_midpoint=", text)
+            self.assertRegex(text, r"imputed=[1-9]\d*/\d+")
+            audit = json.loads((root / "cache" / "manifest.json").read_text())[
+                "candidate_construction"]["coordinate_imputation"]
+            self.assertGreater(audit["imputed"], 0)
+            self.assertEqual(audit["counts"]["observed"] + audit["imputed"], audit["catalog_size"])
+
     def test_catalog_coordinate_imputation_and_strict_json(self):
         """Missing POI coords are imputed from trail neighbors; dump stays allow_nan=False."""
         from datetime import datetime, timezone
