@@ -93,6 +93,7 @@ Optional Acc@1 ranking auxiliaries (see also [`causal-counts.md`](causal-counts.
 | `--lambda-bpr` | Hard-neg BPR weight `softplus(-(s_pos-max_neg-margin))` (default 0) |
 | `--bpr-margin` | Logit margin inside BPR (default 0; only if λ_bpr > 0) |
 | `--transition-score-bias` | `λ·log1p(last→cand POI transition)` added to scores (default 0) |
+| `--surd-bias-gate` / `--surd-score-bias` / `--tsb-gate-mode` / `--surd-attn-gate` | SURD/SMI-controlled bias weights (all default off / 0; see [`causal-counts.md`](causal-counts.md)) |
 
 ## Relation to `runs/`
 
