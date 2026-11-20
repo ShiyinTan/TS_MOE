@@ -86,6 +86,7 @@ RUN_NAME_EXPECTATIONS: dict[str, dict] = {
         "candidate_context_time": "off",
         "session_summary": "off",
         "user_pref": "off",
+        "user_id_emb": "off",
         "transition_pmi": "off",
         "expert_cross_attn": "off",
     },
@@ -100,6 +101,7 @@ RUN_NAME_EXPECTATIONS: dict[str, dict] = {
     "abl_ctx_cat_geo": {"candidate_context": "on"},
     "abl_sess_on": {"session_summary": "on"},
     "abl_upref_on": {"user_pref": "on"},
+    "abl_user_id": {"user_id_emb": "on"},
     "abl_tr_pmi": {"transition_pmi": "on"},
     "abl_e1_hybrid": {"expert_cross_attn": "hybrid"},
     "abl_e1_e3": {"expert_cross_attn": "hybrid", "expert_cross_attn_sparse": "on"},
@@ -135,6 +137,7 @@ _COMPARE_KEYS = (
     "candidate_context_time",
     "session_summary",
     "user_pref",
+    "user_id_emb",
     "transition_pmi",
     "expert_cross_attn",
     "expert_cross_attn_sparse",
@@ -161,6 +164,7 @@ _FLAG_PATTERNS = {
     "candidate_context_time": re.compile(r"--candidate-context-time\s+(\S+)"),
     "session_summary": re.compile(r"--session-summary\s+(\S+)"),
     "user_pref": re.compile(r"--user-pref\s+(\S+)"),
+    "user_id_emb": re.compile(r"--user-id-emb\s+(\S+)"),
     "transition_pmi": re.compile(r"--transition-pmi\s+(\S+)"),
     "expert_cross_attn": re.compile(r"--expert-cross-attn\s+(\S+)"),
     "expert_cross_attn_sparse": re.compile(r"--expert-cross-attn-sparse\s+(\S+)"),
@@ -232,7 +236,7 @@ def settings_equal(key: str, expected, recorded) -> bool:
         return _norm_boolish(expected) == _norm_boolish(recorded)
     if key in (
         "candidate_context", "candidate_context_time", "session_summary",
-        "user_pref", "transition_pmi", "expert_cross_attn",
+        "user_pref", "user_id_emb", "transition_pmi", "expert_cross_attn",
         "expert_cross_attn_sparse",
     ):
         e, r = str(expected).strip().lower(), str(recorded).strip().lower()
@@ -294,6 +298,7 @@ def extract_recorded_settings(payload: dict, key_flags: str | None = None) -> di
     take("candidate_context_time", args, cfg, cli)
     take("session_summary", args, cfg, cli)
     take("user_pref", args, cfg, cli)
+    take("user_id_emb", args, cfg, cli)
     take("transition_pmi", args, cfg, cli)
     take("expert_cross_attn", args, cfg, cli)
     take("expert_cross_attn_sparse", args, cfg, cli)
@@ -419,6 +424,7 @@ def _format_key_flags_from_settings(settings: dict) -> str:
         ("candidate_context_time", "--candidate-context-time"),
         ("session_summary", "--session-summary"),
         ("user_pref", "--user-pref"),
+        ("user_id_emb", "--user-id-emb"),
         ("transition_pmi", "--transition-pmi"),
         ("expert_cross_attn", "--expert-cross-attn"),
         ("expert_cross_attn_sparse", "--expert-cross-attn-sparse"),
@@ -437,7 +443,7 @@ def _format_key_flags_from_settings(settings: dict) -> str:
             continue
         if key in (
             "candidate_context", "candidate_context_time", "session_summary",
-            "user_pref", "transition_pmi", "expert_cross_attn",
+            "user_pref", "user_id_emb", "transition_pmi", "expert_cross_attn",
         ) and str(value) == "off":
             continue
         parts.append(f"{flag} {value}")

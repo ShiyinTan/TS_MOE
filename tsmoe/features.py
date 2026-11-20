@@ -135,6 +135,8 @@ def gather_side_features(
     candidate_context_time="off",
     session_summary=False,
     user_pref=False,
+    user_id_emb=False,
+    user_vocab=None,
     transition_pmi=False,
 ):
     """Build optional side-feature tensors aligned with a chronological batch.
@@ -146,6 +148,17 @@ def gather_side_features(
     widths = [len(c) for c in candidate_rows_list]
     width = max(widths) if widths else 0
     n_pois = int(poi_coords.shape[0]) if poi_coords is not None else 0
+
+    if user_id_emb:
+        from .counts import user_id_of
+        # pad=0, UNK=1, train user row i → token i+2 (mirrors POI/cat token scheme).
+        vocab = user_vocab or {}
+        tokens = torch.ones(len(idxs), dtype=torch.long)  # default UNK
+        for bi, sample_index in enumerate(idxs):
+            uid = str(user_id_of(data, sample_index))
+            if uid in vocab:
+                tokens[bi] = int(vocab[uid]) + 2
+        out["user_token"] = tokens
 
     need_cand = candidate_context or candidate_context_time != "off"
     if need_cand:

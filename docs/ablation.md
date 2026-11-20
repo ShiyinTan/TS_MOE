@@ -84,6 +84,7 @@ python -m tsmoe ablation-summary --results results
 | **候选时段 A-time** | last_slot / causal_slot | **`off`（默认）** / `last_slot` / `causal_slot` | `--candidate-context-time` | 否† | `abl_ctx_cat_geo_time` |
 | **会话摘要 B** | 窗口 cat hist / 长度桶 / 活动中心 | **`off`（默认）** / `on` | `--session-summary` | 否 | `abl_sess_on` |
 | **用户偏好 C** | 因果 user–cat / user–hour → base | **`off`（默认）** / `on` | `--user-pref`（须因果 on） | 否† | `abl_upref_on` |
+| **用户 ID 嵌入** | train `user_id` Embedding → base | **`off`（默认）** / `on` | `--user-id-emb` | 否 | `abl_user_id` |
 | **转移 PMI D** | 转移 attn 用 PMI 替代 raw count | **`off`（默认）** / `on` | `--transition-pmi`（须因果 on） | 否† | `abl_tr_pmi` |
 | **专家内交叉注意力 E** | E0 off / E1 hybrid / E2 full | **`off`（默认）** / `hybrid` / `full` | `--expert-cross-attn` | 否 | `abl_e1_hybrid` / `abl_e2_full` |
 | **E3 稀疏** | 仅 top-k 专家跑 expert attn | **`on`（E≠off 时）** / `off` | `--expert-cross-attn-sparse` | 否 | `abl_e1_e3` |

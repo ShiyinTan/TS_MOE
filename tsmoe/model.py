@@ -49,6 +49,8 @@ class ModelConfig:
     candidate_context_time: str = "off"
     session_summary: str = "off"
     user_pref: str = "off"
+    # Learned embedding of train user_id → base/context (default off; not hard_prior).
+    user_id_emb: str = "off"
     transition_pmi: str = "off"
     expert_cross_attn: str = "off"
     # When expert_cross_attn ≠ off: only run expert-local attn for router top-k (E3).
@@ -77,6 +79,7 @@ class ModelConfig:
         for name, value in (
                 ("session_summary", self.session_summary),
                 ("user_pref", self.user_pref),
+                ("user_id_emb", self.user_id_emb),
                 ("transition_pmi", self.transition_pmi),
                 ("expert_cross_attn_sparse", self.expert_cross_attn_sparse)):
             if value not in ON_OFF:
@@ -195,12 +198,14 @@ class TransitionCrossAttention(nn.Module):
 
 
 class TSMoE(nn.Module):
-    def __init__(self, n_pois, n_categories, max_length, config):
+    def __init__(self, n_pois, n_categories, max_length, config, n_users=0):
         super().__init__()
         self.cfg = config
         d = config.dim
         self.n_pois = n_pois
         self.n_categories = n_categories
+        # Train-user vocabulary size (0 OK when user_id_emb off); tokens use pad=0, UNK=1, row+2.
+        self.n_users = max(0, int(n_users))
         self.max_length = max_length
         self.projections = nn.ModuleDict({
             "P": nn.Embedding(n_pois + 2, d, padding_idx=0),
@@ -267,6 +272,9 @@ class TSMoE(nn.Module):
         self.user_hour_proj = nn.Linear(USER_HOUR_DIM, d)
         self.user_pref_mlp = mlp(2 * d, 2 * d, d, config.dropout)
         self.user_pref_to_full = nn.Linear(d, 5 * d)
+        # --- user_id embedding (identity; separate from causal user-pref counts) ---
+        self.user_emb = nn.Embedding(self.n_users + 2, d, padding_idx=0)
+        self.user_id_to_full = nn.Linear(d, 5 * d)
         # --- E: expert-local cross-attn (shared QKV per source; transition stays on shared P/C) ---
         self.expert_attn = nn.ModuleDict({
             s: nn.MultiheadAttention(d, config.heads, batch_first=True) for s in SOURCE_ORDER
@@ -370,6 +378,15 @@ class TSMoE(nn.Module):
         pref = self.user_pref_mlp(torch.cat([cat_p, hour_p], -1))
         return self.user_pref_to_full(pref)  # [B, 5D]
 
+    def _user_id_addon(self, count_ctx, device):
+        """Learned user_id embedding → shared full (base/context); never hard_prior."""
+        if not self._flag_on("user_id_emb") or count_ctx is None:
+            return None
+        if "user_token" not in count_ctx:
+            return None
+        tok = count_ctx["user_token"].to(device).long().clamp(0, self.n_users + 1)
+        return self.user_id_to_full(self.user_emb(tok))  # [B, 5D]
+
     def _cross_attend(self, encoded, valid, candidate, count_ctx=None):
         """Per-source candidate←history attention; P/C use transition modes when enabled."""
         pad_mask = ~valid
@@ -458,13 +475,16 @@ class TSMoE(nn.Module):
         else:
             z = self._cross_attend(encoded, valid, candidate, count_ctx)
         full = torch.cat([*z, candidate], -1)
-        # B/C addons → base/context only (never hard_prior logits).
+        # B/C/user_id addons → base/context only (never hard_prior logits).
         sess = self._session_addon(count_ctx, rows.shape[0], candidate.device)
         if sess is not None:
             full = full + sess[:, None, :]
         pref = self._user_pref_addon(count_ctx, candidate.device)
         if pref is not None:
             full = full + pref[:, None, :]
+        uid = self._user_id_addon(count_ctx, candidate.device)
+        if uid is not None:
+            full = full + uid[:, None, :]
         base = self.base(full).squeeze(-1)
         prior, w = prior26.detach(), confidence.detach()
         if not self.cfg.use_surd:

@@ -177,6 +177,11 @@ def main():
         help="causal user–cat / user–hour preference MLP into base/context "
              "(default off; requires causal counts; never hard_prior)")
     t.add_argument(
+        "--user-id-emb", choices=ON_OFF, default="off",
+        help="learned Embedding of train user_id into base/context "
+             "(default off; UNK for users unseen in train; never hard_prior). "
+             "Distinct from --user-pref (count prefs). No re-prepare.")
+    t.add_argument(
         "--transition-pmi", choices=ON_OFF, default="off",
         help="use POI→POI / cat→POI PMI instead of raw counts in transition "
              "cross-attn (default off; requires causal counts). Text embeddings deferred")

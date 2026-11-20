@@ -47,6 +47,7 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("candidate_context_time", "off")
     cfg.setdefault("session_summary", "off")
     cfg.setdefault("user_pref", "off")
+    cfg.setdefault("user_id_emb", "off")
     cfg.setdefault("transition_pmi", "off")
     cfg.setdefault("expert_cross_attn", "off")
     cfg.setdefault("expert_cross_attn_sparse", "on")
@@ -59,6 +60,7 @@ _COUNT_WEIGHT_PREFIXES = (
     "session_length_emb.", "session_cat_proj.", "session_scalar_mlp.",
     "session_mlp.", "session_to_full.",
     "user_cat_proj.", "user_hour_proj.", "user_pref_mlp.", "user_pref_to_full.",
+    "user_emb.", "user_id_to_full.",
     "expert_attn.", "expert_query_proj.",
 )
 
@@ -99,6 +101,7 @@ def needs_side_features(cfg):
         or cfg.candidate_context_time != "off"
         or cfg.session_summary == "on"
         or cfg.user_pref == "on"
+        or getattr(cfg, "user_id_emb", "off") == "on"
     )
 
 
@@ -144,6 +147,8 @@ def build_batch_feature_context(
             candidate_context_time=cfg.candidate_context_time,
             session_summary=cfg.session_summary == "on",
             user_pref=cfg.user_pref == "on" and count_tables is not None,
+            user_id_emb=getattr(cfg, "user_id_emb", "off") == "on",
+            user_vocab=cache.user_vocab() if getattr(cfg, "user_id_emb", "off") == "on" else None,
             transition_pmi=transition_pmi,
         )
         ctx = merge_feature_context(ctx, side)
@@ -174,6 +179,8 @@ def gather_features_causal(
             candidate_context_time=cfg.candidate_context_time,
             session_summary=cfg.session_summary == "on",
             user_pref=cfg.user_pref == "on" and count_tables is not None,
+            user_id_emb=getattr(cfg, "user_id_emb", "off") == "on",
+            user_vocab=cache.user_vocab() if getattr(cfg, "user_id_emb", "off") == "on" else None,
             transition_pmi=transition_pmi,
         )
         ctx = merge_feature_context(ctx, side)
@@ -315,8 +322,21 @@ class Cache:
             verify_files(self.path, {pair["file"]: pair["sha256"]})
         return FrozenSURDTable(stats).to(device)
 
+    def user_vocab(self):
+        """Stable map train ``user_id`` → row in ``[0, n_users)`` (for ``--user-id-emb``)."""
+        cached = getattr(self, "_user_vocab", None)
+        if cached is not None:
+            return cached
+        train = self.split("train")
+        users = sorted({str(user) for user, _trail in train["trails"]})
+        self._user_vocab = {user: i for i, user in enumerate(users)}
+        return self._user_vocab
+
     def model(self, cfg):
-        return TSMoE(len(self.pois), len(self.meta["cat_vocab"]), self.cfg["max_length"], cfg)
+        n_users = len(self.user_vocab()) if getattr(cfg, "user_id_emb", "off") == "on" else 0
+        return TSMoE(
+            len(self.pois), len(self.meta["cat_vocab"]), self.cfg["max_length"], cfg,
+            n_users=n_users)
 
     def uses_full_catalog_pools(self):
         """True when every sample scores against the full training catalog."""
@@ -723,6 +743,7 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
             ("candidate_context_time", "--candidate-context-time"),
             ("session_summary", "--session-summary"),
             ("user_pref", "--user-pref"),
+            ("user_id_emb", "--user-id-emb"),
             ("transition_pmi", "--transition-pmi"),
             ("expert_cross_attn", "--expert-cross-attn"),
             ("expert_cross_attn_sparse", "--expert-cross-attn-sparse"),
@@ -1019,6 +1040,7 @@ def train(args):
     candidate_context_time = getattr(args, "candidate_context_time", "off")
     session_summary = getattr(args, "session_summary", "off")
     user_pref = getattr(args, "user_pref", "off")
+    user_id_emb = getattr(args, "user_id_emb", "off")
     transition_pmi = getattr(args, "transition_pmi", "off")
     expert_cross_attn = getattr(args, "expert_cross_attn", "off")
     expert_cross_attn_sparse = getattr(args, "expert_cross_attn_sparse", "on")
@@ -1036,6 +1058,7 @@ def train(args):
                       candidate_context=candidate_context,
                       candidate_context_time=candidate_context_time,
                       session_summary=session_summary, user_pref=user_pref,
+                      user_id_emb=user_id_emb,
                       transition_pmi=transition_pmi,
                       expert_cross_attn=expert_cross_attn,
                       expert_cross_attn_sparse=expert_cross_attn_sparse)
@@ -1050,6 +1073,7 @@ def train(args):
           f"causal_counts={cfg.causal_counts} transition_attn={cfg.transition_attn} "
           f"visit_bins={cfg.visit_bins} candidate_context={cfg.candidate_context} "
           f"session_summary={cfg.session_summary} user_pref={cfg.user_pref} "
+          f"user_id_emb={cfg.user_id_emb} n_users={getattr(model, 'n_users', 0)} "
           f"expert_cross_attn={cfg.expert_cross_attn}", flush=True)
     if param_device.type != device.type or (
             device.index is not None and param_device.index not in (None, device.index)):
@@ -1075,6 +1099,7 @@ def train(args):
     settings["candidate_context_time"] = cfg.candidate_context_time
     settings["session_summary"] = cfg.session_summary
     settings["user_pref"] = cfg.user_pref
+    settings["user_id_emb"] = cfg.user_id_emb
     settings["transition_pmi"] = cfg.transition_pmi
     settings["expert_cross_attn"] = cfg.expert_cross_attn
     settings["expert_cross_attn_sparse"] = cfg.expert_cross_attn_sparse
@@ -1138,6 +1163,7 @@ def train(args):
             candidate_context_time=cfg.candidate_context_time,
             session_summary=cfg.session_summary,
             user_pref=cfg.user_pref,
+            user_id_emb=cfg.user_id_emb,
             transition_pmi=cfg.transition_pmi,
             expert_cross_attn=cfg.expert_cross_attn,
             expert_cross_attn_sparse=cfg.expert_cross_attn_sparse,
