@@ -62,11 +62,12 @@ python -m tsmoe ablation-summary --results results
 
 | 因子 | 改什么 | 档位 / on·off | CLI | 依赖 prepare? | 建议 `run_name`（`--out` 末段） |
 | --- | --- | --- | --- | --- | --- |
-| **候选半径** | 局部邻域半径 | `p70` / `p80` / `p90`（默认）/ `mean` / `max` / `full` | `prepare --candidate-radius …` | **是** | `abl_cand_p90` / `abl_cand_p80` / `abl_cand_full` … |
+| **候选半径** | 局部邻域半径 | `p70` / `p80` / `p90`（默认）/ `mean` / `max` / `full` / `random` | `prepare --candidate-radius …` | **是** | `abl_cand_p90` / `abl_cand_p80` / `abl_cand_full` / `abl_cand_random` … |
 | **多源：热门** | 大半径热门源 | on（默认 top-k=100）/ off（`--popular-top-k 0`）；半径 `max`/`p90`/…/`multiplier` | `--popular-top-k` `--popular-radius` `--popular-by` | **是** | `abl_cand_no_pop` / `abl_cand_pop_p80` |
 | **多源：用户常去** | 用户训练常去 | on（默认 top-k=50）/ off（`--user-frequent-top-k 0`） | `--user-frequent-top-k` `--user-frequent-min-visits` | **是** | `abl_cand_no_uf` |
-| **随机负例** | 池内额外均匀负例 | `50`（默认）/ `0`（关）/ 其它正整数 | `--random-negatives` `--random-negatives-seed` | **是** | `abl_cand_rnd0` / `abl_cand_rnd50` |
+| **随机负例** | 池内额外均匀负例（或 `random` 模式下的整池抽样数） | `50`（默认）/ `0`（关；**不可**与 `random` 同用）/ 其它正整数 | `--random-negatives` `--random-negatives-seed` | **是** | `abl_cand_rnd0` / `abl_cand_rnd50` |
 | **仅邻域+随机** | 关掉热门+用户常去 | 组合档 | `--popular-top-k 0 --user-frequent-top-k 0` | **是** | `abl_cand_nbhd` |
+| **随机池 vs 多源基线** | 仅均匀随机候选 vs 默认多源 | 对照：`p90` 多源（默认）/ `random` | 基线复用默认 cache；`random` 须 `--candidate-radius random`（`--random-negatives >= 1`） | **是**（`random`） | `abl_cand_baseline` / `abl_cand_random` |
 | **Router 模式** | 专家路由 π | `hard_prior`（默认）/ `surd_mlp` / `hybrid` | `train --router-mode …`；hybrid 可加 `--lambda-prior` `--hybrid-lambda` | 否 | `abl_router_hard` / `abl_router_surd_mlp` / `abl_router_hybrid` |
 | **`--no-surd`** | 关掉 SURD 引导 | off（默认）/ on | `train --no-surd` | 否 | `abl_nosurd` |
 | **SURD 表协议** | 先验如何估计 / 谁查哪张表 | **仅 train-all 共用**（协议已固定；无 fold 档可切） | `prepare`（**无** `--folds`/`--warmup`）只写 `final.surd.pt`；`train`/`evaluate`/`explain`/`inspect --table final` 皆查 `final` | **是**（旧 fold 缓存须重 prepare） | 记为「当前默认」；旧 fold 训练先验 **不再支持** |
@@ -130,7 +131,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_off --de
 | **3** | 因果整模块：on vs `--no-causal-counts` | 否 | 同一 cache |
 | **4** | transition：`bias` / `gate` / `rel_key`（因果 on） | 否 | 同一 cache |
 | **4b** | Overlay A/B/C/D/E（§3.1；默认均 off） | 否 | 同一 cache；一次一因子或声明组合 |
-| **5** | 候选变体：半径 / 关源 / 随机负例 / full | **是** | 每种独立 cache + model |
+| **5** | 候选变体：半径 / 关源 / 随机负例 / full / **random vs 基线** | **是** | 每种独立 cache + model；§5 含 `abl_cand_baseline`↔`abl_cand_random` |
 | **6** | 目标协议：`all`/`last` 组合 | **是** | 独立 cache |
 | **6b** | `--filter-unknown on`（STHGCN 式剔除未知 user/POI） | **是** | 独立 cache；**不是** `known_only`（见 §6.1） |
 | — | STHGCN T/L | — | **无开关**；旧 basic 特征已去掉，不能做 CLI 消融 |
@@ -306,6 +307,35 @@ python -m tsmoe train --cache runs/demo/cache --out runs/demo/abl_e1_hybrid \
 ### 5) 候选变体（每种 **重新 prepare**；独立 `--out` 以免覆盖）
 
 每条 prepare 同样**无** `--folds` / `--warmup`，只产出 train-all `final` SURD（与基线协议相同；变的是候选构造）。
+
+#### 5a) 随机采样 candidates vs 当前多源基线（推荐先跑）
+
+同一 seed / 默认 train knobs / Acc@1；**只改候选构造**。基线复用 §0 的 `runs/tokyo/cache`（无需再 prepare）；`random` 须独立 cache。
+
+| run_name | 候选构造 | cache | 差异 |
+| --- | --- | --- | --- |
+| `abl_cand_baseline` | 默认多源：邻域 `p90` ∪ popular@max ∪ user-frequent ∪ random50 | `runs/tokyo/cache` | 当前默认 |
+| `abl_cand_random` | **仅**均匀随机：GT + `--random-negatives 50`（同 seed `0`） | `runs/tokyo/cache_abl_random` | 无邻域 / 热门 / 用户常去；无 empty-union→全目录回退 |
+
+```bash
+# 基线：默认多源（复用 §0 cache；seed 默认 42）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_cand_baseline \
+  --seed 42 --device cuda
+# → results/tokyo/abl_cand_baseline/eval_test/  （主看 Acc@1）
+
+# 随机池：--candidate-radius random（须 random-negatives >= 1）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl_random \
+  --candidate-radius random \
+  --random-negatives 50 --random-negatives-seed 0 \
+  --train-targets all --eval-targets all
+python -m tsmoe train --cache runs/tokyo/cache_abl_random --out runs/tokyo/abl_cand_random \
+  --seed 42 --device cuda
+# → results/tokyo/abl_cand_random/eval_test/
+```
+
+**说明：** `random` 复用同一套 `--random-negatives` / `--random-negatives-seed` 抽样器；邻域 / popular / user-frequent **不参与**。池通常小于多源（约 GT+50），Acc@1 **未**按池大小归一化——若要对齐难度，可把 `--random-negatives` 调到接近基线 mean pool size（见 train 启动时的 `candidates … mean=`）。`ablation-summary` 已登记 `abl_cand_baseline` ↔ `p90`、`abl_cand_random` ↔ `random`。
+
+#### 5b) 其它候选变体
 
 ```bash
 # p80 / p70
@@ -504,7 +534,9 @@ python -m tsmoe ablation-summary --results results
 
 | run_name | key flags | Acc@1 | NDCG@1 | MRR | notes |
 | --- | --- | --- | --- | --- | --- |
-| `abl_cand_p90`（基线 cache） | `--candidate-radius p90` + 默认多源 |  |  |  | 可用 `abl_router_hard` 同设置数字 |
+| `abl_cand_baseline` | 默认多源（`--candidate-radius p90` + pop/uf/rnd50） |  |  |  | §5a；复用 `runs/tokyo/cache` |
+| `abl_cand_random` | `--candidate-radius random --random-negatives 50` |  |  |  | §5a；re-prepare；仅随机池 |
+| `abl_cand_p90`（基线 cache） | `--candidate-radius p90` + 默认多源 |  |  |  | 可用 `abl_router_hard` / `abl_cand_baseline` 同设置数字 |
 | `abl_cand_p80` | `--candidate-radius p80` |  |  |  | re-prepare |
 | `abl_cand_p70` | `--candidate-radius p70` |  |  |  | re-prepare |
 | `abl_cand_rnd0` | `--random-negatives 0` |  |  |  | re-prepare |
@@ -566,7 +598,7 @@ python -m tsmoe ablation-summary --results results
 - [ ] 负采样填入 §7.2
 - [ ] 因果 on/off + transition 三档填入 §7.3
 - [ ] Overlay A/B/C/D/E 填入 §7.8（§3.1 表）
-- [ ] 候选变体（re-prepare）填入 §7.4
+- [ ] 候选变体（含 §5a `abl_cand_baseline` / `abl_cand_random`）填入 §7.4
 - [ ] 目标协议填入 §7.5
 - [ ] `--filter-unknown on` 填入 §7.5b（独立 cache；对照 `known_only` 说明）
 - [ ] 确认 `results/ablation_log.md` / `.csv` 已自动追加各跑（或从模板重置后再跑）

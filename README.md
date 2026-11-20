@@ -1,6 +1,6 @@
 # TS-MoE · Massive-STEPS 下一 POI 推荐
 
-Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域、更大半径热门 POI、用户训练常去地点与随机负例的并集（去重；**目录内真目标必入池**，含 val/test；半径可选 `p70`/`p80`/`p90`/`mean`/`max`，或 `full` 退回全目录）。训练可从该池负采样 / 封顶；**评估对完整构造池排名**。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
+Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域、更大半径热门 POI、用户训练常去地点与随机负例的并集（去重；**目录内真目标必入池**，含 val/test；半径可选 `p70`/`p80`/`p90`/`mean`/`max`，或 `full` 退回全目录，或 `random` 仅随机池）。训练可从该池负采样 / 封顶；**评估对完整构造池排名**。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
 
 算法设计见 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
 
@@ -145,7 +145,7 @@ data/tokyo/
 
 ### 多源候选池（prepare 时固定）
 
-默认候选 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重；**目录内真目标必入池**，含 val/test）。`prepare --candidate-radius {p70,p80,p90,mean,max,full}`（**默认 `p90`**）定局部邻域；`--popular-radius` 可用 `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`；另有 `--popular-top-k` / `--popular-by`、`--user-frequent-*`、`--random-negatives`（默认 **50**，`0` 关闭）均写入指纹。**train / evaluate 不覆盖**；改构造须 **重新 prepare**（同一 `--out` **默认覆盖**旧缓存；对照实验请用独立 `--out` 保留多套；`--no-overwrite` 可禁止覆盖）。邻域/热门/用户常去皆空才回退全目录。`train --negatives` / `--max-train-candidates` 仅训练抽样；**evaluate 用完整构造池**。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全。`train` 启动时打印各 split 池大小统计并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
+默认候选 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重；**目录内真目标必入池**，含 val/test）。`prepare --candidate-radius {p70,p80,p90,mean,max,full,random}`（**默认 `p90`**）定局部邻域；`random` = 仅 GT+均匀随机（须 `--random-negatives >= 1`；见消融 §5a）；`--popular-radius` 可用 `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`；另有 `--popular-top-k` / `--popular-by`、`--user-frequent-*`、`--random-negatives`（默认 **50**，`0` 关闭）均写入指纹。**train / evaluate 不覆盖**；改构造须 **重新 prepare**（同一 `--out` **默认覆盖**旧缓存；对照实验请用独立 `--out` 保留多套；`--no-overwrite` 可禁止覆盖）。邻域/热门/用户常去皆空才回退全目录（`random` 模式无此回退）。`train --negatives` / `--max-train-candidates` 仅训练抽样；**evaluate 用完整构造池**。缺坐标的目录 POI 会按 observed → adjacent_midpoint → trail_mean → global_mean 补全。`train` 启动时打印各 split 池大小统计并写入 `results/<run>/candidate_pool_stats.json`。详见 [`docs/candidates.md`](docs/candidates.md)。
 
 `download_city.py` 支持城市：`bandung`、`beijing`、`istanbul`、`jakarta`、`kuwait_city`、`melbourne`、`moscow`、`new_york`、`palembang`、`petaling_jaya`、`sao_paulo`、`shanghai`、`sydney`、`tangerang`、`tokyo`。
 
@@ -248,7 +248,7 @@ python -m tsmoe train --cache runs/tokyo/cache_train_all_eval_last \
 
 ### 3.4 候选构造（多源 / 半径 / 随机负例 / GT）
 
-**白话：** 候选池在 **prepare** 时按样本锚点（目标前一签）固定进缓存；train/evaluate **不覆盖**。默认 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重）。**训练目录内的真目标（GT）必入池**（含 val/test）。邻域半径可选 `p70` / `p80` / `p90`（默认）/ `mean` / `max`；`full` = 全目录。细节见 [`docs/candidates.md`](docs/candidates.md)。
+**白话：** 候选池在 **prepare** 时按样本锚点（目标前一签）固定进缓存；train/evaluate **不覆盖**。默认 = **邻域 ∪ 大半径热门 ∪ 用户常去 ∪ 随机负例**（去重）。**训练目录内的真目标（GT）必入池**（含 val/test）。邻域半径可选 `p70` / `p80` / `p90`（默认）/ `mean` / `max`；`full` = 全目录；`random` = 仅随机池（消融对照）。细节见 [`docs/candidates.md`](docs/candidates.md)。
 
 对照多种半径 / 构造时用**独立** `--out`（及对应 train `--out`）以免互相覆盖；若只保留一套，对同一 `--out` 重新 prepare 即可（默认覆盖）。
 
@@ -288,6 +288,10 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_nbh
 # full = 全训练目录（无空间 / 随机源）
 python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_full \
   --candidate-radius full
+
+# random = 仅 GT + 均匀随机（消融对照；须 random-negatives >= 1）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl_random \
+  --candidate-radius random --random-negatives 50 --random-negatives-seed 0
 ```
 
 | `--candidate-radius` | 局部邻域 |
@@ -296,6 +300,7 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_ful
 | `p80` / `p70` | 80 / 70 分位 |
 | `mean` / `max` | 均值 / 最大值 |
 | `full` | 关闭多源过滤；候选 = 整个训练 POI 目录 |
+| `random` | 仅随机池（GT + `--random-negatives`）；见 [`docs/ablation.md`](docs/ablation.md) §5a |
 
 | `--popular-radius` | 大半径热门 |
 | --- | --- |
@@ -536,7 +541,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | --- | --- |
 | `prepare --max-length`、`--hash-dim`、`--tau-pos` | 50、64、10 |
 | `prepare --clusters` | 4（SURD 无 fold：去掉 `--folds` / `--warmup`；须重 prepare） |
-| `prepare --candidate-radius` | `p70` / `p80` / `p90` / `mean` / `max` / `full`；局部邻域；写入缓存 |
+| `prepare --candidate-radius` | `p70` / `p80` / `p90` / `mean` / `max` / `full` / `random`；局部邻域或随机池；写入缓存 |
 | `prepare --popular-radius` | `max` / `p90` / `p80` / `p70` / `mean` / `multiplier`（默认 `max`） |
 | `prepare --popular-radius-multiplier` | 默认 `2.0`（仅 `multiplier`） |
 | `prepare --popular-top-k` / `--popular-by` | 默认 `100` / `visit`（`0` 关闭热门源） |

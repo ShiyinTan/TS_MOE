@@ -21,33 +21,35 @@ For each sample, with anchor = lat/lon of the check-in immediately before the ta
 
 `--candidate-radius full` disables spatial / popular / user-frequent / random sources and uses the full training catalog for every sample.
 
+`--candidate-radius random` builds a **random-only** pool: in-catalog ground truth plus up to `--random-negatives` uniform catalog rows (same seeded sampler as multi-source extras). Neighborhood / popular / user-frequent are unused; there is **no** empty-union → full-catalog fallback. Requires `--random-negatives >= 1`. Default remains multi-source (`p90`); `random` is opt-in for ablations (see [`ablation.md`](ablation.md) §5a).
+
 ## Prepare knobs (fingerprint)
 
 Changing any of these **requires re-prepare**; train/evaluate do not override them. The same `--out` **overwrites by default** when the fingerprint differs (use distinct `--out` paths to keep parallel caches; `--no-overwrite` refuses replacement).
 
 ```bash
 python -m tsmoe prepare ... \
-  --candidate-radius p90 \              # local: p70|p80|p90|mean|max|full (default p90)
+  --candidate-radius p90 \              # local: p70|p80|p90|mean|max|full|random (default p90)
   --popular-radius max \                # popular: max|p90|p80|p70|mean|multiplier (default max)
   --popular-radius-multiplier 2.0 \     # only when --popular-radius multiplier
   --popular-top-k 100 \                 # 0 disables popular source
   --popular-by visit \                  # visit|target
   --user-frequent-top-k 50 \            # 0 disables user-frequent source
   --user-frequent-min-visits 2 \
-  --random-negatives 50 \               # 0 disables; default 50
+  --random-negatives 50 \               # 0 disables; default 50; required >=1 when radius=random
   --random-negatives-seed 0
 ```
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--candidate-radius` | `p90` | Local radius from consecutive train check-in distances, or `full` |
+| `--candidate-radius` | `p90` | Local radius from consecutive train check-in distances, or `full` / `random` |
 | `--popular-radius` | `max` | How to set the larger popular radius (`multiplier` → local × multiplier) |
 | `--popular-radius-multiplier` | `2.0` | Scale when `--popular-radius multiplier` |
 | `--popular-top-k` | `100` | Top-K popular POIs inside the larger radius (`0` = off) |
 | `--popular-by` | `visit` | Rank by train visit count or next-POI target count |
 | `--user-frequent-top-k` | `50` | Per-user top venues from **training** history (`0` = off) |
 | `--user-frequent-min-visits` | `2` | Min train visits to count as user-frequent |
-| `--random-negatives` | `50` | Extra uniform random catalog negatives per sample (`0` = off) |
+| `--random-negatives` | `50` | Extra uniform random catalog negatives per sample (`0` = off); under `random` radius this **is** the pool size (excl. GT) |
 | `--random-negatives-seed` | `0` | Seed mixed with sample index for deterministic random negatives |
 
 ### Which radii work where
@@ -61,6 +63,7 @@ python -m tsmoe prepare ... \
 | `max` (popular default) | yes | yes | `max_km` |
 | `multiplier` | no | yes only | `local_radius_km × --popular-radius-multiplier` |
 | `full` | yes only | no | disables multi-source (full catalog) |
+| `random` | yes only | no | random-only pool (GT + `--random-negatives`) |
 
 ## Train sampling vs eval
 

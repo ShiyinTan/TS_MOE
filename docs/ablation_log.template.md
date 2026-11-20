@@ -21,6 +21,8 @@ Protocol: see [`ablation.md`](ablation.md).
 |  | `abl_tr_bias` | `runs/tokyo/cache` | `--transition-attn bias` |  |  |  |  |
 |  | `abl_tr_gate` | `runs/tokyo/cache` | `--transition-attn gate` |  |  |  |  |
 |  | `abl_tr_rel_key` | `runs/tokyo/cache` | `--transition-attn rel_key` |  |  |  |  |
+|  | `abl_cand_baseline` | `runs/tokyo/cache` | `--candidate-radius p90` + default multi-source |  |  |  | §5a baseline |
+|  | `abl_cand_random` | `runs/tokyo/cache_abl_random` | `--candidate-radius random --random-negatives 50` |  |  |  | §5a; re-prepare |
 |  | `abl_cand_p80` | `runs/tokyo/cache_abl_p80` | `--candidate-radius p80` |  |  |  | re-prepare |
 |  | `abl_cand_p70` | `runs/tokyo/cache_abl_p70` | `--candidate-radius p70` |  |  |  | re-prepare |
 |  | `abl_cand_rnd0` | `runs/tokyo/cache_abl_rnd0` | `--random-negatives 0` |  |  |  | re-prepare |

@@ -15,9 +15,9 @@ import torch
 from examples.make_demo import generate
 from tsmoe.__main__ import main
 from tsmoe.candidates import (
-    build_user_frequent, catalog_coordinates, catalog_visit_counts,
-    consecutive_visit_distances, format_pool_size_line, haversine_km,
-    neighborhood_indices, pick_popular_radius_km, pick_radius_km,
+    build_user_frequent, candidate_construction_record, catalog_coordinates,
+    catalog_visit_counts, consecutive_visit_distances, format_pool_size_line,
+    haversine_km, neighborhood_indices, pick_popular_radius_km, pick_radius_km,
     popular_indices, resolve_candidate_pool, sample_candidates,
     summarize_distances, summarize_pool_sizes,
 )
@@ -318,6 +318,7 @@ class TestDesign(unittest.TestCase):
         self.assertLessEqual(stats["p70_km"], stats["p80_km"])
         self.assertLessEqual(stats["p80_km"], stats["p90_km"])
         self.assertIsNone(pick_radius_km(stats, "full"))
+        self.assertIsNone(pick_radius_km(stats, "random"))
         self.assertAlmostEqual(pick_popular_radius_km(stats, 10.0, "p80", 2.0), stats["p80_km"])
         self.assertAlmostEqual(pick_popular_radius_km(stats, 10.0, "p70", 2.0), stats["p70_km"])
         pois = [1, 2, 3, 4]
@@ -355,6 +356,27 @@ class TestDesign(unittest.TestCase):
             0.0, 0.0, target_row=3, catalog_coords=coords, radius_km=1.0, catalog_size=4,
             random_negatives=2, random_negatives_seed=7, sample_index=0)
         self.assertEqual(sorted(with_random.tolist()), sorted(again.tolist()))
+        # Random-only: no spatial / popular / user-frequent; GT + seeded draws.
+        rnd_only, how = resolve_candidate_pool(
+            0.0, 0.0, target_row=3, catalog_coords=coords, radius_km=None, catalog_size=4,
+            popular_top_k=100, user_frequent_rows=[0, 1],
+            random_negatives=2, random_negatives_seed=7, sample_index=0,
+            random_only=True)
+        self.assertEqual(how, "random_pool")
+        self.assertIn(3, rnd_only.tolist())
+        self.assertEqual(int(rnd_only.numel()), 3)  # GT + 2 random
+        rnd_again, _ = resolve_candidate_pool(
+            0.0, 0.0, target_row=3, catalog_coords=coords, radius_km=None, catalog_size=4,
+            random_negatives=2, random_negatives_seed=7, sample_index=0,
+            random_only=True)
+        self.assertEqual(sorted(rnd_only.tolist()), sorted(rnd_again.tolist()))
+        record = candidate_construction_record(
+            "random", stats, None, random_negatives=50, random_negatives_seed=0)
+        self.assertEqual(record["method"], "random_pool")
+        self.assertEqual(record["sources"], ["random_negatives"])
+        self.assertEqual(record["random_negatives"], 50)
+        self.assertEqual(record["popular_top_k"], 0)
+        self.assertIsNone(record["empty_union_fallback"])
         # Popular + user-frequent enrich an otherwise tiny neighborhood.
         popularity = torch.tensor([1.0, 50.0, 5.0, 2.0], dtype=torch.float64)
         rich, how = resolve_candidate_pool(
@@ -1285,6 +1307,14 @@ class AblationSummaryTests(unittest.TestCase):
         self.assertEqual(
             expected_settings_for_run_name("tokyo/abl_filter_unknown"),
             {"filter_unknown": "on"},
+        )
+        self.assertEqual(
+            expected_settings_for_run_name("tokyo/abl_cand_baseline"),
+            {"candidate_radius": "p90"},
+        )
+        self.assertEqual(
+            expected_settings_for_run_name("abl_cand_random"),
+            {"candidate_radius": "random"},
         )
         self.assertIsNone(expected_settings_for_run_name("tokyo/model"))
 
