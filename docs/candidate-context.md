@@ -12,6 +12,7 @@ See also: [`ablation.md`](ablation.md) (overlay command table) · [`causal-count
 | `--candidate-context-time {off,last_slot,causal_slot}` | **`off`** | **No**† | **No** |
 | `--session-summary {off,on}` | **`off`** | **No** | **No** |
 | `--user-pref {off,on}` | **`off`** | **No**† | **No** |
+| `--user-id-emb {off,on}` | **`off`** | **No** | **No** |
 | `--transition-pmi {off,on}` | **`off`** | **No**† | **No** |
 | `--expert-cross-attn {off,hybrid,full}` | **`off`** | **No** | **No** |
 | `--expert-cross-attn-sparse {off,on}` | **`on`** (only when expert-cross-attn ≠ off) | **No** | **No** |
@@ -41,6 +42,10 @@ Window category soft-hist, traj-length bin, activity-center→last distance → 
 ## C — `--user-pref`
 
 Causal **user→cat** and **user→hour** preference vectors → MLP → `full`. Requires `--causal-counts`. **Forbidden** in `hard_prior` logits (enforced by architecture).
+
+## C2 — `--user-id-emb`
+
+Learned **`Embedding(train user_id)`** → Linear → `full` (base/context). Vocab = distinct `user_id` on the train split of the cache; val/test users missing from train map to **UNK**. **No re-prepare.** Distinct from `--user-pref` (counts). **Forbidden** in `hard_prior`. Suggested run name: `abl_user_id` / hillclimb `hc_user_id_*`.
 
 ## D — `--transition-pmi`
 

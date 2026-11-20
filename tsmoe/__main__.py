@@ -107,7 +107,8 @@ def main():
 
     t = commands.add_parser(
         "train",
-        help="train with the shared train-all SURD table and select by validation NDCG@10")
+        help="train with the shared train-all SURD table; checkpoint by "
+             "validation NDCG@10 (default) or Acc@1 via --checkpoint-metric")
     t.add_argument("--out", required=True)
     for name, value in [("epochs", 20), ("batch-size", 32), ("dim", 128), ("heads", 4),
                         ("layers", 2), ("top-k", 4)]:
@@ -116,6 +117,14 @@ def main():
                         ("hybrid-lambda", .1), ("lambda-surd", .05), ("lambda-balance", .001),
                         ("lr", .001), ("weight-decay", .01), ("grad-clip", 1.)]:
         t.add_argument("--" + name, type=float, default=value)
+    t.add_argument(
+        "--lambda-bpr", type=float, default=0.,
+        help="weight on hard-negative BPR aux softplus(-(s_pos-max_neg-margin)) "
+             "(default 0 = off). Acc@1 hillclimbs may try 0.1–1.0")
+    t.add_argument(
+        "--bpr-margin", type=float, default=0.,
+        help="logit margin inside hard-neg BPR (default 0); only used when "
+             "--lambda-bpr > 0. Try 0.5–2.0 to force a clearer Acc@1 gap")
     t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "
@@ -153,6 +162,10 @@ def main():
         "--transition-lambda", type=float, default=1.0,
         help="scale on log1p(transition) bias terms (default 1.0; bias mode)")
     t.add_argument(
+        "--transition-score-bias", type=float, default=0.0,
+        help="add λ·log1p(last→cand POI transition) to ranking scores "
+             "(default 0 = off). Light graph Acc@1 prior; needs causal counts")
+    t.add_argument(
         "--visit-bins", type=positive, default=DEFAULT_VISIT_BINS,
         help=f"equal-frequency bins of user cumulative visit count for T/L "
              f"(default {DEFAULT_VISIT_BINS}; fit on train stream, freeze for val/test)")
@@ -176,6 +189,11 @@ def main():
         help="causal user–cat / user–hour preference MLP into base/context "
              "(default off; requires causal counts; never hard_prior)")
     t.add_argument(
+        "--user-id-emb", choices=ON_OFF, default="off",
+        help="learned Embedding of train user_id into base/context "
+             "(default off; UNK for users unseen in train; never hard_prior). "
+             "Distinct from --user-pref (count prefs). No re-prepare.")
+    t.add_argument(
         "--transition-pmi", choices=ON_OFF, default="off",
         help="use POI→POI / cat→POI PMI instead of raw counts in transition "
              "cross-attn (default off; requires causal counts). Text embeddings deferred")
@@ -190,13 +208,18 @@ def main():
              "in router top-k experts (E3; default on)")
     t.add_argument("--seed", type=int, default=42)
     t.add_argument(
+        "--checkpoint-metric", choices=("ndcg10", "acc1"), default="ndcg10",
+        help="validation metric used to select best.pt: ndcg10 (default, "
+             "all_targets NDCG@10) or acc1 (all_targets Acc@1). Experimental "
+             "Acc@1 hillclimbs may use acc1; default keeps historical protocol.")
+    t.add_argument(
         "--eval-test-every-epoch",
         action=argparse.BooleanOptionalAction, default=True,
         help="after each training epoch, also evaluate on the test split and write "
              "results/<run>/eval_test/epoch_*.json + results/<run>/history.json "
-             "(default: on). Checkpoint selection still uses validation NDCG@10; "
-             "final best-ckpt test still runs. Use --no-eval-test-every-epoch to "
-             "skip per-epoch test for speed.")
+             "(default: on). Checkpoint selection uses --checkpoint-metric "
+             "(default validation NDCG@10); final best-ckpt test still runs. "
+             "Use --no-eval-test-every-epoch to skip per-epoch test for speed.")
     t.set_defaults(func=train)
 
     e = commands.add_parser(
@@ -251,10 +274,11 @@ def main():
                                     min(args.lambda_prior, args.hybrid_lambda, args.lambda_surd,
                                         args.lambda_balance, args.weight_decay) < 0
                                     or min(args.lr, args.grad_clip) <= 0
-                                    or getattr(args, "transition_lambda", 1.0) < 0):
+                                    or getattr(args, "transition_lambda", 1.0) < 0
+                                    or getattr(args, "transition_score_bias", 0.0) < 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
-                   "transition-lambda must be nonnegative")
+                   "transition-lambda / transition-score-bias must be nonnegative")
     if hasattr(args, "threads"):
         torch.set_num_threads(args.threads)
     try:

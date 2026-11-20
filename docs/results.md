@@ -60,7 +60,7 @@ Override the eval destination with `evaluate --out <dir>` (writes `metrics.json`
 
 ## Per-epoch test (default on)
 
-After **each** training epoch, `train` also ranks the **test** split on the **current** weights (validation still selects `best.pt` by NDCG@10). Disable for speed:
+After **each** training epoch, `train` also ranks the **test** split on the **current** weights (validation selects `best.pt` by `--checkpoint-metric`, default **NDCG@10**; use `acc1` to select by Acc@1). Disable for speed:
 
 ```bash
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model --no-eval-test-every-epoch
@@ -78,7 +78,21 @@ python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.
 grep -E 'summary|Acc@1' results/tokyo/model/eval_test/report.txt
 ```
 
-Primary headline metrics in reports are **Acc@1**, **NDCG@1**, and full **MRR** (`all_targets`). Checkpoint selection during training still uses validation **NDCG@10**.
+Primary headline metrics in reports are **Acc@1**, **NDCG@1**, and full **MRR** (`all_targets`). Checkpoint selection during training defaults to validation **NDCG@10** (`--checkpoint-metric ndcg10`); Acc@1 hillclimbs may pass `--checkpoint-metric acc1`.
+
+For STHGCN-style comparisons, also read **`known_only` Acc@1** (in-catalog GT targets only) from `eval_test/metrics.json`:
+
+```bash
+python -c "import json; m=json.load(open('results/tokyo/model/eval_test/metrics.json')); print(m['known_only']['Acc@1'])"
+```
+
+Optional Acc@1 ranking auxiliaries (see also [`causal-counts.md`](causal-counts.md)):
+
+| Flag | Role |
+| --- | --- |
+| `--lambda-bpr` | Hard-neg BPR weight `softplus(-(s_pos-max_neg-margin))` (default 0) |
+| `--bpr-margin` | Logit margin inside BPR (default 0; only if λ_bpr > 0) |
+| `--transition-score-bias` | `λ·log1p(last→cand POI transition)` added to scores (default 0) |
 
 ## Relation to `runs/`
 

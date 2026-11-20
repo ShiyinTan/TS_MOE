@@ -1068,6 +1068,63 @@ class TestCausalCounts(unittest.TestCase):
             self.assertEqual(model.poi_count_mlp[0].in_features, COUNT_FEAT_DIM)
             self.assertEqual(model.visit_bin_emb.num_embeddings, 4)
 
+    def test_transition_score_bias_raises_last_to_cand_scores(self):
+        """λ·log1p(last→cand transition) must lift scores for high-count candidates."""
+        torch.manual_seed(3)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        cand_lists = [list(range(n_pois))]
+        ctx = gather_batch_context(
+            tables, data, idx, cand_lists, int(valid.shape[1]), update=False)
+        # Force a large last→cand[0] transition so the bias is detectable.
+        last = int(valid[0].long().sum().item()) - 1
+        ctx = dict(ctx)
+        tr = ctx["poi_transition"].clone()
+        tr[0, 0, last] = 20.0
+        tr[0, 1, last] = 0.0
+        ctx["poi_transition"] = tr
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base_cfg = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                        router_mode="hard_prior", causal_counts=True, visit_bins=4)
+        off = TSMoE(n_pois, n_cats, 4, ModelConfig(**base_cfg, transition_score_bias=0.)).eval()
+        on = TSMoE(n_pois, n_cats, 4, ModelConfig(**base_cfg, transition_score_bias=2.)).eval()
+        on.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s0 = off(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s1 = on(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        # Candidate 0 should gain ≈ 2·log1p(20); candidate 1 unchanged (count 0).
+        self.assertGreater(float(s1[0] - s0[0]), 1.0)
+        torch.testing.assert_close(s1[1], s0[1], atol=1e-5, rtol=1e-5)
+        legacy = model_config_from_checkpoint(dict(
+            dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,
+            lambda_prior=.1, use_surd=True, causal_counts=True))
+        self.assertEqual(legacy.transition_score_bias, 0.0)
+
+    def test_objective_bpr_and_margin(self):
+        scores = torch.tensor([[3.0, 2.5, 0.0]])
+        mask = torch.tensor([[True, True, True]])
+        conf = torch.ones(1, 3)
+        result = dict(
+            score=scores, mask=mask, confidence=conf,
+            log_pi=torch.zeros(1, 3, 15), mass=torch.zeros(1, 3, 15),
+            gate=torch.ones(1, 3), gate_logits=torch.zeros(1, 3),
+            alpha=torch.zeros(1, 3))
+        # CE-only: bpr term is 0.
+        _, (_, _, _, bpr0) = objective(result, torch.tensor([0]), lambda_bpr=0.)
+        self.assertEqual(float(bpr0), 0.0)
+        # Hard-neg BPR against max other score (2.5); margin increases the loss.
+        _, (_, _, _, bpr) = objective(result, torch.tensor([0]), lambda_bpr=1.)
+        _, (_, _, _, bpr_m) = objective(
+            result, torch.tensor([0]), lambda_bpr=1., bpr_margin=1.0)
+        self.assertGreater(float(bpr), 0.0)
+        self.assertGreater(float(bpr_m), float(bpr))
+
     def test_legacy_checkpoint_disables_causal_counts(self):
         legacy = model_config_from_checkpoint(dict(
             dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,
@@ -1077,6 +1134,7 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(ModelConfig().causal_counts, True)
         self.assertEqual(ModelConfig().transition_attn, "bias")
         self.assertEqual(ModelConfig().visit_bins, DEFAULT_VISIT_BINS)
+        self.assertEqual(ModelConfig().transition_score_bias, 0.0)
 
     def test_cli_causal_train_smoke(self):
         with tempfile.TemporaryDirectory() as temp:

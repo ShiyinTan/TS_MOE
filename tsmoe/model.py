@@ -43,12 +43,16 @@ class ModelConfig:
     # bias (default) | gate | rel_key — see docs/causal-counts.md.
     transition_attn: str = "bias"
     transition_lambda: float = 1.
+    # Additive Acc@1 prior: λ·log1p(last→cand POI transition) on scores (0 = off).
+    transition_score_bias: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
     # Optional overlays (all default off — Acc@1 path unchanged unless set).
     candidate_context: str = "off"
     candidate_context_time: str = "off"
     session_summary: str = "off"
     user_pref: str = "off"
+    # Learned embedding of train user_id → base/context (default off; not hard_prior).
+    user_id_emb: str = "off"
     transition_pmi: str = "off"
     expert_cross_attn: str = "off"
     # When expert_cross_attn ≠ off: only run expert-local attn for router top-k (E3).
@@ -67,6 +71,8 @@ class ModelConfig:
             raise ValueError(f"transition_attn must be one of {TRANSITION_ATTN_MODES}")
         if self.transition_lambda < 0:
             raise ValueError("transition_lambda must be nonnegative")
+        if self.transition_score_bias < 0:
+            raise ValueError("transition_score_bias must be nonnegative")
         if self.visit_bins < 1:
             raise ValueError("visit_bins must be positive")
         if self.candidate_context not in CANDIDATE_CONTEXT_MODES:
@@ -77,6 +83,7 @@ class ModelConfig:
         for name, value in (
                 ("session_summary", self.session_summary),
                 ("user_pref", self.user_pref),
+                ("user_id_emb", self.user_id_emb),
                 ("transition_pmi", self.transition_pmi),
                 ("expert_cross_attn_sparse", self.expert_cross_attn_sparse)):
             if value not in ON_OFF:
@@ -195,12 +202,14 @@ class TransitionCrossAttention(nn.Module):
 
 
 class TSMoE(nn.Module):
-    def __init__(self, n_pois, n_categories, max_length, config):
+    def __init__(self, n_pois, n_categories, max_length, config, n_users=0):
         super().__init__()
         self.cfg = config
         d = config.dim
         self.n_pois = n_pois
         self.n_categories = n_categories
+        # Train-user vocabulary size (0 OK when user_id_emb off); tokens use pad=0, UNK=1, row+2.
+        self.n_users = max(0, int(n_users))
         self.max_length = max_length
         self.projections = nn.ModuleDict({
             "P": nn.Embedding(n_pois + 2, d, padding_idx=0),
@@ -267,6 +276,9 @@ class TSMoE(nn.Module):
         self.user_hour_proj = nn.Linear(USER_HOUR_DIM, d)
         self.user_pref_mlp = mlp(2 * d, 2 * d, d, config.dropout)
         self.user_pref_to_full = nn.Linear(d, 5 * d)
+        # --- user_id embedding (identity; separate from causal user-pref counts) ---
+        self.user_emb = nn.Embedding(self.n_users + 2, d, padding_idx=0)
+        self.user_id_to_full = nn.Linear(d, 5 * d)
         # --- E: expert-local cross-attn (shared QKV per source; transition stays on shared P/C) ---
         self.expert_attn = nn.ModuleDict({
             s: nn.MultiheadAttention(d, config.heads, batch_first=True) for s in SOURCE_ORDER
@@ -370,6 +382,15 @@ class TSMoE(nn.Module):
         pref = self.user_pref_mlp(torch.cat([cat_p, hour_p], -1))
         return self.user_pref_to_full(pref)  # [B, 5D]
 
+    def _user_id_addon(self, count_ctx, device):
+        """Learned user_id embedding → shared full (base/context); never hard_prior."""
+        if not self._flag_on("user_id_emb") or count_ctx is None:
+            return None
+        if "user_token" not in count_ctx:
+            return None
+        tok = count_ctx["user_token"].to(device).long().clamp(0, self.n_users + 1)
+        return self.user_id_to_full(self.user_emb(tok))  # [B, 5D]
+
     def _cross_attend(self, encoded, valid, candidate, count_ctx=None):
         """Per-source candidate←history attention; P/C use transition modes when enabled."""
         pad_mask = ~valid
@@ -458,13 +479,16 @@ class TSMoE(nn.Module):
         else:
             z = self._cross_attend(encoded, valid, candidate, count_ctx)
         full = torch.cat([*z, candidate], -1)
-        # B/C addons → base/context only (never hard_prior logits).
+        # B/C/user_id addons → base/context only (never hard_prior logits).
         sess = self._session_addon(count_ctx, rows.shape[0], candidate.device)
         if sess is not None:
             full = full + sess[:, None, :]
         pref = self._user_pref_addon(count_ctx, candidate.device)
         if pref is not None:
             full = full + pref[:, None, :]
+        uid = self._user_id_addon(count_ctx, candidate.device)
+        if uid is not None:
+            full = full + uid[:, None, :]
         base = self.base(full).squeeze(-1)
         prior, w = prior26.detach(), confidence.detach()
         if not self.cfg.use_surd:
@@ -514,7 +538,16 @@ class TSMoE(nn.Module):
             expert_z_list = z  # already expert-local
         residual, projected = self.dispatch(
             z, top, weights, mask, details, expert_z=expert_z_list)
-        score = (base + gate * residual).masked_fill(~mask, -torch.inf)
+        score = base + gate * residual
+        # Light graph prior: last-history → candidate POI transition count → Acc@1 bias.
+        tb = float(self.cfg.transition_score_bias or 0.0)
+        if (tb > 0 and count_ctx is not None and self.cfg.causal_counts
+                and "poi_transition" in count_ctx):
+            tr = count_ctx["poi_transition"][:, :rows.shape[1], :valid.shape[1]].to(score.device)
+            last = valid.long().sum(-1).clamp_min(1) - 1  # [B]
+            last_tr = tr.gather(2, last.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
+            score = score + tb * torch.log1p(last_tr.clamp_min(0))
+        score = score.masked_fill(~mask, -torch.inf)
         result = dict(score=score, log_pi=log_pi, top=top, weights=weights, gate_logits=gate_logits,
                       gate=gate, mass=mass, alpha=alpha, confidence=w, mask=mask,
                       router_mode=mode)
@@ -530,15 +563,36 @@ class TSMoE(nn.Module):
                           count_ctx=count_ctx, **kwargs)
 
 
-def objective(result, labels, lambda_surd=.05, lambda_balance=.001):
+def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0.,
+              bpr_margin=0.):
+    """Ranking objective: CE (+ optional SURD aux/balance) + optional hard-negative BPR.
+
+    ``lambda_bpr > 0`` adds ``softplus(-(s_pos - max_neg - margin))`` averaged over
+    rows with ≥1 valid negative — a direct Acc@1 push against the strongest
+    competitor. ``bpr_margin`` (default 0) requires the positive to beat the
+    hardest negative by that logit margin. Default ``lambda_bpr=0`` keeps the
+    historical loss.
+    """
     mask, w = result["mask"], result["confidence"]
     log_pi, mass, gate = result["log_pi"], result["mass"], result["gate"]
     if not mask.gather(1, labels[:, None]).all():
         raise ValueError("every positive must be in the valid candidate set")
-    rec = F.cross_entropy(result["score"], labels)
+    scores = result["score"]
+    rec = F.cross_entropy(scores, labels)
     weights = w * mask / mask.sum()
     bce = F.binary_cross_entropy_with_logits(result["gate_logits"], result["alpha"], reduction="none")
     aux = (weights * (bce - (mass * log_pi).sum(-1))).sum()
     difference = gate[..., None] * log_pi.exp() - mass
     balance = (weights[..., None] * difference).sum((0, 1)).square().sum()
-    return rec + lambda_surd * aux + lambda_balance * balance, (rec.detach(), aux.detach(), balance.detach())
+    bpr = scores.new_zeros(())
+    if float(lambda_bpr) > 0:
+        s_pos = scores.gather(1, labels[:, None]).squeeze(1)
+        neg_mask = mask.clone()
+        neg_mask.scatter_(1, labels[:, None], False)
+        s_neg = scores.masked_fill(~neg_mask, float("-inf")).max(dim=1).values
+        rows = neg_mask.any(dim=1) & torch.isfinite(s_neg)
+        if bool(rows.any()):
+            margin = float(bpr_margin or 0.0)
+            bpr = F.softplus(-(s_pos[rows] - s_neg[rows] - margin)).mean()
+    total = rec + lambda_surd * aux + lambda_balance * balance + float(lambda_bpr) * bpr
+    return total, (rec.detach(), aux.detach(), balance.detach(), bpr.detach())
