@@ -119,8 +119,12 @@ def main():
         t.add_argument("--" + name, type=float, default=value)
     t.add_argument(
         "--lambda-bpr", type=float, default=0.,
-        help="weight on hard-negative BPR aux softplus(-(s_pos-max_neg)) "
+        help="weight on hard-negative BPR aux softplus(-(s_pos-max_neg-margin)) "
              "(default 0 = off). Acc@1 hillclimbs may try 0.1–1.0")
+    t.add_argument(
+        "--bpr-margin", type=float, default=0.,
+        help="logit margin inside hard-neg BPR (default 0); only used when "
+             "--lambda-bpr > 0. Try 0.5–2.0 to force a clearer Acc@1 gap")
     t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "

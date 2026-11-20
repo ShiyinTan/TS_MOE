@@ -762,7 +762,8 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
     defaults = {
         "lr": 0.001, "weight_decay": 0.01, "dropout": 0.1, "dim": 128,
         "layers": 2, "heads": 4, "top_k": 4, "batch_size": 32,
-        "checkpoint_metric": "ndcg10", "lambda_bpr": 0.0, "epochs": 20,
+        "checkpoint_metric": "ndcg10", "lambda_bpr": 0.0, "bpr_margin": 0.0,
+        "temperature": 1.0, "epochs": 20,
     }
     for key, flag in (
             ("lr", "--lr"), ("weight_decay", "--weight-decay"),
@@ -770,7 +771,8 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
             ("heads", "--heads"), ("top_k", "--top-k"),
             ("batch_size", "--batch-size"),
             ("checkpoint_metric", "--checkpoint-metric"),
-            ("lambda_bpr", "--lambda-bpr"), ("epochs", "--epochs"),
+            ("lambda_bpr", "--lambda-bpr"), ("bpr_margin", "--bpr-margin"),
+            ("temperature", "--temperature"), ("epochs", "--epochs"),
     ):
         if key not in args or args[key] is None:
             continue
@@ -1213,7 +1215,8 @@ def train(args):
                            count_ctx=count_ctx)
             loss, parts = objective(
                 result, positive.to(device), args.lambda_surd, args.lambda_balance,
-                float(getattr(args, "lambda_bpr", 0.0) or 0.0))
+                float(getattr(args, "lambda_bpr", 0.0) or 0.0),
+                float(getattr(args, "bpr_margin", 0.0) or 0.0))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)
