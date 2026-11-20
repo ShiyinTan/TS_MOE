@@ -44,6 +44,13 @@ def main():
     for name in ("train-targets", "eval-targets"):
         p.add_argument("--" + name, choices=("all", "last"), default="all")
     p.add_argument(
+        "--filter-unknown", choices=("off", "on"), default="off",
+        help="STHGCN-style filter (default off): when on, drop val/test trails whose "
+             "user never appears in train, and drop prediction samples whose true "
+             "next POI is outside the train catalog. Unlike eval known_only (metric "
+             "denominator only), this removes those samples from the prepared data. "
+             "Requires re-prepare; fingerprinted.")
+    p.add_argument(
         "--candidate-radius",
         choices=("p70", "p80", "p90", "mean", "max", "full"), default="p90",
         help="local spatial neighborhood radius from consecutive visit distances "

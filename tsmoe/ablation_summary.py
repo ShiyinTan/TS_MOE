@@ -75,6 +75,8 @@ RUN_NAME_EXPECTATIONS: dict[str, dict] = {
     "abl_tgt_all": {"train_targets": "all", "eval_targets": "all"},
     "abl_tgt_last": {"train_targets": "last", "eval_targets": "last"},
     "abl_tgt_train_all_eval_last": {"train_targets": "all", "eval_targets": "last"},
+    # STHGCN-style unknown user/POI filter (prepare; default off)
+    "abl_filter_unknown": {"filter_unknown": "on"},
     # Overlays A–E (§3.1)
     "abl_ctx_off": {
         "candidate_context": "off",
@@ -125,6 +127,7 @@ _COMPARE_KEYS = (
     "random_negatives",
     "train_targets",
     "eval_targets",
+    "filter_unknown",
     "candidate_context",
     "candidate_context_time",
     "session_summary",
@@ -150,6 +153,7 @@ _FLAG_PATTERNS = {
     "random_negatives": re.compile(r"--random-negatives\s+(\S+)"),
     "train_targets": re.compile(r"--train-targets\s+(\S+)"),
     "eval_targets": re.compile(r"--eval-targets\s+(\S+)"),
+    "filter_unknown": re.compile(r"--filter-unknown\s+(\S+)"),
     "candidate_context": re.compile(r"--candidate-context\s+(\S+)"),
     "candidate_context_time": re.compile(r"--candidate-context-time\s+(\S+)"),
     "session_summary": re.compile(r"--session-summary\s+(\S+)"),
@@ -311,6 +315,9 @@ def extract_recorded_settings(payload: dict, key_flags: str | None = None) -> di
         out["eval_targets"] = payload["target_mode"]
     take("train_targets", cli)
     take("eval_targets", cli)
+    if payload.get("filter_unknown") is not None:
+        out["filter_unknown"] = payload["filter_unknown"]
+    take("filter_unknown", cli)
 
     if key_flags:
         for key, value in parse_key_flags(key_flags).items():

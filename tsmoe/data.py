@@ -174,12 +174,31 @@ def numeric_features(event, previous):
     return time, loc
 
 
-def build_split(groups, categories, catalog, cat_vocab, max_length, target_mode):
-    """Store each event once. 'end' identifies the true target, excluded from history."""
+def train_user_ids(groups):
+    """User ids that own at least one trail in ``groups`` (Massive-STEPS ``user_id``)."""
+    return {user for user, _trail in groups}
+
+
+def filter_groups_by_users(groups, allowed_users):
+    """Keep trails whose ``user_id`` is in ``allowed_users`` (STHGCN-style)."""
+    allowed = set(allowed_users)
+    return {key: events for key, events in groups.items() if key[0] in allowed}
+
+
+def build_split(groups, categories, catalog, cat_vocab, max_length, target_mode,
+                *, require_in_catalog_target=False):
+    """Store each event once. 'end' identifies the true target, excluded from history.
+
+    When ``require_in_catalog_target`` is True (prepare ``--filter-unknown on``),
+    skip prediction samples whose true next POI is outside the training catalog —
+    matching STHGCN ``remove_unseen_user_poi`` on the sample's target ``PoiId``.
+    History tokens for OOV POIs still map to UNK; only the supervised target is filtered.
+    """
     poi_rows = {value: i for i, value in enumerate(catalog)}
     cat_rows = {value: i for i, value in enumerate(cat_vocab)}
     columns = defaultdict(list)
     starts, ends, trail_keys = [], [], []
+    skipped_unknown_targets = 0
     for key, events in sorted(groups.items()):
         trail_index, offset = len(trail_keys), len(columns["P"])
         trail_keys.append(list(key))
@@ -198,6 +217,9 @@ def build_split(groups, categories, catalog, cat_vocab, max_length, target_mode)
             for name, value in fields.items():
                 columns[name].append(value)
             if j and event.poi >= 0 and (target_mode == "all" or (target_mode == "last" and j == len(events) - 1)):
+                if require_in_catalog_target and event.poi not in poi_rows:
+                    skipped_unknown_targets += 1
+                    continue
                 starts.append(offset + max(0, j - max_length))
                 ends.append(offset + j)
         if target_mode == "predict" and events:
@@ -207,7 +229,8 @@ def build_split(groups, categories, catalog, cat_vocab, max_length, target_mode)
         raise ValueError("split has no usable next-POI target after preprocessing")
     data = {k: torch.tensor(v, dtype=torch.float64 if k in ("T", "L", "lat", "lon") else torch.long)
             for k, v in columns.items()}
-    return {**data, "start": torch.tensor(starts), "end": torch.tensor(ends), "trails": trail_keys}
+    data = {**data, "start": torch.tensor(starts), "end": torch.tensor(ends), "trails": trail_keys}
+    return data, dict(skipped_unknown_targets=skipped_unknown_targets)
 
 
 def make_batch(data, indices, *, offline=False, labels=True):

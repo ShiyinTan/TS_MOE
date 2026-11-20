@@ -76,6 +76,7 @@ python -m tsmoe ablation-summary --results results
 | **visit-bins** | T/L 用户累计访问等频分箱 | 默认 `10` | `--visit-bins` | 否（须因果 **on**） | `abl_visit_bins_10` |
 | **训练目标协议** | 样本取「全部前缀」还是「仅末站」 | `all`（默认）/ `last` | `prepare --train-targets` | **是** | `abl_tgt_all` / `abl_tgt_last` / `abl_tgt_train_all_eval_last` |
 | **评估目标协议** | val/test 样本协议 | `all`（默认）/ `last` | `prepare --eval-targets` | **是** | （同上） |
+| **未知 user/POI 过滤** | STHGCN 式剔除冷启动用户与目录外目标 | **`off`（默认）** / `on` | `prepare --filter-unknown` | **是** | `abl_filter_unknown` |
 | **训练负采样** | 从构造池抽多少负例 | `63`（默认）/ `-1`（池内其余全要） | `train --negatives` | 否 | `abl_neg_63` / `abl_neg_all` |
 | **训练候选封顶** | 含正例的训练候选上限 | `-1`（默认不封）/ 如 `256` | `train --max-train-candidates` | 否 | `abl_maxcand_256` |
 | **候选上下文 A** | 候选 cat emb + Δgeo → query | **`off`（默认）** / `on` | `--candidate-context` | 否 | `abl_ctx_off` / `abl_ctx_cat_geo` |
@@ -131,6 +132,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_off --de
 | **4b** | Overlay A/B/C/D/E（§3.1；默认均 off） | 否 | 同一 cache；一次一因子或声明组合 |
 | **5** | 候选变体：半径 / 关源 / 随机负例 / full | **是** | 每种独立 cache + model |
 | **6** | 目标协议：`all`/`last` 组合 | **是** | 独立 cache |
+| **6b** | `--filter-unknown on`（STHGCN 式剔除未知 user/POI） | **是** | 独立 cache；**不是** `known_only`（见 §6.1） |
 | — | STHGCN T/L | — | **无开关**；旧 basic 特征已去掉，不能做 CLI 消融 |
 
 ---
@@ -362,6 +364,33 @@ python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_all_eval_last \
   --out runs/tokyo/abl_tgt_train_all_eval_last --device cuda
 ```
 
+### 6b) 未知 user/POI 过滤（STHGCN 式；须重 prepare；**默认 off**）
+
+对齐 STHGCN `remove_unseen_user_poi`：在 **prepare** 时从 val/test **数据**中剔除（不是只改 eval 分母）。叠在默认基线 prepare 上：
+
+```bash
+# 独立 cache（勿覆盖默认 runs/tokyo/cache）
+python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl_filter_unknown \
+  --candidate-radius p90 --popular-radius max --popular-top-k 100 \
+  --popular-by visit --user-frequent-top-k 50 --user-frequent-min-visits 2 \
+  --random-negatives 50 --random-negatives-seed 0 \
+  --train-targets all --eval-targets all \
+  --filter-unknown on
+# → final.surd.pt；manifest.audit 含 trails_dropped_unknown_user / samples_skipped_unknown_poi_target
+python -m tsmoe train --cache runs/tokyo/cache_abl_filter_unknown \
+  --out runs/tokyo/abl_filter_unknown --device cuda
+# → results/tokyo/abl_filter_unknown/eval_test/
+```
+
+**中文对照 `known_only`：**
+
+| | `--filter-unknown on` | eval `known_only` |
+| --- | --- | --- |
+| 何时生效 | **prepare**（写入 cache 的样本表） | **evaluate** 指标切片 |
+| 未知用户 | val/test 中 **从未出现在 train** 的 user 整条 trail **删除** | 不处理用户 |
+| 未知 POI（目录外真实下一站） | 该预测样本 **不进入** train/eval 数据 | 样本仍在；`all_targets` 记 miss，`known_only` 从分母去掉 |
+| 默认 | **off**（现状不变） | 始终同时报告 |
+
 ---
 
 ## 6. 如何读 metrics / 比较
@@ -420,6 +449,8 @@ Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（�
 | `known_only` | 仅 `rank > 0` 的样本（目录内目标） | **不计入** |
 
 实现见 `tsmoe/engine.py`：`metric_row` / `evaluate()` 返回的 `known_only=metric_row([r for r in ranks if r])`。报告里写作 `known_only (in-catalog targets)`。`all_targets.coverage` ≈ 目录内目标占比；总表的 `known_*` 列来自同一份 `metrics.json`。
+
+若要在数据层面去掉未知 user/POI（STHGCN `remove_unseen_user_poi`），用 prepare `--filter-unknown on`（§3 因子表 / §5 命令 **6b**），**不要**把它和 `known_only` 混为一谈。
 
 ### 6.2 总表与 run-name ↔ flags 校验
 
@@ -490,6 +521,12 @@ python -m tsmoe ablation-summary --results results
 | `abl_tgt_last` | `--train-targets last --eval-targets last` |  |  |  | re-prepare |
 | `abl_tgt_train_all_eval_last` | `--train-targets all --eval-targets last` |  |  |  | re-prepare |
 
+### 7.5b 未知 user/POI 过滤（STHGCN 式；独立 cache）
+
+| run_name | key flags | Acc@1 | NDCG@1 | MRR | notes |
+| --- | --- | --- | --- | --- | --- |
+| `abl_filter_unknown` | `--filter-unknown on` |  |  |  | re-prepare；≠ `known_only` |
+
 ### 7.6 STHGCN T/L（无 CLI 消融）
 
 | 项 | 状态 | notes |
@@ -531,5 +568,6 @@ python -m tsmoe ablation-summary --results results
 - [ ] Overlay A/B/C/D/E 填入 §7.8（§3.1 表）
 - [ ] 候选变体（re-prepare）填入 §7.4
 - [ ] 目标协议填入 §7.5
+- [ ] `--filter-unknown on` 填入 §7.5b（独立 cache；对照 `known_only` 说明）
 - [ ] 确认 `results/ablation_log.md` / `.csv` 已自动追加各跑（或从模板重置后再跑）
 - [ ] 跑 `python -m tsmoe ablation-summary`，核对 `results/ablation_summary.*`（含 known_only 与 name_check）
