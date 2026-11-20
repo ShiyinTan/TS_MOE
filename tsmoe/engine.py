@@ -216,6 +216,10 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("return_gate", "off")
     cfg.setdefault("explore_spatial_bias", "off")
     cfg.setdefault("explore_score_bias", 0.0)
+    cfg.setdefault("fam_area_blend", "off")
+    cfg.setdefault("fam_radius_km", 0.5)
+    cfg.setdefault("fam_explore_bias", 0.0)
+    cfg.setdefault("fam_return_bias", 0.0)
     cfg.setdefault("tsb_history_k", 1)
     cfg.setdefault("tsb_history_decay", 0.5)
     cfg.setdefault("tsb_dt_edges", ())
@@ -1501,6 +1505,10 @@ def train(args):
     return_gate = getattr(args, "return_gate", "off")
     explore_spatial_bias = getattr(args, "explore_spatial_bias", "off")
     explore_score_bias = float(getattr(args, "explore_score_bias", 0.0) or 0.0)
+    fam_area_blend = getattr(args, "fam_area_blend", "off")
+    fam_radius_km = float(getattr(args, "fam_radius_km", 0.5) or 0.5)
+    fam_explore_bias = float(getattr(args, "fam_explore_bias", 0.0) or 0.0)
+    fam_return_bias = float(getattr(args, "fam_return_bias", 0.0) or 0.0)
     tsb_history_k = int(getattr(args, "tsb_history_k", 1) or 1)
     tsb_history_decay = float(getattr(args, "tsb_history_decay", 0.5) or 0.5)
     tsb_dt_edges = tuple(parse_dt_bin_edges(getattr(args, "transition_dt_bins", "off")))
@@ -1547,6 +1555,15 @@ def train(args):
         raise ValueError("--explore-spatial-bias must be off|gauss|geo|radiation")
     if explore_score_bias < 0:
         raise ValueError("--explore-score-bias must be nonnegative")
+    if fam_area_blend not in ("off", "on"):
+        raise ValueError("--fam-area-blend must be off|on")
+    if fam_area_blend == "on":
+        if fam_radius_km <= 0:
+            raise ValueError("--fam-radius-km must be positive")
+        if fam_explore_bias < 0 or fam_return_bias < 0:
+            raise ValueError("--fam-explore-bias/--fam-return-bias must be nonnegative")
+        if fam_explore_bias <= 0 and fam_return_bias <= 0:
+            raise ValueError("--fam-area-blend on requires a positive fam bias")
     if tsb_history_k < 1:
         raise ValueError("--tsb-history-k must be >= 1")
     if tsb_history_decay <= 0:
@@ -1652,6 +1669,8 @@ def train(args):
         raise ValueError("--pop-score-bias > 0 requires causal counts")
     if geo_score_bias > 0 and candidate_context == "off":
         raise ValueError("--geo-score-bias > 0 requires --candidate-context on")
+    if fam_area_blend == "on" and candidate_context == "off":
+        raise ValueError("--fam-area-blend requires --candidate-context on")
     if gauss_geo_bias > 0 and candidate_context == "off":
         raise ValueError("--gauss-geo-bias > 0 requires --candidate-context on")
     if radiation_score_bias > 0 and candidate_context == "off":
@@ -1720,6 +1739,10 @@ def train(args):
                       return_gate=return_gate,
                       explore_spatial_bias=explore_spatial_bias,
                       explore_score_bias=explore_score_bias,
+                      fam_area_blend=fam_area_blend,
+                      fam_radius_km=fam_radius_km,
+                      fam_explore_bias=fam_explore_bias,
+                      fam_return_bias=fam_return_bias,
                       tsb_history_k=tsb_history_k,
                       tsb_history_decay=tsb_history_decay,
                       tsb_dt_edges=tsb_dt_edges,

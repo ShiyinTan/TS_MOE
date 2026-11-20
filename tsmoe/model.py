@@ -137,6 +137,12 @@ class ModelConfig:
     return_gate: str = "off"
     explore_spatial_bias: str = "off"  # off|gauss|geo|radiation
     explore_score_bias: float = 0.0
+    # Familiar vs unfamiliar area soft blend (#44): no MLP — scalar f from local hist density.
+    # score += (1−f)·λ_exp·gauss; locked revisit λ stays. Default off.
+    fam_area_blend: str = "off"  # off|on
+    fam_radius_km: float = 0.5
+    fam_explore_bias: float = 0.0
+    fam_return_bias: float = 0.0
     # Multi-hop tsb: blend last K history→cand transitions (1 = last-only default).
     tsb_history_k: int = 1
     tsb_history_decay: float = 0.5  # w_o ∝ exp(−o/κ); o=0 is last tip
@@ -265,6 +271,17 @@ class ModelConfig:
                 raise ValueError("return-gate explore spatial requires --candidate-context on")
             if self.explore_spatial_bias == "radiation" and not self.causal_counts:
                 raise ValueError("explore radiation requires causal counts")
+        if self.fam_area_blend not in ("off", "on"):
+            raise ValueError("fam_area_blend must be off|on")
+        if self.fam_area_blend == "on":
+            if self.fam_radius_km <= 0:
+                raise ValueError("fam_radius_km must be positive when fam_area_blend on")
+            if self.fam_explore_bias < 0 or self.fam_return_bias < 0:
+                raise ValueError("fam explore/return biases must be nonnegative")
+            if self.fam_explore_bias <= 0 and self.fam_return_bias <= 0:
+                raise ValueError("fam_area_blend on requires a positive fam bias")
+            if self.candidate_context == "off":
+                raise ValueError("fam_area_blend requires --candidate-context on")
         if self.tsb_decay_hours < 0:
             raise ValueError("tsb_decay_hours must be nonnegative")
         if self.tsb_session_gap_hours < 0:
@@ -1026,6 +1043,38 @@ class TSMoE(nn.Module):
                 score = score + pi[:, None] * ret_term + (1.0 - pi)[:, None] * exp_term
             else:
                 score = score + rsb * u_vis
+        # Familiar-area soft blend (#44): f = fraction of hist tips within fam_radius of last.
+        # score += (1−f)·λ_exp·gauss + f·λ_ret·revisit_mass (revisit λ locked separately).
+        if (getattr(self.cfg, "fam_area_blend", "off") == "on"
+                and count_ctx is not None and "delta_geo" in count_ctx):
+            # Familiarity proxy: mean user→hist visit mass (squashed). Optional tip-km
+            # filter when hist_tip_km_to_last is supplied by the feature gatherer.
+            hist_mask = valid
+            if "hist_poi_feat" in count_ctx:
+                hist_u = count_ctx["hist_poi_feat"][:, :valid.shape[1], 0].to(score.device)
+                hist_u = hist_u.masked_fill(~hist_mask, 0)
+            else:
+                hist_u = score.new_zeros(valid.shape)
+            tip_km = count_ctx.get("hist_tip_km_to_last")
+            if tip_km is not None:
+                tip_km = tip_km[:, :valid.shape[1]].to(score.device)
+                local = hist_mask & (tip_km <= float(self.cfg.fam_radius_km))
+            else:
+                local = hist_mask
+            local_n = local.float().sum(-1).clamp_min(1.0)
+            local_mass = (hist_u * local.float()).sum(-1) / local_n
+            f = (1.0 - torch.exp(-local_mass)).clamp(0, 1).unsqueeze(-1)  # [B,1]
+            hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+            km = torch.expm1(hav).clamp_min(0)
+            sigma = float(getattr(self.cfg, "gauss_sigma_km", 0.5) or 0.5)
+            gauss = torch.exp(-(km * km) / (2.0 * sigma * sigma))
+            feb = float(getattr(self.cfg, "fam_explore_bias", 0.0) or 0.0)
+            frb = float(getattr(self.cfg, "fam_return_bias", 0.0) or 0.0)
+            if feb > 0:
+                score = score + (1.0 - f) * feb * gauss
+            if frb > 0 and "cand_poi_feat" in count_ctx:
+                u_vis = count_ctx["cand_poi_feat"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+                score = score + f * frb * u_vis
         # History-hit / revisit-recency: orthogonal to flat revisit λ (needs hist_poi_rows).
         hhb = float(getattr(self.cfg, "history_hit_bias", 0.0) or 0.0)
         rrb = float(getattr(self.cfg, "revisit_recency_bias", 0.0) or 0.0)

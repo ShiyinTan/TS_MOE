@@ -312,6 +312,19 @@ def main():
         help="λ_exp for return-gate explore branch (default 0). "
              "gauss uses --gauss-sigma-km; radiation uses --radiation-kernel")
     t.add_argument(
+        "--fam-area-blend", choices=("off", "on"), default="off",
+        help="familiar/unfamiliar area soft blend (#44): "
+             "(1−f)·λ_exp·gauss + f·λ_ret·revisit; keeps locked revisit λ")
+    t.add_argument(
+        "--fam-radius-km", type=float, default=0.5,
+        help="local area radius (km) for fam_area_blend familiarity (default 0.5)")
+    t.add_argument(
+        "--fam-explore-bias", type=float, default=0.0,
+        help="λ_exp on gauss for unfamiliar area (1−f); keep ≪ geo 0.15")
+    t.add_argument(
+        "--fam-return-bias", type=float, default=0.0,
+        help="extra λ_ret·revisit mass scaled by familiarity f (default 0)")
+    t.add_argument(
         "--tsb-history-k", type=int, default=1,
         help="blend last K history→cand transitions into --transition-score-bias "
              "(default 1 = last-only; try 2–3)")
