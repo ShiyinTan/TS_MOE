@@ -488,6 +488,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_e1 \
 | `results/<run>/eval_test/` | train 最终 test，或独立 `evaluate --split test`；默认另有 `epoch_*.json` |
 | `results/<run>/history.json` | 每 epoch 的 val（+ test）Acc@1 等摘要 |
 | `results/ablation_log.md` / `.csv` | train / evaluate 结束后自动追加一行 |
+| `results/ablation_summary.md` / `.csv` | `python -m tsmoe ablation-summary` 总表（含 known_only） |
 | `results/<run>/candidate_pool_stats.json` | 各 split 候选池大小统计 |
 
 报告头条主指标为 **Acc@1**（另报 NDCG@1、MRR）；checkpoint 仍按验证 **NDCG@10** 选取。默认 **每个 epoch 也跑 test**（`--eval-test-every-epoch`；`--no-eval-test-every-epoch` 关闭）。完整约定见 [`docs/results.md`](docs/results.md)。
@@ -590,6 +591,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `results/<run>/eval_test/` | 最终 test + 默认 `epoch_*.json`；或独立 `evaluate --split test` |
 | `results/<run>/history.json` | 每 epoch val（+ test）Acc@1 摘要 |
 | `results/ablation_log.md` / `.csv` | train / evaluate 自动追加 |
+| `results/ablation_summary.md` / `.csv` | `python -m tsmoe ablation-summary` 生成的总表（Acc@1 + known_only + 命名校验） |
 | `results/<run>/candidate_pool_stats.json` | train 启动时各 split 候选池大小（min/max/mean/median） |
 
 每个 `eval_*` 含 `metrics.json` + `report.txt`。`<run>` 由 train `--out` / checkpoint 路径去掉前缀 `runs/` 得到，例如 `runs/tokyo/model` → `results/tokyo/model/`。可用 `evaluate --out <dir>` 覆盖。
@@ -656,6 +658,7 @@ TS_MOE/
 | `prepare` | CSV → 样本、train-all SURD（`final`）、候选半径 → `--out` 缓存 |
 | `train` | 训练（共用 `final` 先验）；按验证 NDCG@10 存 `best.pt`；每 epoch 默认 test；写 `results/.../eval_*` 与 `ablation_log.*` |
 | `evaluate` | 在缓存候选集上排名；默认 `results/.../eval_<split>/` |
+| `ablation-summary` | 扫描 `results/**/eval_*/metrics.json`（+ `ablation_log.*`）→ `results/ablation_summary.md/.csv`（含 known_only 与 run-name↔flags 校验） |
 | `inspect` | 查看某 POI 的 26 维 SURD |
 | `recommend` | 对新历史 CSV 中每条 trail 做下一站 Top-N |
 | `explain` | 审计一个候选的先验、路由与得分 |
@@ -728,9 +731,15 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 
 近期改动多，应用对照实验分清贡献：固定同一 prepare 指纹（能复用则复用）、以 **Acc@1** 为主、结果写入 `results/<run>/`。
 
-`train` / `evaluate` 结束后会**自动 append** 到 `results/ablation_log.md` 与 `.csv`（无则创建）。
+`train` / `evaluate` 结束后会**自动 append** 到 `results/ablation_log.md` 与 `.csv`（无则创建）。扫已有结果生成总表：
 
-完整内容（因子/开关总表、推荐顺序、Tokyo 可复制命令、结果登记空表、如何读 `metrics.json`）：
+```bash
+python -m tsmoe ablation-summary --results results
+```
+
+**`known_only`：** 不是「候选池里有没有 target」，而是只统计真实下一站在训练 catalog 内的样本（见 [`docs/ablation.md`](docs/ablation.md) §6.1）。
+
+完整内容（因子/开关总表、推荐顺序、Tokyo 可复制命令、结果登记空表、如何读 `metrics.json`、命名校验）：
 
 - [`docs/ablation.md`](docs/ablation.md)
 - 结果模板（可选 `cp` 到 `results/` 作空表 / 重置）：[`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`docs/ablation_log.template.csv`](docs/ablation_log.template.csv)

@@ -45,6 +45,17 @@ cp docs/ablation_log.template.md results/ablation_log.md
 cp docs/ablation_log.template.csv results/ablation_log.csv
 ```
 
+**总表（推荐）：** 扫当前 `results/**/eval_test/metrics.json`（并合并已有 `ablation_log.*`），写出含 **known_only** 与 **run-name ↔ flags 校验** 的主表：
+
+```bash
+python -m tsmoe ablation-summary --results results
+# → results/ablation_summary.md
+# → results/ablation_summary.csv
+# 可选：--split validation；--strict（有 name mismatch 时 exit 1）
+```
+
+详见 §6.1（`known_only` 定义）与 §6.2（命名校验）。
+
 ---
 
 ## 3. 因子 / 开关总表
@@ -374,14 +385,18 @@ python -m tsmoe inspect --cache runs/tokyo/cache --table final --poi-id 3
 | `all_targets.Acc@1` | **主指标** |
 | `all_targets.NDCG@1` | 并列对照 |
 | `all_targets.MRR` | 全长 MRR（无截断） |
+| `known_only.Acc@1` 等 | 仅 **目录内** 真实下一站样本（见 §6.1） |
 | `candidate_construction` / `candidate_pool_stats` | 池构造与大小（核对 fingerprint） |
-| `config` | 含 `router_mode`、因果相关项等（以 checkpoint 为准） |
+| `model_config` / `training_args` | 含 `router_mode`、因果 / overlay 等（以 checkpoint 为准） |
 
 ```bash
 # 单跑
 python -c "import json; m=json.load(open('results/tokyo/abl_router_hard/eval_test/metrics.json')); a=m['all_targets']; print(a['Acc@1'], a['NDCG@1'], a.get('MRR'))"
 
-# 多跑并排（按需改路径列表）
+# 多跑总表（含 known_only + 命名校验；推荐）
+python -m tsmoe ablation-summary --results results
+
+# 或多跑并排（临时脚本）
 python -c "
 import json
 from pathlib import Path
@@ -392,6 +407,36 @@ for p in sorted(Path('results/tokyo').glob('abl_*/eval_test/metrics.json')):
 ```
 
 Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（见 [`results.md`](results.md)）。
+
+### 6.1 `known_only`（know only）是什么？
+
+**一句话（中文）：** `known_only` **不是**「只看候选池里有没有 target」（正例本来就会强制进池）；而是 **只保留「真实下一站 POI 属于训练 catalog（目录内）」的样本** 再算 Acc@1 / NDCG@1 / MRR。目录外 / 未知目标在 `all_targets` 记为 miss（rank=0，分母仍算），在 `known_only` 则从分母剔除。
+
+细节：
+
+| 切片 | 分母 | 目录外真实下一站 |
+| --- | --- | --- |
+| `all_targets`（主指标） | 全部 eval 样本 | rank 哨兵 `0`，计为 miss |
+| `known_only` | 仅 `rank > 0` 的样本（目录内目标） | **不计入** |
+
+实现见 `tsmoe/engine.py`：`metric_row` / `evaluate()` 返回的 `known_only=metric_row([r for r in ranks if r])`。报告里写作 `known_only (in-catalog targets)`。`all_targets.coverage` ≈ 目录内目标占比；总表的 `known_*` 列来自同一份 `metrics.json`。
+
+### 6.2 总表与 run-name ↔ flags 校验
+
+```bash
+python -m tsmoe ablation-summary --results results
+# → results/ablation_summary.md + results/ablation_summary.csv
+```
+
+行为：
+
+1. 扫描 `results/**/eval_test/metrics.json`（`--split validation` 则扫 `eval_validation`）。
+2. 若存在 `results/ablation_log.csv` / `.md`，按 `run_name` 合并最新一行的 `key_flags` / `notes`。
+3. 从 leaf 名（如 `tokyo/abl_ctx_cat_geo` → `abl_ctx_cat_geo`）查 §3 / §3.1 建议命名，与 `metrics.json` 的 `model_config` / `training_args` / `candidate_construction`（及 log 的 `key_flags`）对照。
+4. `name_check` 列：`ok`（一致）/ `mismatch`（不一致，见 `mismatch` 列）/ `unknown_name`（不在命名表）/ `no_settings`（无记录可对）。
+5. 主列仍是 **all_targets** Acc@1；另含 `known_Acc@1` / `known_NDCG@1` / `known_MRR` / `known_coverage`。
+
+`--strict`：任一 `mismatch` 时进程 exit 1（便于 CI / 批量核对）。
 
 ---
 
@@ -487,3 +532,4 @@ Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（�
 - [ ] 候选变体（re-prepare）填入 §7.4
 - [ ] 目标协议填入 §7.5
 - [ ] 确认 `results/ablation_log.md` / `.csv` 已自动追加各跑（或从模板重置后再跑）
+- [ ] 跑 `python -m tsmoe ablation-summary`，核对 `results/ablation_summary.*`（含 known_only 与 name_check）

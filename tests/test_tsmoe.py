@@ -32,6 +32,10 @@ from tsmoe.data import (
     build_split, make_batch, numeric_features, read_split, sthgcn_basis_freqs,
     sthgcn_phi,
 )
+from tsmoe.ablation_summary import (
+    collect_summary_rows, expected_settings_for_run_name, extract_recorded_settings,
+    leaf_run_name, parse_key_flags, validate_run_name_settings, write_summary_table,
+)
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, ablation_row_from_eval, append_ablation_log,
     candidates, format_ablation_key_flags, format_eval_report, metric_row,
@@ -1193,6 +1197,151 @@ class TestCandidateContextOverlays(unittest.TestCase):
             self.assertIn("--expert-cross-attn hybrid", flags)
             run_cli("evaluate", "--cache", cache_path, "--checkpoint", run / "best.pt",
                     "--device", "cpu", "--split", "test", "--chunk", 3)
+
+
+class AblationSummaryTests(unittest.TestCase):
+    def test_leaf_and_expected_overlay_names(self):
+        self.assertEqual(leaf_run_name("tokyo/abl_ctx_cat_geo"), "abl_ctx_cat_geo")
+        self.assertEqual(
+            expected_settings_for_run_name("tokyo/abl_ctx_cat_geo"),
+            {"candidate_context": "on"},
+        )
+        self.assertEqual(
+            expected_settings_for_run_name("abl_ctx_cat_geo_time")["candidate_context_time"],
+            "last_slot",
+        )
+        self.assertEqual(
+            expected_settings_for_run_name("abl_e1_dense"),
+            {"expert_cross_attn": "hybrid", "expert_cross_attn_sparse": "off"},
+        )
+        self.assertIsNone(expected_settings_for_run_name("tokyo/model"))
+
+    def test_parse_key_flags_and_validate(self):
+        flags = (
+            "--candidate-radius p90 --router-mode hard_prior --causal-counts "
+            "--transition-attn bias --candidate-context on"
+        )
+        parsed = parse_key_flags(flags)
+        self.assertEqual(parsed["router_mode"], "hard_prior")
+        self.assertTrue(parsed["causal_counts"])
+        self.assertEqual(parsed["candidate_context"], "on")
+        status, detail = validate_run_name_settings("tokyo/abl_ctx_cat_geo", parsed)
+        self.assertEqual(status, "ok")
+        self.assertEqual(detail, "")
+        bad = {**parsed, "candidate_context": "off"}
+        status, detail = validate_run_name_settings("abl_ctx_cat_geo", bad)
+        self.assertEqual(status, "mismatch")
+        self.assertIn("candidate_context", detail)
+        status, _ = validate_run_name_settings("abl_mystery_xyz", parsed)
+        self.assertEqual(status, "unknown_name")
+
+    def test_extract_recorded_settings_from_payload(self):
+        payload = {
+            "model_config": {
+                "router_mode": "surd_mlp",
+                "causal_counts": True,
+                "candidate_context": "on",
+                "expert_cross_attn": "off",
+            },
+            "training_args": {"negatives": 63, "max_train_candidates": -1},
+            "candidate_construction": {
+                "method": "multi_source",
+                "radius_statistic": "p80",
+                "popular_top_k": 0,
+                "random_negatives": 50,
+            },
+            "target_mode": "all",
+        }
+        recorded = extract_recorded_settings(payload)
+        self.assertEqual(recorded["router_mode"], "surd_mlp")
+        self.assertEqual(recorded["candidate_radius"], "p80")
+        self.assertEqual(recorded["popular_top_k"], 0)
+        self.assertEqual(recorded["candidate_context"], "on")
+        self.assertEqual(recorded["eval_targets"], "all")
+        status, _ = validate_run_name_settings("abl_cand_p80", recorded)
+        self.assertEqual(status, "ok")
+        status, detail = validate_run_name_settings("abl_cand_p90", recorded)
+        self.assertEqual(status, "mismatch")
+        self.assertIn("candidate_radius", detail)
+
+    def test_summary_scan_writes_md_csv_with_known_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            results = root / "results"
+            run = results / "tokyo" / "abl_ctx_cat_geo"
+            eval_dir = run / "eval_test"
+            eval_dir.mkdir(parents=True)
+            payload = {
+                "split": "test",
+                "cache": str(root / "runs" / "tokyo" / "cache"),
+                "timestamp_utc": "2026-11-20T00:00:00Z",
+                "target_mode": "all",
+                "model_config": {
+                    "router_mode": "hard_prior",
+                    "causal_counts": True,
+                    "candidate_context": "on",
+                    "candidate_context_time": "off",
+                    "session_summary": "off",
+                    "user_pref": "off",
+                    "transition_pmi": "off",
+                    "expert_cross_attn": "off",
+                },
+                "training_args": {"router_mode": "hard_prior", "causal_counts": True},
+                "candidate_construction": {
+                    "method": "multi_source",
+                    "radius_statistic": "p90",
+                    "popular_top_k": 100,
+                    "popular_radius": "max",
+                    "user_frequent_top_k": 50,
+                    "random_negatives": 50,
+                },
+                "all_targets": {
+                    "Acc@1": 0.25, "NDCG@1": 0.25, "MRR": 0.4,
+                    "samples": 4, "known_targets": 3, "coverage": 0.75,
+                },
+                "known_only": {
+                    "Acc@1": 1 / 3, "NDCG@1": 1 / 3, "MRR": 0.5,
+                    "samples": 3, "known_targets": 3, "coverage": 1.0,
+                },
+            }
+            (eval_dir / "metrics.json").write_text(
+                json.dumps(payload), encoding="utf-8")
+            # Mismatching sibling run to exercise name_check.
+            bad_run = results / "tokyo" / "abl_router_hard"
+            bad_eval = bad_run / "eval_test"
+            bad_eval.mkdir(parents=True)
+            bad_payload = dict(payload)
+            bad_payload["model_config"] = dict(payload["model_config"], router_mode="surd_mlp")
+            bad_payload["training_args"] = dict(payload["training_args"], router_mode="surd_mlp")
+            bad_payload["all_targets"] = dict(payload["all_targets"], **{"Acc@1": 0.1})
+            (bad_eval / "metrics.json").write_text(
+                json.dumps(bad_payload), encoding="utf-8")
+
+            rows = collect_summary_rows(results)
+            self.assertEqual(len(rows), 2)
+            by_name = {r["run_name"]: r for r in rows}
+            good = by_name["tokyo/abl_ctx_cat_geo"]
+            self.assertEqual(good["name_check"], "ok")
+            self.assertEqual(good["Acc@1"], "0.25")
+            self.assertTrue(good["known_Acc@1"].startswith("0.333"))
+            self.assertEqual(good["known_coverage"], "0.75")
+            bad = by_name["tokyo/abl_router_hard"]
+            self.assertEqual(bad["name_check"], "mismatch")
+            self.assertIn("router_mode", bad["mismatch"])
+
+            md_path, csv_path = write_summary_table(rows, results)
+            self.assertTrue(md_path.is_file())
+            self.assertTrue(csv_path.is_file())
+            md = md_path.read_text(encoding="utf-8")
+            self.assertIn("known_Acc@1", md)
+            self.assertIn("name_check", md)
+            self.assertIn("tokyo/abl_ctx_cat_geo", md)
+            csv_text = csv_path.read_text(encoding="utf-8")
+            self.assertTrue(csv_text.startswith("run_name,leaf_name,"))
+
+            # CLI smoke
+            run_cli("ablation-summary", "--results", results)
+            self.assertIn("tokyo/abl_router_hard", (results / "ablation_summary.md").read_text())
 
 
 if __name__ == "__main__":

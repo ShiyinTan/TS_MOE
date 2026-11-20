@@ -5,6 +5,7 @@ import sys
 
 import torch
 
+from .ablation_summary import add_ablation_summary_parser
 from .counts import DEFAULT_VISIT_BINS, TRANSITION_ATTN_MODES
 from .engine import evaluate_cli, explain, recommend, train
 from .model import (
@@ -205,6 +206,7 @@ def main():
     r.add_argument("--history", required=True)
     r.add_argument("--top-n", type=positive, default=10)
     r.set_defaults(func=recommend)
+    add_ablation_summary_parser(commands)
     for parser in (e, x):
         parser.add_argument("--split", choices=("validation", "test"), default="test")
     for parser in (e, x, r):
@@ -239,7 +241,8 @@ def main():
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
                    "transition-lambda must be nonnegative")
-    torch.set_num_threads(args.threads)
+    if hasattr(args, "threads"):
+        torch.set_num_threads(args.threads)
     try:
         args.func(args)
     except KeyboardInterrupt:
