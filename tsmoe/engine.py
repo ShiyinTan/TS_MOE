@@ -1777,7 +1777,10 @@ def train(args):
     kd_teacher = None
     if kd_teacher_path:
         kd_ckpt = load_file(kd_teacher_path)
-        kd_cfg = model_config_from_checkpoint(kd_ckpt)
+        kd_cfg_raw = kd_ckpt.get("config") or kd_ckpt.get("model_config")
+        if kd_cfg_raw is None:
+            raise ValueError(f"kd-teacher checkpoint missing config: {kd_teacher_path}")
+        kd_cfg = model_config_from_checkpoint(kd_cfg_raw)
         kd_teacher = cache.model(kd_cfg).to(device)
         load_weights(kd_teacher, kd_ckpt["weights"])
         kd_teacher.eval()
@@ -2085,8 +2088,8 @@ def train(args):
                     top_k=kd_top_k, temp=kd_temp)
                 loss = loss + lambda_kd * kd
             if poi_geo_laplace > 0 and geo_edge_src is not None:
-                # tokens["P"] rows 0/1 are pad/unk; catalog rows start at index 2.
-                poi_emb = model.tokens["P"].weight[2:2 + len(cache.pois)]
+                # projections["P"] rows 0/1 are pad/unk; catalog rows start at index 2.
+                poi_emb = model.projections["P"].weight[2:2 + len(cache.pois)]
                 loss = loss + poi_geo_laplace_loss(
                     poi_emb, geo_edge_src, geo_edge_dst, geo_edge_w, poi_geo_laplace)
             opt.zero_grad(set_to_none=True)
