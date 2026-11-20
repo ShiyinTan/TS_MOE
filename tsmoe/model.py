@@ -112,6 +112,13 @@ class ModelConfig:
     geo_adapt_temp: float = 1.0
     # Acc@1 revisit prior: λ·log1p(user→cand visits) from cand_poi_feat[...,0] (0 = off).
     revisit_score_bias: float = 0.
+    # Orthogonal revisit features (keep revisit_score_bias locked; do not raise it).
+    # λ·1[cand ∈ last-K history tips].
+    history_hit_bias: float = 0.
+    history_hit_k: int = 5
+    # λ·exp(−age/τ) where age = steps from tip to most recent hist visit of cand.
+    revisit_recency_bias: float = 0.
+    revisit_recency_tau: float = 3.0
     # Simini radiation Acc@1 prior (replace flat geo): λ·log P_rad(j|i) over pool.
     # log P ∝ log m_j − log(m_i+s_ij) − log(m_i+m_j+s_ij); s_ij = intervening visit mass.
     radiation_score_bias: float = 0.
@@ -198,6 +205,14 @@ class ModelConfig:
             raise ValueError("geo_adapt_temp must be nonnegative")
         if self.revisit_score_bias < 0:
             raise ValueError("revisit_score_bias must be nonnegative")
+        if self.history_hit_bias < 0:
+            raise ValueError("history_hit_bias must be nonnegative")
+        if self.history_hit_k < 1:
+            raise ValueError("history_hit_k must be >= 1")
+        if self.revisit_recency_bias < 0:
+            raise ValueError("revisit_recency_bias must be nonnegative")
+        if self.revisit_recency_tau <= 0:
+            raise ValueError("revisit_recency_tau must be positive")
         if self.radiation_score_bias < 0:
             raise ValueError("radiation_score_bias must be nonnegative")
         if self.radiation_score_bias > 0 and self.candidate_context == "off":
@@ -1001,6 +1016,38 @@ class TSMoE(nn.Module):
                 score = score + pi[:, None] * ret_term + (1.0 - pi)[:, None] * exp_term
             else:
                 score = score + rsb * u_vis
+        # History-hit / revisit-recency: orthogonal to flat revisit λ (needs hist_poi_rows).
+        hhb = float(getattr(self.cfg, "history_hit_bias", 0.0) or 0.0)
+        rrb = float(getattr(self.cfg, "revisit_recency_bias", 0.0) or 0.0)
+        if ((hhb > 0 or rrb > 0) and count_ctx is not None
+                and "hist_poi_rows" in count_ctx):
+            hist_rows = count_ctx["hist_poi_rows"][:, :valid.shape[1]].to(score.device)
+            hist_ok = valid & (hist_rows >= 0)
+            if hhb > 0:
+                k_hit = max(1, int(getattr(self.cfg, "history_hit_k", 5) or 5))
+                lengths = valid.long().sum(-1)
+                hit = torch.zeros_like(score, dtype=torch.bool)
+                for o in range(k_hit):
+                    tip_idx = (lengths - 1 - o).clamp_min(0)
+                    tip = hist_rows.gather(1, tip_idx.view(-1, 1)).squeeze(1)
+                    tip_ok = (lengths > o) & (tip >= 0)
+                    hit = hit | ((rows == tip[:, None]) & tip_ok[:, None])
+                score = score + hhb * hit.to(score.dtype)
+            if rrb > 0:
+                # age = steps from tip to most recent hist match; never → no boost.
+                tau = float(getattr(self.cfg, "revisit_recency_tau", 3.0) or 3.0)
+                bsz, n_hist = hist_rows.shape
+                n_cand = rows.shape[1]
+                pos = torch.arange(n_hist, device=score.device).view(1, n_hist, 1)
+                tip = (valid.long().sum(-1) - 1).clamp_min(0).view(-1, 1, 1)
+                match = (
+                    (hist_rows.unsqueeze(2) == rows.unsqueeze(1))
+                    & hist_ok.unsqueeze(2))
+                age = (tip - pos).to(score.dtype).masked_fill(~match, 1e4)
+                min_age = age.min(dim=1).values.clamp_min(0)
+                seen = min_age < 1e3
+                recency = torch.exp(-min_age / tau) * seen.to(score.dtype)
+                score = score + rrb * recency
         # Direct SURD/SMI score contribution (default λ=0).
         ssb = float(getattr(self.cfg, "surd_score_bias", 0.0) or 0.0)
         if ssb > 0 and cand_gate is not None:
@@ -1018,6 +1065,10 @@ class TSMoE(nn.Module):
     def forward(self, history, valid, rows, prior, confidence, **kwargs):
         count_ctx = kwargs.pop("count_ctx", None)
         surd_specific = kwargs.pop("surd_specific", None)
+        # Catalog rows for history tips (token−2); used by history-hit / recency biases.
+        if count_ctx is not None and "P" in history:
+            count_ctx = dict(count_ctx)
+            count_ctx["hist_poi_rows"] = history["P"].to(valid.device) - 2
         return self.score(self.encode(history, valid, count_ctx), valid, rows, prior, confidence,
                           count_ctx=count_ctx, surd_specific=surd_specific, **kwargs)
 

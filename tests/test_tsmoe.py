@@ -1305,6 +1305,40 @@ class TestCausalCounts(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModelConfig(8, 2, 1, 0., 2, tsb_history_k=0)
 
+    def test_history_hit_and_recency_biases(self):
+        """History-hit / recency lift cands that appear in recent tips vs never-seen."""
+        torch.manual_seed(21)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4)
+        plain = TSMoE(n_pois, n_cats, 4, ModelConfig(**base)).eval()
+        hit = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, history_hit_bias=1.0, history_hit_k=5)).eval()
+        hit.load_state_dict(plain.state_dict())
+        rec = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, revisit_recency_bias=1.0, revisit_recency_tau=2.0)).eval()
+        rec.load_state_dict(plain.state_dict())
+        with torch.no_grad():
+            s0 = plain(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_hit = hit(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_rec = rec(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        # Last tip catalog row should get a hit boost.
+        last = int(valid[0].long().sum().item()) - 1
+        tip_row = int(h["P"][0, last].item()) - 2
+        if 0 <= tip_row < n_pois:
+            self.assertGreater(float(s_hit[tip_row] - s0[tip_row]), 0.5)
+            self.assertGreater(float(s_rec[tip_row] - s0[tip_row]), 0.1)
+
     def test_return_gate_mixes_revisit_and_explore(self):
         """Return-gate: π·revisit + (1−π)·gauss explore changes scores vs flat revisit."""
         torch.manual_seed(11)

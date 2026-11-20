@@ -52,6 +52,10 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("geo_adapt", "off")
     cfg.setdefault("geo_adapt_temp", 1.0)
     cfg.setdefault("revisit_score_bias", 0.0)
+    cfg.setdefault("history_hit_bias", 0.0)
+    cfg.setdefault("history_hit_k", 5)
+    cfg.setdefault("revisit_recency_bias", 0.0)
+    cfg.setdefault("revisit_recency_tau", 3.0)
     cfg.setdefault("radiation_score_bias", 0.0)
     cfg.setdefault("radiation_kernel", "hard")
     cfg.setdefault("radiation_soft_km", 0.25)
@@ -1223,6 +1227,10 @@ def train(args):
     geo_adapt = getattr(args, "geo_adapt", "off")
     geo_adapt_temp = float(getattr(args, "geo_adapt_temp", 1.0) or 1.0)
     revisit_score_bias = float(getattr(args, "revisit_score_bias", 0.0) or 0.0)
+    history_hit_bias = float(getattr(args, "history_hit_bias", 0.0) or 0.0)
+    history_hit_k = int(getattr(args, "history_hit_k", 5) or 5)
+    revisit_recency_bias = float(getattr(args, "revisit_recency_bias", 0.0) or 0.0)
+    revisit_recency_tau = float(getattr(args, "revisit_recency_tau", 3.0) or 3.0)
     radiation_score_bias = float(getattr(args, "radiation_score_bias", 0.0) or 0.0)
     radiation_kernel = getattr(args, "radiation_kernel", "hard")
     radiation_soft_km = float(getattr(args, "radiation_soft_km", 0.25) or 0.25)
@@ -1250,6 +1258,14 @@ def train(args):
         raise ValueError("--geo-adapt-temp must be nonnegative")
     if revisit_score_bias < 0:
         raise ValueError("--revisit-score-bias must be nonnegative")
+    if history_hit_bias < 0:
+        raise ValueError("--history-hit-bias must be nonnegative")
+    if history_hit_k < 1:
+        raise ValueError("--history-hit-k must be >= 1")
+    if revisit_recency_bias < 0:
+        raise ValueError("--revisit-recency-bias must be nonnegative")
+    if revisit_recency_tau <= 0:
+        raise ValueError("--revisit-recency-tau must be positive")
     if radiation_score_bias < 0:
         raise ValueError("--radiation-score-bias must be nonnegative")
     if radiation_kernel not in ("hard", "soft"):
@@ -1387,6 +1403,10 @@ def train(args):
                       geo_adapt=geo_adapt,
                       geo_adapt_temp=geo_adapt_temp,
                       revisit_score_bias=revisit_score_bias,
+                      history_hit_bias=history_hit_bias,
+                      history_hit_k=history_hit_k,
+                      revisit_recency_bias=revisit_recency_bias,
+                      revisit_recency_tau=revisit_recency_tau,
                       radiation_score_bias=radiation_score_bias,
                       radiation_kernel=radiation_kernel,
                       radiation_soft_km=radiation_soft_km,
@@ -1432,6 +1452,9 @@ def train(args):
           f"gauss_geo_bias={cfg.gauss_geo_bias} gauss_sigma_km={cfg.gauss_sigma_km} "
           f"geo_adapt={cfg.geo_adapt} geo_adapt_temp={cfg.geo_adapt_temp} "
           f"revisit_score_bias={cfg.revisit_score_bias} "
+          f"history_hit_bias={cfg.history_hit_bias} history_hit_k={cfg.history_hit_k} "
+          f"revisit_recency_bias={cfg.revisit_recency_bias} "
+          f"revisit_recency_tau={cfg.revisit_recency_tau} "
           f"radiation_score_bias={cfg.radiation_score_bias} "
           f"radiation_kernel={cfg.radiation_kernel} "
           f"jump_length_bias={cfg.jump_length_bias} jump_dist={cfg.jump_dist} "
@@ -1477,6 +1500,10 @@ def train(args):
     settings["geo_adapt"] = cfg.geo_adapt
     settings["geo_adapt_temp"] = cfg.geo_adapt_temp
     settings["revisit_score_bias"] = cfg.revisit_score_bias
+    settings["history_hit_bias"] = cfg.history_hit_bias
+    settings["history_hit_k"] = cfg.history_hit_k
+    settings["revisit_recency_bias"] = cfg.revisit_recency_bias
+    settings["revisit_recency_tau"] = cfg.revisit_recency_tau
     settings["radiation_score_bias"] = cfg.radiation_score_bias
     settings["radiation_kernel"] = cfg.radiation_kernel
     settings["radiation_soft_km"] = cfg.radiation_soft_km

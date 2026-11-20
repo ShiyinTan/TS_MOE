@@ -219,6 +219,20 @@ def main():
         help="add λ·log1p(user→cand visits) to scores (default 0 = off). "
              "Needs causal counts; Acc@1 revisit prior")
     t.add_argument(
+        "--history-hit-bias", type=float, default=0.0,
+        help="add λ·1[cand∈last-K history tips] (default 0 = off). "
+             "Orthogonal to --revisit-score-bias; keep revisit locked at 0.10")
+    t.add_argument(
+        "--history-hit-k", type=int, default=5,
+        help="K for --history-hit-bias last-K tips (default 5)")
+    t.add_argument(
+        "--revisit-recency-bias", type=float, default=0.0,
+        help="add λ·exp(−age/τ) for most recent hist visit of cand "
+             "(default 0 = off). Orthogonal to flat revisit λ")
+    t.add_argument(
+        "--revisit-recency-tau", type=float, default=3.0,
+        help="τ in history-steps for --revisit-recency-bias (default 3)")
+    t.add_argument(
         "--radiation-score-bias", type=float, default=0.0,
         help="add λ·Simini radiation log-score over the candidate pool "
              "(default 0 = off). Prefer replacing --geo-score-bias. "
