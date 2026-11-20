@@ -95,6 +95,8 @@ Optional Acc@1 ranking auxiliaries (see also [`causal-counts.md`](causal-counts.
 | `--transition-score-bias` | `λ·log1p(last→cand POI transition)` added to scores (default 0) |
 | `--surd-bias-gate` / `--surd-score-bias` / `--tsb-gate-mode` / `--surd-attn-gate` | SURD/SMI-controlled bias weights (all default off / 0; see [`causal-counts.md`](causal-counts.md)) |
 
+**LOCKED WIN (Tokyo known_only vs STHGCN):** `hc_sg_Atime_bpr029_ssb026` — Acc@1 **0.260274**, R@5 **0.441517**, R@10 **0.519494**, R@20 **0.586934**. Full flags in [`ablation.md`](ablation.md) §3.2 / [`causal-counts.md`](causal-counts.md).
+
 ## Relation to `runs/`
 
 - **Do not** look under `runs/.../model/eval_*` for metrics — those paths are no longer used.

@@ -115,12 +115,15 @@ python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_last \
   --lambda-bpr 0.25 --transition-score-bias 2.0 \
   --epochs 1 --checkpoint-metric acc1 --device cuda
 
-# SURD/SMI-gated biases (residual amplifies high Unique_P; additive SURD score)
+# LOCKED WIN (TM-34): beats STHGCN Acc@1 + R@1/5/10/20 on known_only
+# Acc 0.260274 · R@5 0.441517 · R@10 0.519494 · R@20 0.586934
 python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_last \
-  --out runs/tokyo/hc_surd_gate_up --dim 256 --heads 8 \
-  --lambda-bpr 0.25 --transition-score-bias 2.0 \
-  --surd-bias-gate unique_p --tsb-gate-mode residual --surd-score-bias 1.0 \
-  --epochs 1 --checkpoint-metric acc1 --device cuda
+  --out runs/tokyo/hc_sg_Atime_bpr029_ssb026 --seed 42 --device cuda \
+  --router-mode hard_prior --dim 256 --heads 8 \
+  --lambda-bpr 0.29 --transition-score-bias 2.0 \
+  --surd-bias-gate unique_p --tsb-gate-mode residual --surd-score-bias 0.26 \
+  --candidate-context on --candidate-context-time last_slot \
+  --epochs 1 --checkpoint-metric acc1
 
 # Ablate the whole module (shuffled minibatches restored)
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_nocounts \
