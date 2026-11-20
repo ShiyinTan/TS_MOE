@@ -390,6 +390,14 @@ def main():
         "--score-temperature", type=float, default=1.0,
         help="divide ranking logits by T before Acc@1 (eval-time calibration; "
              "default 1 = unchanged). Sweep on val, apply on test")
+    e.add_argument(
+        "--geo-score-bias", type=float, default=None,
+        help="evaluate-time override of geo λ (None = keep checkpoint). "
+             "Use with soft10r for locked-bias ε-mix (#38)")
+    e.add_argument(
+        "--revisit-score-bias", type=float, default=None,
+        help="evaluate-time override of revisit λ (None = keep checkpoint). "
+             "Use with soft10r for locked-bias ε-mix (#38)")
     x = commands.add_parser("explain", help="audit one candidate's prior, router and score contributions")
     x.add_argument("--sample-index", type=int, default=0)
     x.add_argument("--poi-id", type=int, help="external venue_id; default is the true POI or top prediction for OOV")
@@ -453,6 +461,13 @@ def main():
                    "geo-score-power must be positive")
     if args.command == "evaluate" and float(getattr(args, "score_temperature", 1.0) or 1.0) <= 0:
         root.error("--score-temperature must be positive")
+    if args.command == "evaluate":
+        geo_ov = getattr(args, "geo_score_bias", None)
+        rev_ov = getattr(args, "revisit_score_bias", None)
+        if geo_ov is not None and float(geo_ov) < 0:
+            root.error("--geo-score-bias override must be nonnegative")
+        if rev_ov is not None and float(rev_ov) < 0:
+            root.error("--revisit-score-bias override must be nonnegative")
     if (args.command == "train"
             and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):

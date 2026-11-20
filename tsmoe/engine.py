@@ -5,7 +5,7 @@ import os
 import random
 import tempfile
 from collections import Counter, defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,6 +27,38 @@ from .model import ModelConfig, TSMoE, objective, soft_prior_targets
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
+
+
+def apply_eval_bias_overrides(model, args):
+    """Replace frozen score biases at evaluate-time (locked-bias ε-mix / #38).
+
+    ``None`` keeps the checkpoint value. Biases are additive outside the neural net,
+    so overriding ``geo_score_bias`` / ``revisit_score_bias`` equals residual micro-mix
+    on frozen logits without retraining.
+    """
+    updates = {}
+    geo = getattr(args, "geo_score_bias", None)
+    if geo is not None:
+        geo = float(geo)
+        if geo < 0:
+            raise ValueError("--geo-score-bias override must be nonnegative")
+        updates["geo_score_bias"] = geo
+    rev = getattr(args, "revisit_score_bias", None)
+    if rev is not None:
+        rev = float(rev)
+        if rev < 0:
+            raise ValueError("--revisit-score-bias override must be nonnegative")
+        updates["revisit_score_bias"] = rev
+    if not updates:
+        return model.cfg
+    new_cfg = replace(model.cfg, **updates)
+    model.cfg = new_cfg
+    print(
+        "eval_bias_override "
+        + " ".join(f"{k}={v}" for k, v in sorted(updates.items())),
+        flush=True,
+    )
+    return new_cfg
 
 
 def model_config_from_checkpoint(raw):
@@ -1856,7 +1888,7 @@ def evaluate_cli(args):
     install_interrupt_handler()
     cache, model, table, checkpoint = load_model(args)
     device = table.routing_prior.device
-    cfg = model.cfg
+    cfg = apply_eval_bias_overrides(model, args)
     training = cache.split("train")
     category_frequency = Counter(training["C"].tolist())
     data = cache.split(args.split)
@@ -1877,6 +1909,8 @@ def evaluate_cli(args):
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
     payload["candidate_pool_stats"] = pool_stats.get(args.split)
     payload["score_temperature"] = score_temp
+    payload["eval_geo_score_bias"] = float(cfg.geo_score_bias)
+    payload["eval_revisit_score_bias"] = float(cfg.revisit_score_bias)
     print_eval_tables(payload)
     out_dir = resolve_eval_out(args)
     save_eval_results(payload, out_dir, legacy_output=args.output)

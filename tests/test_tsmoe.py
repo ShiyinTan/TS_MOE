@@ -38,9 +38,9 @@ from tsmoe.ablation_summary import (
 )
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, ablation_row_from_eval, append_ablation_log,
-    candidates, format_ablation_key_flags, format_eval_report, metric_row,
-    model_config_from_checkpoint, ranks_of, results_root_dir, results_run_dir,
-    run_name_for_results,
+    apply_eval_bias_overrides, candidates, format_ablation_key_flags,
+    format_eval_report, metric_row, model_config_from_checkpoint, ranks_of,
+    results_root_dir, results_run_dir, run_name_for_results,
 )
 from tsmoe.features import (
     GEO_FEAT_DIM, build_poi_cat_table, delta_geo_features, gather_side_features,
@@ -1482,6 +1482,26 @@ class TestCausalCounts(unittest.TestCase):
         self.assertGreater(
             float(rec_focal_h) / max(float(rec_plain_h), 1e-8),
             float(rec_focal_e) / max(float(rec_plain_e), 1e-8))
+
+    def test_apply_eval_bias_overrides_replaces_frozen_cfg(self):
+        """#38: evaluate-time geo/revisit overrides mutate frozen ModelConfig."""
+        from types import SimpleNamespace
+        model = TSMoE(4, 2, 4, ModelConfig(
+            dim=8, heads=2, layers=1, dropout=0., top_k=2,
+            geo_score_bias=0.15, revisit_score_bias=0.10))
+        cfg = apply_eval_bias_overrides(
+            model, SimpleNamespace(geo_score_bias=0.17, revisit_score_bias=0.08))
+        self.assertAlmostEqual(cfg.geo_score_bias, 0.17)
+        self.assertAlmostEqual(cfg.revisit_score_bias, 0.08)
+        self.assertAlmostEqual(model.cfg.geo_score_bias, 0.17)
+        # None keeps checkpoint values.
+        model2 = TSMoE(4, 2, 4, ModelConfig(
+            dim=8, heads=2, layers=1, dropout=0., top_k=2,
+            geo_score_bias=0.15, revisit_score_bias=0.10))
+        cfg2 = apply_eval_bias_overrides(
+            model2, SimpleNamespace(geo_score_bias=None, revisit_score_bias=None))
+        self.assertAlmostEqual(cfg2.geo_score_bias, 0.15)
+        self.assertAlmostEqual(cfg2.revisit_score_bias, 0.10)
 
     def test_soft_prior_targets_mixes_onehot_and_priors(self):
         from tsmoe.model import soft_prior_targets
