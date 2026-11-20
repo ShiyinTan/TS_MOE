@@ -253,6 +253,11 @@ def main():
         "--tsb-history-decay", type=float, default=0.5,
         help="κ for multi-hop tsb weights w_o∝exp(−o/κ); o=0 is last tip (default 0.5)")
     t.add_argument(
+        "--transition-dt-bins", type=str, default="off",
+        help="Δt-bin edges in hours for transition-score-bias, e.g. 1h,6h,24h "
+             "(bins <1 / 1–6 / 6–24 / >24). Uses bin counts with pooled fallback; "
+             "off = last-only/multi-hop pooled. Prefer over --tsb-decay-hours")
+    t.add_argument(
         "--tsb-decay-hours", type=float, default=0.0,
         help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
              "hours from last history tip to target (Hawkes-lite; 0 = off)")

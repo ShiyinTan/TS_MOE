@@ -17,6 +17,7 @@ from .candidates import (
 )
 from .counts import (
     DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
+    parse_dt_bin_edges,
 )
 from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_batch, read_split
 from .features import (
@@ -65,6 +66,7 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("explore_score_bias", 0.0)
     cfg.setdefault("tsb_history_k", 1)
     cfg.setdefault("tsb_history_decay", 0.5)
+    cfg.setdefault("tsb_dt_edges", ())
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
@@ -216,7 +218,10 @@ def build_batch_feature_context(
             transition_pmi=transition_pmi,
         )
         ctx = merge_feature_context(ctx, side)
-    if float(getattr(cfg, "tsb_decay_hours", 0.0) or 0.0) > 0:
+    need_gap = (
+        float(getattr(cfg, "tsb_decay_hours", 0.0) or 0.0) > 0
+        or bool(getattr(cfg, "tsb_dt_edges", ()) or ()))
+    if need_gap:
         ctx = attach_target_gap_hours(ctx, data, indices)
     return ctx
 
@@ -250,7 +255,10 @@ def gather_features_causal(
             transition_pmi=transition_pmi,
         )
         ctx = merge_feature_context(ctx, side)
-    if float(getattr(cfg, "tsb_decay_hours", 0.0) or 0.0) > 0:
+    need_gap = (
+        float(getattr(cfg, "tsb_decay_hours", 0.0) or 0.0) > 0
+        or bool(getattr(cfg, "tsb_dt_edges", ()) or ()))
+    if need_gap:
         ctx = attach_target_gap_hours(ctx, data, indices)
     if update and cfg.causal_counts and count_tables is not None:
         for sample_index in indices.tolist():
@@ -269,7 +277,8 @@ def masked_candidate_lists(rows, mask):
 def new_count_tables(cache, cfg, visit_bin_edges=None):
     return CausalCountTables(
         len(cache.pois), len(cache.meta["cat_vocab"]),
-        visit_bins=cfg.visit_bins, visit_bin_edges=visit_bin_edges)
+        visit_bins=cfg.visit_bins, visit_bin_edges=visit_bin_edges,
+        dt_bin_edges=getattr(cfg, "tsb_dt_edges", ()) or ())
 
 
 def replay_train_tables(cache, cfg, train_data, visit_bin_edges=None):
@@ -1198,6 +1207,7 @@ def train(args):
     explore_score_bias = float(getattr(args, "explore_score_bias", 0.0) or 0.0)
     tsb_history_k = int(getattr(args, "tsb_history_k", 1) or 1)
     tsb_history_decay = float(getattr(args, "tsb_history_decay", 0.5) or 0.5)
+    tsb_dt_edges = tuple(parse_dt_bin_edges(getattr(args, "transition_dt_bins", "off")))
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
@@ -1330,6 +1340,7 @@ def train(args):
                       explore_score_bias=explore_score_bias,
                       tsb_history_k=tsb_history_k,
                       tsb_history_decay=tsb_history_decay,
+                      tsb_dt_edges=tsb_dt_edges,
                       tsb_decay_hours=tsb_decay_hours,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
@@ -1366,6 +1377,7 @@ def train(args):
           f"return_gate={cfg.return_gate} explore_spatial_bias={cfg.explore_spatial_bias} "
           f"explore_score_bias={cfg.explore_score_bias} "
           f"tsb_history_k={cfg.tsb_history_k} tsb_history_decay={cfg.tsb_history_decay} "
+          f"tsb_dt_edges={cfg.tsb_dt_edges} "
           f"tsb_decay_hours={cfg.tsb_decay_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
@@ -1416,6 +1428,7 @@ def train(args):
     settings["explore_score_bias"] = cfg.explore_score_bias
     settings["tsb_history_k"] = cfg.tsb_history_k
     settings["tsb_history_decay"] = cfg.tsb_history_decay
+    settings["tsb_dt_edges"] = list(cfg.tsb_dt_edges)
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias

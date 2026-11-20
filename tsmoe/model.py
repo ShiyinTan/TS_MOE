@@ -133,6 +133,9 @@ class ModelConfig:
     # Multi-hop tsb: blend last K history→cand transitions (1 = last-only default).
     tsb_history_k: int = 1
     tsb_history_decay: float = 0.5  # w_o ∝ exp(−o/κ); o=0 is last tip
+    # Δt-bin tsb: hour edges e.g. (1,6,24) → bins <1h / 1–6 / 6–24 / >24; empty = off.
+    # Uses bin-specific last→cand counts with pooled fallback when bin sparse.
+    tsb_dt_edges: tuple = ()
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
     tsb_decay_hours: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
@@ -223,6 +226,12 @@ class ModelConfig:
             raise ValueError("tsb_history_k must be >= 1")
         if self.tsb_history_decay <= 0:
             raise ValueError("tsb_history_decay must be positive")
+        edges = tuple(float(x) for x in (self.tsb_dt_edges or ()))
+        if any(e <= 0 for e in edges):
+            raise ValueError("tsb_dt_edges must be positive hours")
+        if edges != tuple(sorted(edges)):
+            raise ValueError("tsb_dt_edges must be sorted ascending")
+        self.tsb_dt_edges = edges
         if self.return_gate == "on":
             if self.revisit_score_bias <= 0:
                 raise ValueError("return_gate on requires --revisit-score-bias > 0")
@@ -810,13 +819,30 @@ class TSMoE(nn.Module):
         score = base + gate * residual
         gate_mode = getattr(self.cfg, "tsb_gate_mode", "off")
         # Light graph prior: last-K history → candidate POI transition (default K=1).
+        # Optional Δt-bins: prefer bin-specific last→cand count, else pooled fallback.
         tb = float(self.cfg.transition_score_bias or 0.0)
         if (tb > 0 and count_ctx is not None and self.cfg.causal_counts
                 and "poi_transition" in count_ctx):
-            tsb_term = tb * self._multi_hop_log1p(
-                count_ctx["poi_transition"], rows, valid, score.device,
-                k=int(getattr(self.cfg, "tsb_history_k", 1) or 1),
-                decay=float(getattr(self.cfg, "tsb_history_decay", 0.5) or 0.5))
+            dt_edges = tuple(getattr(self.cfg, "tsb_dt_edges", ()) or ())
+            if (dt_edges and "poi_transition_dt" in count_ctx
+                    and "target_gap_hours" in count_ctx):
+                # Pooled last-hop raw count (expm1 of log1p mass).
+                pooled_l1p = self._last_hop_log1p(
+                    count_ctx["poi_transition"], rows, valid, score.device)
+                pooled = torch.expm1(pooled_l1p).clamp_min(0)
+                dt = count_ctx["poi_transition_dt"][:, :rows.shape[1], :].to(score.device)
+                gap = count_ctx["target_gap_hours"].to(score.device).clamp_min(0)
+                edges_t = torch.tensor(dt_edges, device=score.device, dtype=gap.dtype)
+                bid = torch.bucketize(gap, edges_t).clamp(0, dt.shape[-1] - 1)  # [B]
+                bin_count = dt.gather(
+                    2, bid.view(-1, 1, 1).expand(-1, dt.shape[1], 1)).squeeze(-1)
+                use = torch.where(bin_count > 0, bin_count, pooled)
+                tsb_term = tb * torch.log1p(use.clamp_min(0))
+            else:
+                tsb_term = tb * self._multi_hop_log1p(
+                    count_ctx["poi_transition"], rows, valid, score.device,
+                    k=int(getattr(self.cfg, "tsb_history_k", 1) or 1),
+                    decay=float(getattr(self.cfg, "tsb_history_decay", 0.5) or 0.5))
             # Hawkes-lite: down-weight transition prior when last→target gap is large.
             tau = float(getattr(self.cfg, "tsb_decay_hours", 0.0) or 0.0)
             if tau > 0 and "target_gap_hours" in count_ctx:
