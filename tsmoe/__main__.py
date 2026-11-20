@@ -136,6 +136,14 @@ def main():
         help="focal CE γ on rec term: (1−p_t)^γ · (−log p_t); 0 = plain CE. "
              "Try 1–2 for Acc@1 hard-miss emphasis (do not pair with CE-τ)")
     t.add_argument(
+        "--soft-target-beta", type=float, default=0.,
+        help="mix β of Acc-positive prior into CE targets: "
+             "(1−β)·onehot + β·normalize(priors). 0 = hard labels. Try 0.05–0.1")
+    t.add_argument(
+        "--soft-target-prior", type=str, default="off",
+        help="comma list of soft-target priors: tsb,revisit (Acc-lift only); "
+             "off disables. Requires --soft-target-beta > 0 and causal counts")
+    t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "
              "mass only (no sequence in router); surd_mlp = softmax(MLP(SURD)/T); "

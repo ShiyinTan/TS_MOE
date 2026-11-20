@@ -23,7 +23,7 @@ from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_bat
 from .features import (
     build_poi_cat_table, gather_side_features, merge_feature_context, slice_side_ctx,
 )
-from .model import ModelConfig, TSMoE, objective
+from .model import ModelConfig, TSMoE, objective, soft_prior_targets
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
@@ -1291,6 +1291,26 @@ def train(args):
     bpr_mode = str(getattr(args, "bpr_mode", "max") or "max")
     if bpr_mode not in ("max", "bpr_max", "simce"):
         raise ValueError("--bpr-mode must be max|bpr_max|simce")
+    soft_target_beta = float(getattr(args, "soft_target_beta", 0.0) or 0.0)
+    if soft_target_beta < 0 or soft_target_beta > 1:
+        raise ValueError("--soft-target-beta must be in [0, 1]")
+    soft_target_prior = str(getattr(args, "soft_target_prior", "off") or "off")
+    soft_priors = ()
+    if soft_target_prior not in ("", "off", "none"):
+        soft_priors = tuple(
+            p.strip().lower() for p in soft_target_prior.split(",") if p.strip())
+        bad = set(soft_priors) - {"tsb", "revisit"}
+        if bad:
+            raise ValueError(
+                "--soft-target-prior must be off or comma list of tsb|revisit")
+    if soft_target_beta > 0 and not soft_priors:
+        raise ValueError("--soft-target-beta > 0 requires --soft-target-prior")
+    if soft_priors and soft_target_beta <= 0:
+        raise ValueError("--soft-target-prior requires --soft-target-beta > 0")
+    if soft_target_beta > 0 and ce_focal_gamma > 0:
+        raise ValueError("soft-target cannot combine with --ce-focal-gamma > 0")
+    if soft_target_beta > 0 and not causal_counts:
+        raise ValueError("--soft-target-beta > 0 requires causal counts")
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
     # Optional overlays (default off).
     candidate_context = getattr(args, "candidate_context", "off")
@@ -1601,12 +1621,18 @@ def train(args):
             result = model(h, valid, rows, prior, confidence, candidate_mask=cand_mask,
                            count_ctx=count_ctx,
                            surd_specific=lookup_surd_specific(final, safe_rows, cfg))
+            soft_tgts = None
+            if soft_target_beta > 0 and soft_priors:
+                soft_tgts = soft_prior_targets(
+                    positive.to(device), cand_mask, count_ctx, rows, valid,
+                    soft_priors, soft_target_beta)
             loss, parts = objective(
                 result, positive.to(device), args.lambda_surd, args.lambda_balance,
                 float(getattr(args, "lambda_bpr", 0.0) or 0.0),
                 float(getattr(args, "bpr_margin", 0.0) or 0.0),
                 float(getattr(args, "ce_focal_gamma", 0.0) or 0.0),
-                str(getattr(args, "bpr_mode", "max") or "max"))
+                str(getattr(args, "bpr_mode", "max") or "max"),
+                soft_targets=soft_tgts)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)

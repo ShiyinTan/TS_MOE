@@ -1449,6 +1449,37 @@ class TestCausalCounts(unittest.TestCase):
             float(rec_focal_h) / max(float(rec_plain_h), 1e-8),
             float(rec_focal_e) / max(float(rec_plain_e), 1e-8))
 
+    def test_soft_prior_targets_mixes_onehot_and_priors(self):
+        from tsmoe.model import soft_prior_targets
+        labels = torch.tensor([0])
+        mask = torch.tensor([[True, True, True]])
+        rows = torch.tensor([[10, 11, 12]])
+        valid = torch.tensor([[True, True]])
+        # poi_transition [B,M,L]: last tip → cand counts
+        poi_tr = torch.zeros(1, 3, 2)
+        poi_tr[0, :, 1] = torch.tensor([0.0, 9.0, 1.0])  # last hop
+        cand_feat = torch.zeros(1, 3, 2)
+        cand_feat[0, :, 0] = torch.log1p(torch.tensor([4.0, 0.0, 0.0]))
+        ctx = dict(poi_transition=poi_tr, cand_poi_feat=cand_feat)
+        hard = soft_prior_targets(labels, mask, ctx, rows, valid, ("tsb",), 0.0)
+        self.assertTrue(torch.allclose(hard[0], torch.tensor([1.0, 0.0, 0.0])))
+        soft = soft_prior_targets(
+            labels, mask, ctx, rows, valid, ("tsb", "revisit"), 0.2)
+        self.assertAlmostEqual(float(soft.sum()), 1.0, places=5)
+        self.assertGreater(float(soft[0, 0]), 0.7)  # mostly one-hot
+        self.assertGreater(float(soft[0, 1]), float(soft[0, 2]))  # tsb favors cand1
+        # Soft CE is finite and differs from hard CE when β>0.
+        result = dict(
+            score=torch.tensor([[2.0, 1.5, 0.0]]),
+            mask=mask, confidence=torch.ones(1, 3),
+            log_pi=torch.zeros(1, 3, 15), mass=torch.zeros(1, 3, 15),
+            gate=torch.ones(1, 3), gate_logits=torch.zeros(1, 3),
+            alpha=torch.zeros(1, 3))
+        _, (rec_h, *_) = objective(result, labels)
+        _, (rec_s, *_) = objective(result, labels, soft_targets=soft)
+        self.assertTrue(torch.isfinite(rec_s))
+        self.assertNotAlmostEqual(float(rec_s), float(rec_h), places=5)
+
     def test_legacy_checkpoint_disables_causal_counts(self):
         legacy = model_config_from_checkpoint(dict(
             dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,

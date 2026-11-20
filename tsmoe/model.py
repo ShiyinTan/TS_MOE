@@ -1022,8 +1022,55 @@ class TSMoE(nn.Module):
                           count_ctx=count_ctx, surd_specific=surd_specific, **kwargs)
 
 
+def soft_prior_targets(labels, mask, count_ctx, rows, valid, priors, beta):
+    """Build ``(1−β)·onehot(y) + β·normalize(Σ prior masses)`` over masked cands.
+
+    ``priors`` is an iterable of ``\"tsb\"`` / ``\"revisit\"`` (Acc-positive only).
+    """
+    beta = float(beta or 0.0)
+    if beta < 0 or beta > 1:
+        raise ValueError("soft_target_beta must be in [0, 1]")
+    device = labels.device
+    bsz, n_cand = mask.shape
+    onehot = F.one_hot(labels, num_classes=n_cand).to(dtype=torch.float32)
+    if beta <= 0 or not priors:
+        return onehot
+    prior_mass = torch.zeros(bsz, n_cand, device=device, dtype=torch.float32)
+    names = {str(p).strip().lower() for p in priors if str(p).strip()}
+    unknown = names - {"tsb", "revisit"}
+    if unknown:
+        raise ValueError(f"unsupported soft-target priors: {sorted(unknown)}")
+    if count_ctx is None:
+        raise ValueError("soft-target priors require count_ctx")
+    if "tsb" in names:
+        if "poi_transition" not in count_ctx:
+            raise ValueError("soft-target tsb requires poi_transition in count_ctx")
+        # log1p counts → raw counts via expm1
+        l1p = TSMoE._last_hop_log1p(count_ctx["poi_transition"], rows, valid, device)
+        prior_mass = prior_mass + torch.expm1(l1p.clamp_min(0)).clamp_min(0)
+    if "revisit" in names:
+        if "cand_poi_feat" not in count_ctx:
+            raise ValueError("soft-target revisit requires cand_poi_feat in count_ctx")
+        u = count_ctx["cand_poi_feat"][:, :n_cand, 0].to(device).clamp_min(0)
+        prior_mass = prior_mass + torch.expm1(u).clamp_min(0)
+    prior_mass = prior_mass.masked_fill(~mask, 0.0)
+    z = prior_mass.sum(dim=1, keepdim=True)
+    # Rows with empty prior fall back to one-hot (no soft mix).
+    has = (z.squeeze(1) > 0)
+    prior = torch.zeros_like(prior_mass)
+    prior[has] = prior_mass[has] / z[has].clamp_min(1e-8)
+    mix = (1.0 - beta) * onehot + beta * prior
+    # Keep label mass when prior was empty.
+    mix = torch.where(has[:, None], mix, onehot)
+    # Renormalize after mask (numerical safety).
+    mix = mix.masked_fill(~mask, 0.0)
+    mix = mix / mix.sum(dim=1, keepdim=True).clamp_min(1e-8)
+    return mix
+
+
 def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0.,
-              bpr_margin=0., ce_focal_gamma=0., bpr_mode="max"):
+              bpr_margin=0., ce_focal_gamma=0., bpr_mode="max",
+              soft_targets=None):
     """Ranking objective: CE (+ optional SURD aux/balance) + optional hard-negative BPR.
 
     ``lambda_bpr > 0`` adds a hard-neg aux averaged over rows with ≥1 valid
@@ -1037,6 +1084,8 @@ def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0
     ``bpr_margin`` (default 0) applies to ``max`` / ``bpr_max`` only.
     ``ce_focal_gamma > 0`` replaces plain CE with focal
     ``(1 − p_t)^γ · (−log p_t)`` (γ=0 keeps mean CE).
+    ``soft_targets`` if set replaces hard CE with ``−Σ soft · log_softmax(score)``.
+    Do not combine soft targets with focal γ>0.
     """
     mask, w = result["mask"], result["confidence"]
     log_pi, mass, gate = result["log_pi"], result["mass"], result["gate"]
@@ -1049,12 +1098,18 @@ def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0
     mode = str(bpr_mode or "max")
     if mode not in ("max", "bpr_max", "simce"):
         raise ValueError("bpr_mode must be max|bpr_max|simce")
-    ce = F.cross_entropy(scores, labels, reduction="none")
-    if gamma > 0:
-        pt = (-ce).exp().clamp(max=1.0)
-        rec = ((1.0 - pt).pow(gamma) * ce).mean()
+    if soft_targets is not None and gamma > 0:
+        raise ValueError("soft_targets cannot combine with ce_focal_gamma > 0")
+    if soft_targets is not None:
+        log_p = F.log_softmax(scores, dim=1)
+        rec = -(soft_targets.to(scores.dtype) * log_p).sum(dim=1).mean()
     else:
-        rec = ce.mean()
+        ce = F.cross_entropy(scores, labels, reduction="none")
+        if gamma > 0:
+            pt = (-ce).exp().clamp(max=1.0)
+            rec = ((1.0 - pt).pow(gamma) * ce).mean()
+        else:
+            rec = ce.mean()
     weights = w * mask / mask.sum()
     bce = F.binary_cross_entropy_with_logits(result["gate_logits"], result["alpha"], reduction="none")
     aux = (weights * (bce - (mass * log_pi).sum(-1))).sum()
