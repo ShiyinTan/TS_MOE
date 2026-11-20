@@ -1108,10 +1108,64 @@ class TestCausalCounts(unittest.TestCase):
             dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,
             lambda_prior=.1, use_surd=True, causal_counts=True))
         self.assertEqual(legacy.transition_score_bias, 0.0)
+        self.assertEqual(legacy.category_score_bias, 0.0)
+        self.assertEqual(legacy.pop_score_bias, 0.0)
+        self.assertEqual(legacy.geo_score_bias, 0.0)
         self.assertEqual(legacy.surd_bias_gate, "off")
         self.assertEqual(legacy.surd_score_bias, 0.0)
         self.assertEqual(legacy.tsb_gate_mode, "off")
         self.assertEqual(legacy.surd_attn_gate, "off")
+
+    def test_category_pop_geo_score_biases(self):
+        """New TM-35 score priors: cat→poi, popularity, and geo proximity."""
+        torch.manual_seed(5)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        ctx = dict(ctx)
+        last = int(valid[0].long().sum().item()) - 1
+        cat_tr = ctx["cat_transition"].clone()
+        cat_tr[0, 0, last] = 20.0
+        cat_tr[0, 1, last] = 0.0
+        ctx["cat_transition"] = cat_tr
+        feats = ctx["cand_poi_feat"].clone()
+        feats[0, 0, 1] = 3.0  # log1p(global) already-scaled slot
+        feats[0, 1, 1] = 0.0
+        ctx["cand_poi_feat"] = feats
+        m = cand.shape[1]
+        delta = torch.zeros(1, m, 3)
+        delta[0, 0, 0] = 0.0   # near
+        delta[0, 1, 0] = 2.0   # far (log1p km)
+        ctx["delta_geo"] = delta
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4,
+                    candidate_context="on")
+        off = TSMoE(n_pois, n_cats, 4, ModelConfig(**base)).eval()
+        csb = TSMoE(n_pois, n_cats, 4, ModelConfig(**base, category_score_bias=2.)).eval()
+        psb = TSMoE(n_pois, n_cats, 4, ModelConfig(**base, pop_score_bias=1.)).eval()
+        gsb = TSMoE(n_pois, n_cats, 4, ModelConfig(**base, geo_score_bias=1.)).eval()
+        csb.load_state_dict(off.state_dict())
+        psb.load_state_dict(off.state_dict())
+        gsb.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s0 = off(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_csb = csb(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_psb = psb(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_gsb = gsb(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        self.assertGreater(float(s_csb[0] - s0[0]), 1.0)
+        torch.testing.assert_close(s_csb[1], s0[1], atol=1e-5, rtol=1e-5)
+        self.assertGreater(float(s_psb[0] - s0[0]), 2.0)
+        self.assertGreater(float(s0[1] - s_gsb[1]), 1.0)  # far cand penalized
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, geo_score_bias=1.0)  # needs candidate_context
 
     def test_surd_bias_gate_helpers_and_score_bias(self):
         """SURD/SMI gates: helpers + additive surd_score_bias lifts high-gate cands."""

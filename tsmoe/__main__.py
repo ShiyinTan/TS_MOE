@@ -167,6 +167,19 @@ def main():
         help="add λ·log1p(last→cand POI transition) to ranking scores "
              "(default 0 = off). Light graph Acc@1 prior; needs causal counts")
     t.add_argument(
+        "--category-score-bias", type=float, default=0.0,
+        help="add λ·log1p(last_cat→cand_poi) via causal cat_transition to scores "
+             "(default 0 = off). Hypergraph-style Acc@1 prior; needs causal counts. "
+             "Shares --tsb-gate-mode with transition-score-bias when SURD gate is on")
+    t.add_argument(
+        "--pop-score-bias", type=float, default=0.0,
+        help="add λ·log1p(global POI visits) from causal cand feats to scores "
+             "(default 0 = off). Popularity Acc@1 prior; needs causal counts")
+    t.add_argument(
+        "--geo-score-bias", type=float, default=0.0,
+        help="subtract λ·log1p(haversine km) from scores so nearer POIs rank higher "
+             "(default 0 = off). Needs --candidate-context on (delta_geo). No re-prepare")
+    t.add_argument(
         "--surd-bias-gate", choices=SURD_BIAS_GATE_MODES, default="off",
         help="per-candidate gate from SURD / Specific MI controlling score/attn "
              "biases: off (default); unique_p; smi_p; smi_pc; u_mass; confidence. "
@@ -177,8 +190,9 @@ def main():
              "(default 0 = off). Requires --surd-bias-gate ≠ off")
     t.add_argument(
         "--tsb-gate-mode", choices=SURD_GATE_APPLY_MODES, default="off",
-        help="how --surd-bias-gate modulates transition-score-bias: off (default, "
-             "flat λ); mul = term·g; residual = term·(1+g). Needs gate ≠ off")
+        help="how --surd-bias-gate modulates transition-score-bias and "
+             "category-score-bias: off (default, flat λ); mul = term·g; "
+             "residual = term·(1+g). Needs gate ≠ off")
     t.add_argument(
         "--surd-attn-gate", choices=SURD_GATE_APPLY_MODES, default="off",
         help="how --surd-bias-gate modulates transition-attn λ (bias mode only): "
@@ -294,11 +308,18 @@ def main():
                                     or min(args.lr, args.grad_clip) <= 0
                                     or getattr(args, "transition_lambda", 1.0) < 0
                                     or getattr(args, "transition_score_bias", 0.0) < 0
+                                    or getattr(args, "category_score_bias", 0.0) < 0
+                                    or getattr(args, "pop_score_bias", 0.0) < 0
+                                    or getattr(args, "geo_score_bias", 0.0) < 0
                                     or getattr(args, "surd_score_bias", 0.0) < 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
-                   "transition-lambda / transition-score-bias / surd-score-bias "
-                   "must be nonnegative")
+                   "transition-lambda / transition-score-bias / category-score-bias / "
+                   "pop-score-bias / geo-score-bias / surd-score-bias must be nonnegative")
+    if (args.command == "train"
+            and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
+            and getattr(args, "candidate_context", "off") == "off"):
+        root.error("--geo-score-bias > 0 requires --candidate-context on")
     if args.command == "train":
         gate = getattr(args, "surd_bias_gate", "off")
         needs_gate = (
