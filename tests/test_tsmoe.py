@@ -38,6 +38,9 @@ from tsmoe.engine import (
     model_config_from_checkpoint, ranks_of, results_root_dir, results_run_dir,
     run_name_for_results,
 )
+from tsmoe.features import (
+    GEO_FEAT_DIM, build_poi_cat_table, delta_geo_features, gather_side_features,
+)
 from tsmoe.model import ModelConfig, TSMoE, TransitionCrossAttention, objective
 from tsmoe.quantizer import BasicSourceQuantizer
 from tsmoe.surd import _self_test
@@ -998,6 +1001,196 @@ class TestCausalCounts(unittest.TestCase):
             self.assertIn("count_tables", ckpt)
             self.assertIn("visit_bin_edges", ckpt)
             # evaluate rebuilds / loads train-end tables
+            run_cli("evaluate", "--cache", cache_path, "--checkpoint", run / "best.pt",
+                    "--device", "cpu", "--split", "test", "--chunk", 3)
+
+
+class TestCandidateContextOverlays(unittest.TestCase):
+    """A/B/C/D/E overlay flags: defaults off ≡ baseline; on-path smoke."""
+
+    @classmethod
+    def setUpClass(cls):
+        torch.set_num_threads(1)
+
+    def test_overlay_defaults_off(self):
+        cfg = ModelConfig()
+        self.assertEqual(cfg.candidate_context, "off")
+        self.assertEqual(cfg.candidate_context_time, "off")
+        self.assertEqual(cfg.session_summary, "off")
+        self.assertEqual(cfg.user_pref, "off")
+        self.assertEqual(cfg.transition_pmi, "off")
+        self.assertEqual(cfg.expert_cross_attn, "off")
+        self.assertEqual(cfg.expert_cross_attn_sparse, "on")
+        legacy = model_config_from_checkpoint(dict(
+            dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,
+            lambda_prior=.1, use_surd=True, causal_counts=True))
+        self.assertEqual(legacy.candidate_context, "off")
+        self.assertEqual(legacy.expert_cross_attn, "off")
+
+    def test_flags_off_match_baseline_scores(self):
+        """Explicit off overlays must match a default ModelConfig forward (same seed)."""
+        torch.manual_seed(0)
+        h = {"P": torch.tensor([[2, 3, 0]]), "C": torch.tensor([[2, 4, 0]]),
+             "T": torch.randn(1, 3, T_DIM), "L": torch.randn(1, 3, L_DIM)}
+        valid = torch.tensor([[True, True, False]])
+        rows = torch.tensor([[0, 1, 2]])
+        prior = torch.zeros(1, 3, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, 3)
+        base_cfg = ModelConfig(8, 2, 1, 0., 2, router_mode="hard_prior", causal_counts=False)
+        off_cfg = ModelConfig(
+            8, 2, 1, 0., 2, router_mode="hard_prior", causal_counts=False,
+            candidate_context="off", candidate_context_time="off",
+            session_summary="off", user_pref="off", transition_pmi="off",
+            expert_cross_attn="off")
+        torch.manual_seed(1)
+        a = TSMoE(5, 3, 3, base_cfg).eval()
+        torch.manual_seed(1)
+        b = TSMoE(5, 3, 3, off_cfg).eval()
+        with torch.no_grad():
+            sa = a(h, valid, rows, prior, conf)["score"]
+            sb = b(h, valid, rows, prior, conf)["score"]
+        torch.testing.assert_close(sa, sb)
+        # hard_prior logits still SURD-only with overlays off.
+        with torch.no_grad():
+            det = a(h, valid, rows, prior, conf, details=True)
+        torch.testing.assert_close(det["logits"], torch.log1p(15 * det["mass"]))
+
+    def test_candidate_context_on_smoke_and_hard_prior_invariant(self):
+        torch.manual_seed(3)
+        data, n_pois, n_cats = TestCausalCounts()._tiny_split()
+        poi_cat = build_poi_cat_table(data, n_pois)
+        coords = torch.tensor([[35.0 + i * 0.01, 139.0] for i in range(n_pois)],
+                              dtype=torch.float64)
+        idx = chronological_indices(data)[:2]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(len(idx), -1)
+        cand_lists = [list(range(n_pois)) for _ in idx.tolist()]
+        side = gather_side_features(
+            data, idx, cand_lists, poi_coords=coords, poi_cat_table=poi_cat,
+            n_categories=n_cats, max_length=int(valid.shape[1]),
+            candidate_context=True, candidate_context_time="last_slot",
+            session_summary=True)
+        self.assertEqual(tuple(side["delta_geo"].shape[-1:]), (GEO_FEAT_DIM,))
+        self.assertIn("last_slot", side)
+        self.assertIn("session_cat_hist", side)
+        prior = torch.zeros(len(idx), n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(len(idx), n_pois)
+        cfg = ModelConfig(
+            8, 2, 1, 0., 2, router_mode="hard_prior", causal_counts=False,
+            candidate_context="on", candidate_context_time="last_slot",
+            session_summary="on")
+        model = TSMoE(n_pois, n_cats, 4, cfg).eval()
+        with torch.no_grad():
+            out = model(h, valid, cand, prior, conf, count_ctx=side, details=True)
+            h2 = {**h, "P": h["P"].clone()}
+            h2["P"][:, 0] = 1
+            out2 = model(h2, valid, cand, prior, conf, count_ctx=side, details=True)
+        self.assertEqual(tuple(out["score"].shape), (len(idx), n_pois))
+        self.assertTrue(torch.isfinite(out["score"]).all())
+        # New features must not enter hard_prior logits.
+        torch.testing.assert_close(out["logits"], out2["logits"])
+        torch.testing.assert_close(out["logits"], torch.log1p(15 * out["mass"]))
+
+    def test_user_pref_and_pmi_smoke(self):
+        data, n_pois, n_cats = TestCausalCounts()._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        tables.replay(data)
+        # PMI helpers return finite floats.
+        self.assertTrue(math.isfinite(tables.poi_poi_pmi(0, 1)))
+        self.assertEqual(len(tables.user_hour_pref_vector("u1")), 24)
+        self.assertEqual(len(tables.user_cat_pref_vector("u1")), n_cats)
+        idx = chronological_indices(data)[:2]
+        h, valid, _ = make_batch(data, idx)
+        cand_lists = [list(range(n_pois)) for _ in idx.tolist()]
+        ctx = gather_batch_context(
+            tables, data, idx, cand_lists, int(valid.shape[1]),
+            update=False, transition_pmi=True)
+        poi_cat = build_poi_cat_table(data, n_pois)
+        coords = torch.zeros(n_pois, 2, dtype=torch.float64)
+        side = gather_side_features(
+            data, idx, cand_lists, poi_coords=coords, poi_cat_table=poi_cat,
+            n_categories=n_cats, max_length=int(valid.shape[1]),
+            tables=tables, user_pref=True)
+        ctx = {**ctx, **side}
+        prior = torch.zeros(len(idx), n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(len(idx), n_pois)
+        cfg = ModelConfig(
+            8, 2, 1, 0., 2, router_mode="hard_prior", causal_counts=True,
+            transition_attn="bias", visit_bins=4, user_pref="on",
+            transition_pmi="on")
+        model = TSMoE(n_pois, n_cats, 4, cfg).eval()
+        with torch.no_grad():
+            out = model(h, valid, torch.arange(n_pois).expand(len(idx), -1),
+                        prior, conf, count_ctx=ctx, details=True)
+        self.assertTrue(torch.isfinite(out["score"]).all())
+        torch.testing.assert_close(out["logits"], torch.log1p(15 * out["mass"]))
+
+    def test_expert_cross_attn_hybrid_and_full_smoke(self):
+        torch.manual_seed(5)
+        h = {"P": torch.tensor([[2, 3, 0]]), "C": torch.tensor([[2, 4, 0]]),
+             "T": torch.randn(1, 3, T_DIM), "L": torch.randn(1, 3, L_DIM)}
+        valid = torch.tensor([[True, True, False]])
+        rows = torch.tensor([[0, 1, 2]])
+        prior = torch.zeros(1, 3, 26)
+        prior[..., 0] = 0.7
+        prior[..., 15] = 0.3
+        conf = torch.ones(1, 3)
+        for mode, sparse in (("hybrid", "on"), ("hybrid", "off"), ("full", "on")):
+            cfg = ModelConfig(
+                8, 2, 1, 0., 2, router_mode="hard_prior", causal_counts=False,
+                expert_cross_attn=mode, expert_cross_attn_sparse=sparse)
+            model = TSMoE(5, 3, 3, cfg).eval()
+            with torch.no_grad():
+                out = model(h, valid, rows, prior, conf, details=True)
+            self.assertEqual(tuple(out["score"].shape), (1, 3), msg=mode)
+            self.assertTrue(torch.isfinite(out["score"]).all(), msg=mode)
+            # Still SURD-only hard_prior.
+            torch.testing.assert_close(
+                out["logits"], torch.log1p(15 * out["mass"]),
+                msg=f"{mode}/{sparse}")
+
+    def test_delta_geo_features_finite(self):
+        feats = delta_geo_features(35.0, 139.0, 35.1, 139.2)
+        self.assertEqual(len(feats), 3)
+        self.assertTrue(all(math.isfinite(v) for v in feats))
+        self.assertGreater(feats[0], 0.0)
+
+    def test_cli_overlay_train_smoke(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = generate(root / "data")
+            cache_path, run = root / "cache", root / "run_overlay"
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", cache_path)
+            run_cli(
+                "train", "--cache", cache_path, "--out", run, "--epochs", 1,
+                "--dim", 8, "--layers", 1, "--heads", 2, "--device", "cpu",
+                "--negatives", 3, "--threads", 1,
+                "--candidate-context", "on",
+                "--candidate-context-time", "last_slot",
+                "--session-summary", "on",
+                "--user-pref", "on",
+                "--transition-pmi", "on",
+                "--expert-cross-attn", "hybrid",
+                "--expert-cross-attn-sparse", "on",
+                "--no-eval-test-every-epoch",
+            )
+            ckpt = torch.load(run / "best.pt", map_location="cpu", weights_only=False)
+            cfg = ckpt["config"]
+            self.assertEqual(cfg["candidate_context"], "on")
+            self.assertEqual(cfg["candidate_context_time"], "last_slot")
+            self.assertEqual(cfg["session_summary"], "on")
+            self.assertEqual(cfg["user_pref"], "on")
+            self.assertEqual(cfg["transition_pmi"], "on")
+            self.assertEqual(cfg["expert_cross_attn"], "hybrid")
+            self.assertEqual(cfg["expert_cross_attn_sparse"], "on")
+            flags = format_ablation_key_flags(
+                Cache(cache_path), ckpt.get("training_args"), cfg)
+            self.assertIn("--candidate-context on", flags)
+            self.assertIn("--expert-cross-attn hybrid", flags)
             run_cli("evaluate", "--cache", cache_path, "--checkpoint", run / "best.pt",
                     "--device", "cpu", "--split", "test", "--chunk", 3)
 

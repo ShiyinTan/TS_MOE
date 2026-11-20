@@ -13,6 +13,11 @@ same score-then-update loop chronologically.
 
 Visit-count bins for T/L are equal-frequency over the user's cumulative visit
 count on the train stream; edges are frozen for val/test.
+
+Optional extensions (no prepare change; used when CLI flags enable them):
+  * user → hour visits (``--user-pref``)
+  * POI × hour visits (``--candidate-context-time causal_slot``)
+  * transition PMI (``--transition-pmi``)
 """
 from __future__ import annotations
 
@@ -20,6 +25,8 @@ from collections import Counter, defaultdict
 from copy import deepcopy
 
 import torch
+
+from .features import USER_HOUR_DIM, us_to_hour_weekday
 
 # Default number of equal-frequency bins for user cumulative visit count → T/L.
 DEFAULT_VISIT_BINS = 10
@@ -149,12 +156,23 @@ class CausalCountTables:
         """Clear all counts (bin edges unchanged)."""
         self.user_poi = defaultdict(Counter)
         self.user_cat = defaultdict(Counter)
+        self.user_hour = defaultdict(Counter)  # user → hour → count
         self.user_visits = Counter()
         self.global_poi = torch.zeros(self.n_pois, dtype=torch.float64)
         self.global_cat = torch.zeros(self.n_categories, dtype=torch.float64)
+        self.global_hour = torch.zeros(USER_HOUR_DIM, dtype=torch.float64)
+        # POI × hour (causal_slot): user and global.
+        self.user_poi_hour = defaultdict(lambda: defaultdict(Counter))
+        self.global_poi_hour = torch.zeros(self.n_pois, USER_HOUR_DIM, dtype=torch.float64)
         self.poi_poi = defaultdict(Counter)
         self.cat_cat = defaultdict(Counter)
         self.cat_poi = defaultdict(Counter)
+        # Marginal transition totals for PMI (src out-count, dst in-count).
+        self.poi_out = torch.zeros(self.n_pois, dtype=torch.float64)
+        self.poi_in = torch.zeros(self.n_pois, dtype=torch.float64)
+        self.cat_out = torch.zeros(self.n_categories, dtype=torch.float64)
+        self.poi_poi_total = 0.0
+        self.cat_poi_total = 0.0
         return self
 
     def clone(self):
@@ -165,12 +183,21 @@ class CausalCountTables:
             else self.visit_bin_edges.clone())
         other.user_poi = deepcopy(self.user_poi)
         other.user_cat = deepcopy(self.user_cat)
+        other.user_hour = deepcopy(self.user_hour)
         other.user_visits = Counter(self.user_visits)
         other.global_poi = self.global_poi.clone()
         other.global_cat = self.global_cat.clone()
+        other.global_hour = self.global_hour.clone()
+        other.user_poi_hour = deepcopy(self.user_poi_hour)
+        other.global_poi_hour = self.global_poi_hour.clone()
         other.poi_poi = deepcopy(self.poi_poi)
         other.cat_cat = deepcopy(self.cat_cat)
         other.cat_poi = deepcopy(self.cat_poi)
+        other.poi_out = self.poi_out.clone()
+        other.poi_in = self.poi_in.clone()
+        other.cat_out = self.cat_out.clone()
+        other.poi_poi_total = float(self.poi_poi_total)
+        other.cat_poi_total = float(self.cat_poi_total)
         return other
 
     def state_dict(self):
@@ -182,12 +209,24 @@ class CausalCountTables:
             else self.visit_bin_edges.tolist(),
             user_poi={u: dict(c) for u, c in self.user_poi.items()},
             user_cat={u: dict(c) for u, c in self.user_cat.items()},
+            user_hour={u: dict(c) for u, c in self.user_hour.items()},
             user_visits=dict(self.user_visits),
             global_poi=self.global_poi.tolist(),
             global_cat=self.global_cat.tolist(),
+            global_hour=self.global_hour.tolist(),
+            user_poi_hour={
+                u: {str(h): dict(c) for h, c in hours.items()}
+                for u, hours in self.user_poi_hour.items()
+            },
+            global_poi_hour=self.global_poi_hour.tolist(),
             poi_poi={str(a): dict(b) for a, b in self.poi_poi.items()},
             cat_cat={str(a): dict(b) for a, b in self.cat_cat.items()},
             cat_poi={str(a): dict(b) for a, b in self.cat_poi.items()},
+            poi_out=self.poi_out.tolist(),
+            poi_in=self.poi_in.tolist(),
+            cat_out=self.cat_out.tolist(),
+            poi_poi_total=float(self.poi_poi_total),
+            cat_poi_total=float(self.cat_poi_total),
         )
 
     def load_state_dict(self, state):
@@ -202,15 +241,43 @@ class CausalCountTables:
             self.user_poi[u] = Counter({int(k): int(v) for k, v in c.items()})
         for u, c in state["user_cat"].items():
             self.user_cat[u] = Counter({int(k): int(v) for k, v in c.items()})
+        for u, c in state.get("user_hour", {}).items():
+            self.user_hour[u] = Counter({int(k): int(v) for k, v in c.items()})
         self.user_visits = Counter({u: int(v) for u, v in state["user_visits"].items()})
         self.global_poi = torch.as_tensor(state["global_poi"], dtype=torch.float64)
         self.global_cat = torch.as_tensor(state["global_cat"], dtype=torch.float64)
+        if "global_hour" in state:
+            self.global_hour = torch.as_tensor(state["global_hour"], dtype=torch.float64)
+        for u, hours in state.get("user_poi_hour", {}).items():
+            for h, c in hours.items():
+                self.user_poi_hour[u][int(h)] = Counter(
+                    {int(k): int(v) for k, v in c.items()})
+        if "global_poi_hour" in state:
+            self.global_poi_hour = torch.as_tensor(
+                state["global_poi_hour"], dtype=torch.float64)
         for a, b in state["poi_poi"].items():
             self.poi_poi[int(a)] = Counter({int(k): int(v) for k, v in b.items()})
         for a, b in state["cat_cat"].items():
             self.cat_cat[int(a)] = Counter({int(k): int(v) for k, v in b.items()})
         for a, b in state["cat_poi"].items():
             self.cat_poi[int(a)] = Counter({int(k): int(v) for k, v in b.items()})
+        if "poi_out" in state:
+            self.poi_out = torch.as_tensor(state["poi_out"], dtype=torch.float64)
+            self.poi_in = torch.as_tensor(state["poi_in"], dtype=torch.float64)
+            self.cat_out = torch.as_tensor(state["cat_out"], dtype=torch.float64)
+            self.poi_poi_total = float(state.get("poi_poi_total", 0.0))
+            self.cat_poi_total = float(state.get("cat_poi_total", 0.0))
+        else:
+            # Rebuild marginals from transition maps (legacy checkpoints).
+            for src, dsts in self.poi_poi.items():
+                for dst, c in dsts.items():
+                    self.poi_out[src] += c
+                    self.poi_in[dst] += c
+                    self.poi_poi_total += c
+            for src, dsts in self.cat_poi.items():
+                for dst, c in dsts.items():
+                    self.cat_out[src] += c
+                    self.cat_poi_total += c
         return self
 
     def _poi_ok(self, row):
@@ -219,17 +286,28 @@ class CausalCountTables:
     def _cat_ok(self, row):
         return 0 <= row < self.n_categories
 
-    def update(self, user, prev_poi, prev_cat, next_poi, next_cat):
+    def update(self, user, prev_poi, prev_cat, next_poi, next_cat, *, hour=None):
         """Apply one ground-truth next hop (after scoring)."""
         user = str(user)
         if self._poi_ok(next_poi):
             self.user_poi[user][next_poi] += 1
             self.global_poi[next_poi] += 1
             self.user_visits[user] += 1
+            if hour is not None:
+                h = int(hour) % USER_HOUR_DIM
+                self.user_hour[user][h] += 1
+                self.global_hour[h] += 1
+                self.user_poi_hour[user][h][next_poi] += 1
+                self.global_poi_hour[next_poi, h] += 1
             if self._poi_ok(prev_poi):
                 self.poi_poi[prev_poi][next_poi] += 1
+                self.poi_out[prev_poi] += 1
+                self.poi_in[next_poi] += 1
+                self.poi_poi_total += 1
             if self._cat_ok(prev_cat):
                 self.cat_poi[prev_cat][next_poi] += 1
+                self.cat_out[prev_cat] += 1
+                self.cat_poi_total += 1
         if self._cat_ok(next_cat):
             self.user_cat[user][next_cat] += 1
             self.global_cat[next_cat] += 1
@@ -237,7 +315,10 @@ class CausalCountTables:
                 self.cat_cat[prev_cat][next_cat] += 1
 
     def update_sample(self, data, sample_index):
-        self.update(*sample_hop(data, sample_index))
+        user, prev_poi, prev_cat, next_poi, next_cat = sample_hop(data, sample_index)
+        end = int(data["end"][sample_index])
+        hour, _weekday = us_to_hour_weekday(int(data["us"][end]))
+        self.update(user, prev_poi, prev_cat, next_poi, next_cat, hour=hour)
 
     def replay(self, data, *, order=None):
         """Chronological score-less updates (rebuild train-end tables)."""
@@ -289,11 +370,72 @@ class CausalCountTables:
             return 0.0
         return float(self.cat_poi[src_cat][dst_poi])
 
+    def poi_poi_pmi(self, src, dst, eps=1e-6):
+        """Pointwise mutual information for POI→POI (0 when either side unknown)."""
+        if not (self._poi_ok(src) and self._poi_ok(dst)):
+            return 0.0
+        joint = float(self.poi_poi[src][dst])
+        if joint <= 0 or self.poi_poi_total <= 0:
+            return 0.0
+        src_m = float(self.poi_out[src]) + eps
+        dst_m = float(self.poi_in[dst]) + eps
+        return float(torch.log(torch.tensor(
+            (joint * self.poi_poi_total) / (src_m * dst_m) + eps,
+            dtype=torch.float64)))
+
+    def cat_poi_pmi(self, src_cat, dst_poi, eps=1e-6):
+        """PMI for category→POI transitions."""
+        if not (self._cat_ok(src_cat) and self._poi_ok(dst_poi)):
+            return 0.0
+        joint = float(self.cat_poi[src_cat][dst_poi])
+        if joint <= 0 or self.cat_poi_total <= 0:
+            return 0.0
+        src_m = float(self.cat_out[src_cat]) + eps
+        # Destination marginal ≈ global POI visits as a proxy for cat→poi.
+        dst_m = float(self.global_poi[dst_poi]) + eps
+        return float(torch.log(torch.tensor(
+            (joint * self.cat_poi_total) / (src_m * dst_m) + eps,
+            dtype=torch.float64)))
+
+    def poi_hour_feat(self, user, poi_row, hour):
+        """Causal same-hour visit features for a candidate POI."""
+        if not self._poi_ok(poi_row):
+            return count_features(0, 0)
+        h = int(hour) % USER_HOUR_DIM
+        u = self.user_poi_hour[str(user)][h][poi_row]
+        g = float(self.global_poi_hour[poi_row, h])
+        return count_features(u, g)
+
+    def user_cat_pref_vector(self, user):
+        """L1-normalized log1p user→cat preference over all categories."""
+        vec = [0.0] * self.n_categories
+        counts = self.user_cat[str(user)]
+        for cat, c in counts.items():
+            if self._cat_ok(cat):
+                vec[cat] = math_log1p(c)
+        total = sum(vec)
+        if total > 0:
+            vec = [v / total for v in vec]
+        return vec
+
+    def user_hour_pref_vector(self, user):
+        """L1-normalized log1p user→hour preference (length 24)."""
+        vec = [0.0] * USER_HOUR_DIM
+        counts = self.user_hour[str(user)]
+        for hour, c in counts.items():
+            vec[int(hour) % USER_HOUR_DIM] = math_log1p(c)
+        total = sum(vec)
+        if total > 0:
+            vec = [v / total for v in vec]
+        return vec
+
     def gather_sample_features(self, data, sample_index, history_poi_rows, history_cat_rows,
-                               candidate_rows, *, max_length):
+                               candidate_rows, *, max_length, transition_pmi=False):
         """Read-only feature pack for one sample at the current table state.
 
         ``history_*_rows`` / ``candidate_rows`` are catalog rows (``-1`` = pad/OOV).
+        When ``transition_pmi`` is True, transition tensors store PMI (can be
+        negative) instead of raw counts.
         """
         user = user_id_of(data, sample_index)
         length = len(history_poi_rows)
@@ -314,8 +456,12 @@ class CausalCountTables:
             hp, hc = int(history_poi_rows[j]), int(history_cat_rows[j])
             for c, row in enumerate(candidate_rows):
                 dst = int(row)
-                poi_trans[c, j] = self.poi_poi_count(hp, dst)
-                cat_trans[c, j] = self.cat_poi_count(hc, dst)
+                if transition_pmi:
+                    poi_trans[c, j] = self.poi_poi_pmi(hp, dst)
+                    cat_trans[c, j] = self.cat_poi_pmi(hc, dst)
+                else:
+                    poi_trans[c, j] = self.poi_poi_count(hp, dst)
+                    cat_trans[c, j] = self.cat_poi_count(hc, dst)
         return dict(
             hist_poi_feat=torch.tensor(hist_poi[:max_length], dtype=torch.float32),
             hist_cat_feat=torch.tensor(hist_cat[:max_length], dtype=torch.float32),
@@ -336,7 +482,7 @@ def history_catalog_rows(data, sample_index):
 
 
 def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
-                         *, update=True):
+                         *, update=True, transition_pmi=False):
     """Causal read (then optional update) for a chronological batch.
 
     ``candidate_rows_list[i]`` is a 1-D LongTensor / list of catalog rows for
@@ -358,7 +504,8 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
         # Pad candidate feature rows to batch width with -1 (zero feats / transitions).
         padded = list(rows) + [-1] * (width - len(rows))
         feat = tables.gather_sample_features(
-            data, sample_index, hp, hc, padded, max_length=max_length)
+            data, sample_index, hp, hc, padded, max_length=max_length,
+            transition_pmi=transition_pmi)
         hist_poi.append(feat["hist_poi_feat"])
         hist_cat.append(feat["hist_cat_feat"])
         cand_feat.append(feat["cand_poi_feat"])

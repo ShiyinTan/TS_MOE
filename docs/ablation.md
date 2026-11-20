@@ -2,7 +2,7 @@
 
 近期大量提交（多源候选、Router、STHGCN T/L、因果计数、目标协议等）已合入 `main`，但对 Acc@1 各自贡献尚不清楚。本文给出**固定协议 + 因子表 + 推荐顺序 + 可复制命令 + 结果登记表**，方便系统做对照实验。
 
-配套说明：[`candidates.md`](candidates.md) · [`router-modes.md`](router-modes.md) · [`sthgcn-tl-features.md`](sthgcn-tl-features.md) · [`causal-counts.md`](causal-counts.md) · [`results.md`](results.md)。
+配套说明：[`candidates.md`](candidates.md) · [`router-modes.md`](router-modes.md) · [`sthgcn-tl-features.md`](sthgcn-tl-features.md) · [`causal-counts.md`](causal-counts.md) · [`candidate-context.md`](candidate-context.md) · [`results.md`](results.md)。
 
 ---
 
@@ -67,10 +67,42 @@ cp docs/ablation_log.template.csv results/ablation_log.csv
 | **评估目标协议** | val/test 样本协议 | `all`（默认）/ `last` | `prepare --eval-targets` | **是** | （同上） |
 | **训练负采样** | 从构造池抽多少负例 | `63`（默认）/ `-1`（池内其余全要） | `train --negatives` | 否 | `abl_neg_63` / `abl_neg_all` |
 | **训练候选封顶** | 含正例的训练候选上限 | `-1`（默认不封）/ 如 `256` | `train --max-train-candidates` | 否 | `abl_maxcand_256` |
+| **候选上下文 A** | 候选 cat emb + Δgeo → query | **`off`（默认）** / `on` | `--candidate-context` | 否 | `abl_ctx_off` / `abl_ctx_cat_geo` |
+| **候选时段 A-time** | last_slot / causal_slot | **`off`（默认）** / `last_slot` / `causal_slot` | `--candidate-context-time` | 否† | `abl_ctx_cat_geo_time` |
+| **会话摘要 B** | 窗口 cat hist / 长度桶 / 活动中心 | **`off`（默认）** / `on` | `--session-summary` | 否 | `abl_sess_on` |
+| **用户偏好 C** | 因果 user–cat / user–hour → base | **`off`（默认）** / `on` | `--user-pref`（须因果 on） | 否† | `abl_upref_on` |
+| **转移 PMI D** | 转移 attn 用 PMI 替代 raw count | **`off`（默认）** / `on` | `--transition-pmi`（须因果 on） | 否† | `abl_tr_pmi` |
+| **专家内交叉注意力 E** | E0 off / E1 hybrid / E2 full | **`off`（默认）** / `hybrid` / `full` | `--expert-cross-attn` | 否 | `abl_e1_hybrid` / `abl_e2_full` |
+| **E3 稀疏** | 仅 top-k 专家跑 expert attn | **`on`（E≠off 时）** / `off` | `--expert-cross-attn-sparse` | 否 | `abl_e1_e3` |
+
+† `causal_slot` / `user-pref` / `transition-pmi` 扩展在线计数表（**无需** re-prepare）。新特征 **不进** `hard_prior`。文本 emb **未实现**（见 [`candidate-context.md`](candidate-context.md)）。
 
 > **#20 状态：** 因果在线计数 + `--transition-attn` 已合入 `main`（[#20](https://github.com/ShiyinTan/TS_MOE/pull/20)）。上表因果相关 flag 均为当前主干能力，**无需**再 checkout 旧分支。
 
-细节见：候选 [`candidates.md`](candidates.md)；Router [`router-modes.md`](router-modes.md)；STHGCN [`sthgcn-tl-features.md`](sthgcn-tl-features.md)；因果 [`causal-counts.md`](causal-counts.md)。
+### 3.1 Overlay 对照表（叠在默认 train 上）
+
+默认基线（不改 Acc@1 路径）：
+
+```bash
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_off --device cuda
+```
+
+| setting | add flags（叠在默认 train/eval 上） | 建议 `run_name` |
+| --- | --- | --- |
+| A cat+geo | `--candidate-context on` | `abl_ctx_cat_geo` |
+| A + time (`last_slot`) | `--candidate-context on --candidate-context-time last_slot` | `abl_ctx_cat_geo_time` |
+| A + time (`causal_slot`) | `--candidate-context on --candidate-context-time causal_slot` | `abl_ctx_cat_geo_causal_slot` |
+| B | `--session-summary on` | `abl_sess_on` |
+| C | `--user-pref on` | `abl_upref_on` |
+| D PMI | `--transition-pmi on` | `abl_tr_pmi` |
+| E1 hybrid (+E3 sparse default) | `--expert-cross-attn hybrid` | `abl_e1_hybrid` |
+| E1 + dense expert attn | `--expert-cross-attn hybrid --expert-cross-attn-sparse off` | `abl_e1_dense` |
+| E2 full | `--expert-cross-attn full` | `abl_e2_full` |
+| recommended: A+B | `--candidate-context on --session-summary on` | `abl_ctx_sess` |
+| recommended: A+B+C | `--candidate-context on --session-summary on --user-pref on` | `abl_ctx_sess_upref` |
+| recommended: A+E1 | `--candidate-context on --expert-cross-attn hybrid` | `abl_ctx_e1` |
+
+细节见：候选 [`candidates.md`](candidates.md)；Router [`router-modes.md`](router-modes.md)；STHGCN [`sthgcn-tl-features.md`](sthgcn-tl-features.md)；因果 [`causal-counts.md`](causal-counts.md)；overlays [`candidate-context.md`](candidate-context.md)。
 
 ---
 
@@ -85,6 +117,7 @@ cp docs/ablation_log.template.csv results/ablation_log.csv
 | **2** | 训练负采样：`negatives` / `max-train-candidates` | 否 | 同一 cache |
 | **3** | 因果整模块：on vs `--no-causal-counts` | 否 | 同一 cache |
 | **4** | transition：`bias` / `gate` / `rel_key`（因果 on） | 否 | 同一 cache |
+| **4b** | Overlay A/B/C/D/E（§3.1；默认均 off） | 否 | 同一 cache；一次一因子或声明组合 |
 | **5** | 候选变体：半径 / 关源 / 随机负例 / full | **是** | 每种独立 cache + model |
 | **6** | 目标协议：`all`/`last` 组合 | **是** | 独立 cache |
 | — | STHGCN T/L | — | **无开关**；旧 basic 特征已去掉，不能做 CLI 消融 |
@@ -191,6 +224,70 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_tr_gate \
   --transition-attn gate --device cuda
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_tr_rel_key \
   --transition-attn rel_key --device cuda
+```
+
+### 4b) Overlay A/B/C/D/E（同一 `runs/tokyo/cache`；**无需** re-prepare）
+
+全部叠在默认 knobs 上（`hard_prior` + 因果 on + `bias`）。新特征 **不进** `hard_prior`。完整表见 §3.1。
+
+```bash
+# 基线（全部 overlay off）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_off --device cuda
+
+# A：候选 cat + Δgeo
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_cat_geo \
+  --candidate-context on --device cuda
+
+# A + last_slot
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_cat_geo_time \
+  --candidate-context on --candidate-context-time last_slot --device cuda
+
+# A + causal_slot（须因果 on；扩展在线表，不 re-prepare）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_cat_geo_causal_slot \
+  --candidate-context on --candidate-context-time causal_slot --device cuda
+
+# B：会话摘要
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_sess_on \
+  --session-summary on --device cuda
+
+# C：用户偏好（须因果 on）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_upref_on \
+  --user-pref on --device cuda
+
+# D：转移 PMI
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_tr_pmi \
+  --transition-pmi on --device cuda
+
+# E1 hybrid（E3 sparse 默认 on）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_e1_hybrid \
+  --expert-cross-attn hybrid --device cuda
+
+# E1 + E3 显式 / E1 dense
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_e1_e3 \
+  --expert-cross-attn hybrid --expert-cross-attn-sparse on --device cuda
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_e1_dense \
+  --expert-cross-attn hybrid --expert-cross-attn-sparse off --device cuda
+
+# E2 full（更贵）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_e2_full \
+  --expert-cross-attn full --device cuda
+
+# 推荐组合
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_sess \
+  --candidate-context on --session-summary on --device cuda
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_sess_upref \
+  --candidate-context on --session-summary on --user-pref on --device cuda
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_e1 \
+  --candidate-context on --expert-cross-attn hybrid --device cuda
+```
+
+Demo 烟雾：
+
+```bash
+python -m tsmoe train --cache runs/demo/cache --out runs/demo/abl_ctx_cat_geo \
+  --candidate-context on --epochs 1 --dim 16 --heads 2 --layers 1
+python -m tsmoe train --cache runs/demo/cache --out runs/demo/abl_e1_hybrid \
+  --expert-cross-attn hybrid --epochs 1 --dim 16 --heads 2 --layers 1
 ```
 
 ### 5) 候选变体（每种 **重新 prepare**；独立 `--out` 以免覆盖）
@@ -360,6 +457,24 @@ Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（�
 | --- | --- | --- |
 | train-all `final` 共用 | **当前默认 / 唯一协议** | 无 `--folds` / `--warmup`；训练也不再用 fold 表；旧 fold cache 须重 prepare |
 
+### 7.8 Overlay A/B/C/D/E（同 cache；默认均 off）
+
+| run_name | key flags | Acc@1 | NDCG@1 | MRR | notes |
+| --- | --- | --- | --- | --- | --- |
+| `abl_ctx_off` | （默认；无 overlay） |  |  |  | 基线 |
+| `abl_ctx_cat_geo` | `--candidate-context on` |  |  |  | A |
+| `abl_ctx_cat_geo_time` | `--candidate-context on --candidate-context-time last_slot` |  |  |  | A+time |
+| `abl_ctx_cat_geo_causal_slot` | `--candidate-context on --candidate-context-time causal_slot` |  |  |  | A+causal_slot |
+| `abl_sess_on` | `--session-summary on` |  |  |  | B |
+| `abl_upref_on` | `--user-pref on` |  |  |  | C |
+| `abl_tr_pmi` | `--transition-pmi on` |  |  |  | D |
+| `abl_e1_hybrid` | `--expert-cross-attn hybrid` |  |  |  | E1+E3 |
+| `abl_e1_dense` | `--expert-cross-attn hybrid --expert-cross-attn-sparse off` |  |  |  | E1 |
+| `abl_e2_full` | `--expert-cross-attn full` |  |  |  | E2 |
+| `abl_ctx_sess` | `--candidate-context on --session-summary on` |  |  |  | combo |
+| `abl_ctx_sess_upref` | `… + --user-pref on` |  |  |  | combo |
+| `abl_ctx_e1` | `--candidate-context on --expert-cross-attn hybrid` |  |  |  | combo |
+
 ---
 
 ## 8. 清单
@@ -368,6 +483,7 @@ Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（�
 - [ ] Router 三档填入 §7.1
 - [ ] 负采样填入 §7.2
 - [ ] 因果 on/off + transition 三档填入 §7.3
+- [ ] Overlay A/B/C/D/E 填入 §7.8（§3.1 表）
 - [ ] 候选变体（re-prepare）填入 §7.4
 - [ ] 目标协议填入 §7.5
 - [ ] 确认 `results/ablation_log.md` / `.csv` 已自动追加各跑（或从模板重置后再跑）

@@ -10,9 +10,16 @@ from .counts import (
     COUNT_FEAT_DIM, DEFAULT_VISIT_BINS, TRANSITION_ATTN_MODES, TRANSITION_PHI_DIM,
 )
 from .data import L_DIM, T_DIM
+from .features import (
+    GEO_FEAT_DIM, LAST_SLOT_DIM, SESSION_SCALAR_DIM, TRAJ_LENGTH_BINS, USER_HOUR_DIM,
+)
 from .surd import SOURCE_ORDER, SUBSETS
 
 ROUTER_MODES = ("hard_prior", "surd_mlp", "hybrid")
+CANDIDATE_CONTEXT_MODES = ("off", "on")
+CANDIDATE_CONTEXT_TIME_MODES = ("off", "last_slot", "causal_slot")
+ON_OFF = ("off", "on")
+EXPERT_CROSS_ATTN_MODES = ("off", "hybrid", "full")
 
 
 @dataclass(frozen=True)
@@ -37,6 +44,15 @@ class ModelConfig:
     transition_attn: str = "bias"
     transition_lambda: float = 1.
     visit_bins: int = DEFAULT_VISIT_BINS
+    # Optional overlays (all default off — Acc@1 path unchanged unless set).
+    candidate_context: str = "off"
+    candidate_context_time: str = "off"
+    session_summary: str = "off"
+    user_pref: str = "off"
+    transition_pmi: str = "off"
+    expert_cross_attn: str = "off"
+    # When expert_cross_attn ≠ off: only run expert-local attn for router top-k (E3).
+    expert_cross_attn_sparse: str = "on"
 
     def __post_init__(self):
         if self.dim < 1 or self.heads < 1 or self.dim % self.heads or self.layers < 1:
@@ -53,6 +69,20 @@ class ModelConfig:
             raise ValueError("transition_lambda must be nonnegative")
         if self.visit_bins < 1:
             raise ValueError("visit_bins must be positive")
+        if self.candidate_context not in CANDIDATE_CONTEXT_MODES:
+            raise ValueError(f"candidate_context must be one of {CANDIDATE_CONTEXT_MODES}")
+        if self.candidate_context_time not in CANDIDATE_CONTEXT_TIME_MODES:
+            raise ValueError(
+                f"candidate_context_time must be one of {CANDIDATE_CONTEXT_TIME_MODES}")
+        for name, value in (
+                ("session_summary", self.session_summary),
+                ("user_pref", self.user_pref),
+                ("transition_pmi", self.transition_pmi),
+                ("expert_cross_attn_sparse", self.expert_cross_attn_sparse)):
+            if value not in ON_OFF:
+                raise ValueError(f"{name} must be one of {ON_OFF}")
+        if self.expert_cross_attn not in EXPERT_CROSS_ATTN_MODES:
+            raise ValueError(f"expert_cross_attn must be one of {EXPERT_CROSS_ATTN_MODES}")
 
 
 def mlp(inputs, hidden, outputs, dropout=0.):
@@ -81,10 +111,13 @@ class TransitionCrossAttention(nn.Module):
       * **gate** — sigmoid MLP on ``[history; candidate; φ(count)]`` scales weights.
       * **rel_key** — add ``MLP(φ(count))`` into keys (candidate-dependent).
 
+    When ``use_pmi`` is True, transition tensors are treated as already-logged PMI
+    values (may be negative) and are **not** passed through ``log1p``.
+
     P-source counts are POI→POI; C-source counts are category→POI.
     """
 
-    def __init__(self, dim, heads, dropout, mode, transition_lambda):
+    def __init__(self, dim, heads, dropout, mode, transition_lambda, use_pmi=False):
         super().__init__()
         if dim % heads:
             raise ValueError("dim must be divisible by heads")
@@ -93,6 +126,7 @@ class TransitionCrossAttention(nn.Module):
         self.head_dim = dim // heads
         self.mode = mode
         self.transition_lambda = float(transition_lambda)
+        self.use_pmi = bool(use_pmi)
         self.q_proj = nn.Linear(dim, dim)
         self.k_proj = nn.Linear(dim, dim)
         self.v_proj = nn.Linear(dim, dim)
@@ -113,13 +147,16 @@ class TransitionCrossAttention(nn.Module):
         """
         query: [B, C, D] candidates · key/value: [B, L, D] history
         key_padding_mask: [B, L] True = **ignore** (same as nn.MultiheadAttention)
-        transition_counts: [B, C, L] raw counts (≥0)
+        transition_counts: [B, C, L] raw counts (≥0) or PMI (any real) when use_pmi
         """
         b, c, _ = query.shape
         length = key.shape[1]
         h, d = self.heads, self.head_dim
         q = self.q_proj(query).view(b, c, h, d).transpose(1, 2)          # [B,H,C,d]
-        phi = torch.log1p(transition_counts.clamp_min(0)).to(query.dtype)  # [B,C,L]
+        if self.use_pmi:
+            phi = transition_counts.to(query.dtype)
+        else:
+            phi = torch.log1p(transition_counts.clamp_min(0)).to(query.dtype)  # [B,C,L]
         if self.mode == "rel_key":
             # Candidate-dependent keys: K[b,c,j] += MLP(φ(count[b,c,j])).
             rel = self.rel_key(phi[..., None])  # [B,C,L,D]
@@ -202,14 +239,44 @@ class TSMoE(nn.Module):
         self.poi_count_mlp = mlp(COUNT_FEAT_DIM, d, d, config.dropout)
         self.cat_count_mlp = mlp(COUNT_FEAT_DIM, d, d, config.dropout)
         self.visit_bin_emb = nn.Embedding(config.visit_bins, d)
+        use_pmi = config.transition_pmi == "on"
         self.transition_attn = nn.ModuleDict({
             "P": TransitionCrossAttention(
                 d, config.heads, config.dropout, config.transition_attn,
-                config.transition_lambda),
+                config.transition_lambda, use_pmi=use_pmi),
             "C": TransitionCrossAttention(
                 d, config.heads, config.dropout, config.transition_attn,
-                config.transition_lambda),
+                config.transition_lambda, use_pmi=use_pmi),
         })
+        # --- A: candidate context (cat + Δgeo + optional time) ---
+        # Fuse input: e_P + e_C + geo(+time/slot) → D. Always built for ckpt stability.
+        fuse_in = 3 * d + GEO_FEAT_DIM  # will project geo/time into D first
+        self.cand_geo_mlp = mlp(GEO_FEAT_DIM, d, d, config.dropout)
+        self.cand_time_mlp = mlp(LAST_SLOT_DIM, d, d, config.dropout)
+        self.cand_slot_mlp = mlp(COUNT_FEAT_DIM, d, d, config.dropout)
+        # Fuse [e_P; e_C; geo_d; time_d] → D (time_d may be zero when time off).
+        self.cand_fuse = mlp(4 * d, 2 * d, d, config.dropout)
+        # --- B: session summary ---
+        self.session_length_emb = nn.Embedding(TRAJ_LENGTH_BINS, d)
+        self.session_cat_proj = nn.Linear(n_categories, d)
+        self.session_scalar_mlp = mlp(SESSION_SCALAR_DIM, d, d, config.dropout)
+        self.session_mlp = mlp(3 * d, 2 * d, d, config.dropout)
+        self.session_to_full = nn.Linear(d, 5 * d)
+        # --- C: user preference ---
+        self.user_cat_proj = nn.Linear(n_categories, d)
+        self.user_hour_proj = nn.Linear(USER_HOUR_DIM, d)
+        self.user_pref_mlp = mlp(2 * d, 2 * d, d, config.dropout)
+        self.user_pref_to_full = nn.Linear(d, 5 * d)
+        # --- E: expert-local cross-attn (shared QKV per source; transition stays on shared P/C) ---
+        self.expert_attn = nn.ModuleDict({
+            s: nn.MultiheadAttention(d, config.heads, batch_first=True) for s in SOURCE_ORDER
+        })
+        self.expert_query_proj = nn.ModuleDict({
+            s: nn.Linear(d, d) for s in SOURCE_ORDER
+        })
+
+    def _flag_on(self, name):
+        return getattr(self.cfg, name) == "on"
 
     def _project_history(self, history, count_ctx=None):
         """Token / numeric projections, optionally + causal count features / visit bin."""
@@ -219,13 +286,16 @@ class TSMoE(nn.Module):
         projected["T"] = self.projections["T"](history["T"])
         projected["L"] = self.projections["L"](history["L"])
         if count_ctx is not None and self.cfg.causal_counts:
-            projected["P"] = projected["P"] + self.poi_count_mlp(count_ctx["hist_poi_feat"])
-            projected["C"] = projected["C"] + self.cat_count_mlp(count_ctx["hist_cat_feat"])
+            if "hist_poi_feat" in count_ctx:
+                projected["P"] = projected["P"] + self.poi_count_mlp(count_ctx["hist_poi_feat"])
+            if "hist_cat_feat" in count_ctx:
+                projected["C"] = projected["C"] + self.cat_count_mlp(count_ctx["hist_cat_feat"])
             # Equal-frequency bin of user cumulative visits (not raw counts) → T and L.
-            bins = count_ctx["visit_bin"].clamp(0, self.cfg.visit_bins - 1)
-            visit = self.visit_bin_emb(bins)[:, None, :]
-            projected["T"] = projected["T"] + visit
-            projected["L"] = projected["L"] + visit
+            if "visit_bin" in count_ctx:
+                bins = count_ctx["visit_bin"].clamp(0, self.cfg.visit_bins - 1)
+                visit = self.visit_bin_emb(bins)[:, None, :]
+                projected["T"] = projected["T"] + visit
+                projected["L"] = projected["L"] + visit
         return projected
 
     def encode(self, history, valid, count_ctx=None):
@@ -234,10 +304,113 @@ class TSMoE(nn.Module):
         return {s: self.encoders[s](projected[s] + position,
                                     src_key_padding_mask=~valid) for s in SOURCE_ORDER}
 
-    def dispatch(self, z, indices, weights, mask, details):
-        """Group valid (batch,candidate,slot) assignments by expert before each FFN."""
+    def _build_candidate_vector(self, rows, mask, count_ctx=None):
+        """P-embed (+ optional counts / A-context fuse) → candidate query [B,M,D]."""
+        safe = rows.masked_fill(~mask, -1) + 2
+        e_p = self.projections["P"](safe)
+        if count_ctx is not None and self.cfg.causal_counts and "cand_poi_feat" in count_ctx:
+            feats = count_ctx["cand_poi_feat"][:, :rows.shape[1]].to(e_p.device)
+            e_p = e_p + self.poi_count_mlp(feats)
+        if not self._flag_on("candidate_context") and self.cfg.candidate_context_time == "off":
+            return e_p, {"P": e_p, "C": e_p, "T": e_p, "L": e_p}
+        # Typed pieces for A fuse and for E typed queries.
+        b, m = rows.shape
+        device = e_p.device
+        if count_ctx is not None and "cand_cat_rows" in count_ctx:
+            cat_rows = count_ctx["cand_cat_rows"][:, :m].to(device)
+            cat_tok = cat_rows.masked_fill(cat_rows < 0, -1) + 2
+            cat_tok = cat_tok.masked_fill(~mask, 0)
+            e_c = self.projections["C"](cat_tok)
+        else:
+            e_c = torch.zeros_like(e_p)
+        if count_ctx is not None and "delta_geo" in count_ctx and self._flag_on("candidate_context"):
+            geo = self.cand_geo_mlp(count_ctx["delta_geo"][:, :m].to(device))
+        else:
+            geo = torch.zeros_like(e_p)
+        time_d = torch.zeros_like(e_p)
+        if self.cfg.candidate_context_time == "last_slot" and count_ctx is not None and "last_slot" in count_ctx:
+            slot = self.cand_time_mlp(count_ctx["last_slot"].to(device))  # [B,D]
+            time_d = slot[:, None, :].expand(-1, m, -1)
+        elif self.cfg.candidate_context_time == "causal_slot" and count_ctx is not None:
+            if "last_slot" in count_ctx:
+                slot = self.cand_time_mlp(count_ctx["last_slot"].to(device))
+                time_d = time_d + slot[:, None, :].expand(-1, m, -1)
+            if "cand_slot_feat" in count_ctx:
+                time_d = time_d + self.cand_slot_mlp(count_ctx["cand_slot_feat"][:, :m].to(device))
+        if self._flag_on("candidate_context") or self.cfg.candidate_context_time != "off":
+            fused = self.cand_fuse(torch.cat([e_p, e_c, geo, time_d], -1))
+            # Keep padding candidates at zero contribution via mask (score masks later).
+            fused = fused * mask.unsqueeze(-1).to(fused.dtype)
+        else:
+            fused = e_p
+        typed = {"P": e_p, "C": e_c if e_c.abs().sum() > 0 else fused,
+                 "T": time_d if time_d.abs().sum() > 0 else fused,
+                 "L": geo if geo.abs().sum() > 0 else fused}
+        return fused, typed
+
+    def _session_addon(self, count_ctx, batch, device):
+        if not self._flag_on("session_summary") or count_ctx is None:
+            return None
+        if "session_scalars" not in count_ctx:
+            return None
+        scalars = self.session_scalar_mlp(count_ctx["session_scalars"].to(device))
+        length = count_ctx["session_length_bin"].to(device).clamp(0, TRAJ_LENGTH_BINS - 1)
+        length_e = self.session_length_emb(length)
+        cat_h = self.session_cat_proj(count_ctx["session_cat_hist"].to(device))
+        sess = self.session_mlp(torch.cat([scalars, length_e, cat_h], -1))
+        return self.session_to_full(sess)  # [B, 5D]
+
+    def _user_pref_addon(self, count_ctx, device):
+        if not self._flag_on("user_pref") or count_ctx is None:
+            return None
+        if "user_cat_pref" not in count_ctx or "user_hour_pref" not in count_ctx:
+            return None
+        cat_p = self.user_cat_proj(count_ctx["user_cat_pref"].to(device))
+        hour_p = self.user_hour_proj(count_ctx["user_hour_pref"].to(device))
+        pref = self.user_pref_mlp(torch.cat([cat_p, hour_p], -1))
+        return self.user_pref_to_full(pref)  # [B, 5D]
+
+    def _cross_attend(self, encoded, valid, candidate, count_ctx=None):
+        """Per-source candidate←history attention; P/C use transition modes when enabled."""
+        pad_mask = ~valid
+        use = (count_ctx is not None and self.cfg.causal_counts
+               and "poi_transition" in count_ctx and "cat_transition" in count_ctx)
+        z = []
+        for s in SOURCE_ORDER:
+            if use and s in self.transition_attn:
+                counts = count_ctx["poi_transition" if s == "P" else "cat_transition"]
+                # Align width to this candidate chunk.
+                c = candidate.shape[1]
+                counts = counts[:, :c, :encoded[s].shape[1]].to(candidate.device)
+                z.append(self.transition_attn[s](
+                    candidate, encoded[s], encoded[s], pad_mask, counts))
+            else:
+                z.append(self.attention[s](
+                    candidate, encoded[s], encoded[s],
+                    key_padding_mask=pad_mask, need_weights=False)[0])
+        return z
+
+    def _expert_local_attend(self, encoded, valid, typed_queries, sources=None):
+        """Plain MHA per source with typed queries (no transition — stays on shared P/C)."""
+        pad_mask = ~valid
+        sources = sources or list(SOURCE_ORDER)
+        out = {}
+        for s in sources:
+            q = self.expert_query_proj[s](typed_queries[s])
+            out[s] = self.expert_attn[s](
+                q, encoded[s], encoded[s],
+                key_padding_mask=pad_mask, need_weights=False)[0]
+        return out
+
+    def dispatch(self, z, indices, weights, mask, details, *, expert_z=None):
+        """Group valid (batch,candidate,slot) assignments by expert before each FFN.
+
+        When ``expert_z`` is provided (E1/E2), unique/synergy experts read from
+        those typed streams instead of the shared ``z`` list.
+        """
         d, k = self.cfg.dim, indices.shape[-1]
-        flat_z = [v.reshape(-1, d) for v in z]
+        source_z = expert_z if expert_z is not None else z
+        flat_z = [v.reshape(-1, d) for v in source_z]
         projected = [layer(v) for layer, v in zip(self.shared, flat_z)]
         index = indices.reshape(-1, k)
         weight = weights.reshape(-1, k)
@@ -260,36 +433,38 @@ class TSMoE(nn.Module):
         return score.reshape_as(mask) + self.moe_head.bias, (
             projected_scores.reshape_as(weights) if details else None)
 
-    def _cross_attend(self, encoded, valid, candidate, count_ctx=None):
-        """Per-source candidate←history attention; P/C use transition modes when enabled."""
-        pad_mask = ~valid
-        use = count_ctx is not None and self.cfg.causal_counts
-        z = []
-        for s in SOURCE_ORDER:
-            if use and s in self.transition_attn:
-                counts = count_ctx["poi_transition" if s == "P" else "cat_transition"]
-                # Align width to this candidate chunk.
-                c = candidate.shape[1]
-                counts = counts[:, :c, :encoded[s].shape[1]].to(candidate.device)
-                z.append(self.transition_attn[s](
-                    candidate, encoded[s], encoded[s], pad_mask, counts))
-            else:
-                z.append(self.attention[s](
-                    candidate, encoded[s], encoded[s],
-                    key_padding_mask=pad_mask, need_weights=False)[0])
-        return z
+    def _sources_for_topk(self, top):
+        """Source indices needed by the selected top-k experts (for E3 sparse)."""
+        needed = set()
+        # top: [B,M,K]
+        flat = top.reshape(-1).tolist()
+        for e in set(flat):
+            for m in SUBSETS[e]:
+                needed.add(m)
+        return [SOURCE_ORDER[i] for i in sorted(needed)]
 
     def score(self, encoded, valid, rows, prior26, confidence, *, candidate_mask=None,
               details=False, count_ctx=None):
         mask = torch.ones_like(rows, dtype=torch.bool) if candidate_mask is None else candidate_mask
         if mask.shape != rows.shape:
             raise ValueError("candidate mask and candidate rows must have identical shapes")
-        candidate = self.projections["P"](rows.masked_fill(~mask, -1) + 2)
-        if count_ctx is not None and self.cfg.causal_counts:
-            feats = count_ctx["cand_poi_feat"][:, :rows.shape[1]].to(candidate.device)
-            candidate = candidate + self.poi_count_mlp(feats)
-        z = self._cross_attend(encoded, valid, candidate, count_ctx)
+        candidate, typed = self._build_candidate_vector(rows, mask, count_ctx)
+        eca = self.cfg.expert_cross_attn
+        # Shared cross-attn (E0 / E1). E2 (full) skips shared attn for MoE; still builds base z.
+        if eca == "full":
+            # Base uses typed expert-local attn over all sources (no shared transition path).
+            local = self._expert_local_attend(encoded, valid, typed)
+            z = [local[s] for s in SOURCE_ORDER]
+        else:
+            z = self._cross_attend(encoded, valid, candidate, count_ctx)
         full = torch.cat([*z, candidate], -1)
+        # B/C addons → base/context only (never hard_prior logits).
+        sess = self._session_addon(count_ctx, rows.shape[0], candidate.device)
+        if sess is not None:
+            full = full + sess[:, None, :]
+        pref = self._user_pref_addon(count_ctx, candidate.device)
+        if pref is not None:
+            full = full + pref[:, None, :]
         base = self.base(full).squeeze(-1)
         prior, w = prior26.detach(), confidence.detach()
         if not self.cfg.use_surd:
@@ -323,7 +498,22 @@ class TSMoE(nn.Module):
         top = torch.argsort(log_pi, dim=-1, descending=True, stable=True)[..., :self.cfg.top_k]
         weights = log_pi.gather(-1, top).softmax(-1)
         gate = gate_logits.sigmoid()
-        residual, projected = self.dispatch(z, top, weights, mask, details)
+        # E1: keep shared z for base; MoE residual uses expert-local typed attn.
+        expert_z_list = None
+        if eca == "hybrid":
+            if self.cfg.expert_cross_attn_sparse == "on":
+                sources = self._sources_for_topk(top)
+            else:
+                sources = list(SOURCE_ORDER)
+            local = self._expert_local_attend(encoded, valid, typed, sources=sources)
+            # Fill missing sources from shared z so dispatch indexing stays valid.
+            expert_z_list = []
+            for i, s in enumerate(SOURCE_ORDER):
+                expert_z_list.append(local[s] if s in local else z[i])
+        elif eca == "full":
+            expert_z_list = z  # already expert-local
+        residual, projected = self.dispatch(
+            z, top, weights, mask, details, expert_z=expert_z_list)
         score = (base + gate * residual).masked_fill(~mask, -torch.inf)
         result = dict(score=score, log_pi=log_pi, top=top, weights=weights, gate_logits=gate_logits,
                       gate=gate, mass=mass, alpha=alpha, confidence=w, mask=mask,

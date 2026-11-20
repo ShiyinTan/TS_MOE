@@ -19,6 +19,9 @@ from .counts import (
     DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
 )
 from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_batch, read_split
+from .features import (
+    build_poi_cat_table, gather_side_features, merge_feature_context, slice_side_ctx,
+)
 from .model import ModelConfig, TSMoE, objective
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
@@ -39,11 +42,24 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("transition_attn", "bias")
     cfg.setdefault("transition_lambda", 1.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
+    # New overlays default off for legacy checkpoints.
+    cfg.setdefault("candidate_context", "off")
+    cfg.setdefault("candidate_context_time", "off")
+    cfg.setdefault("session_summary", "off")
+    cfg.setdefault("user_pref", "off")
+    cfg.setdefault("transition_pmi", "off")
+    cfg.setdefault("expert_cross_attn", "off")
+    cfg.setdefault("expert_cross_attn_sparse", "on")
     return ModelConfig(**cfg)
 
 
 _COUNT_WEIGHT_PREFIXES = (
     "poi_count_mlp.", "cat_count_mlp.", "visit_bin_emb.", "transition_attn.",
+    "cand_geo_mlp.", "cand_time_mlp.", "cand_slot_mlp.", "cand_fuse.",
+    "session_length_emb.", "session_cat_proj.", "session_scalar_mlp.",
+    "session_mlp.", "session_to_full.",
+    "user_cat_proj.", "user_hour_proj.", "user_pref_mlp.", "user_pref_to_full.",
+    "expert_attn.", "expert_query_proj.",
 )
 
 
@@ -70,17 +86,101 @@ def count_ctx_to_device(ctx, device):
 
 
 def slice_count_ctx(ctx, start, end):
-    """Slice candidate-aligned count features for a scoring chunk."""
+    """Slice candidate-aligned count / side features for a scoring chunk."""
     if ctx is None:
         return None
-    return dict(
-        hist_poi_feat=ctx["hist_poi_feat"],
-        hist_cat_feat=ctx["hist_cat_feat"],
-        visit_bin=ctx["visit_bin"],
-        cand_poi_feat=ctx["cand_poi_feat"][:, start:end],
-        poi_transition=ctx["poi_transition"][:, start:end],
-        cat_transition=ctx["cat_transition"][:, start:end],
+    # Prefer the general side-aware slicer (keeps hist_* / prefs / session intact).
+    return slice_side_ctx(ctx, start, end)
+
+
+def needs_side_features(cfg):
+    return (
+        cfg.candidate_context == "on"
+        or cfg.candidate_context_time != "off"
+        or cfg.session_summary == "on"
+        or cfg.user_pref == "on"
     )
+
+
+def ensure_poi_cat_table(cache, train_data=None):
+    """Mode category per POI from train (cached on the Cache object)."""
+    if getattr(cache, "poi_cat_table", None) is not None:
+        return cache.poi_cat_table
+    data = train_data if train_data is not None else cache.split("train")
+    cache.poi_cat_table = build_poi_cat_table(data, len(cache.pois))
+    return cache.poi_cat_table
+
+
+def build_batch_feature_context(
+    cfg, cache, data, indices, candidate_rows_list, seq_len, *,
+    count_tables=None, update=True, train_data=None,
+):
+    """Gather causal counts (optional) + A/B/C side features into one ctx dict."""
+    ctx = None
+    use_counts = count_tables is not None and cfg.causal_counts
+    transition_pmi = cfg.transition_pmi == "on"
+    if use_counts:
+        ctx = gather_batch_context(
+            count_tables, data, indices, candidate_rows_list, seq_len,
+            update=update, transition_pmi=transition_pmi)
+    elif needs_side_features(cfg) and cfg.user_pref == "on":
+        # user-pref requires causal tables; skip silently if unavailable.
+        pass
+    if needs_side_features(cfg):
+        poi_cat = ensure_poi_cat_table(cache, train_data=train_data)
+        # When counts already updated above, pass tables for causal_slot / user_pref reads
+        # that must see the pre-update state — gather_side does not update.
+        # If we already updated in gather_batch_context, user_pref/causal_slot would see
+        # post-update tables. Fix: gather side features BEFORE update when both needed.
+        # Caller should use gather_features_causal for the joint path.
+        side = gather_side_features(
+            data, indices, candidate_rows_list,
+            poi_coords=cache.poi_coords,
+            poi_cat_table=poi_cat,
+            n_categories=len(cache.meta["cat_vocab"]),
+            max_length=seq_len,
+            tables=count_tables,
+            candidate_context=cfg.candidate_context == "on",
+            candidate_context_time=cfg.candidate_context_time,
+            session_summary=cfg.session_summary == "on",
+            user_pref=cfg.user_pref == "on" and count_tables is not None,
+            transition_pmi=transition_pmi,
+        )
+        ctx = merge_feature_context(ctx, side)
+    return ctx
+
+
+def gather_features_causal(
+    cfg, cache, data, indices, candidate_rows_list, seq_len, count_tables, *,
+    update=True, train_data=None,
+):
+    """Strict causal: read counts+side at current table state, then optional update."""
+    transition_pmi = cfg.transition_pmi == "on"
+    ctx = None
+    if cfg.causal_counts and count_tables is not None:
+        ctx = gather_batch_context(
+            count_tables, data, indices, candidate_rows_list, seq_len,
+            update=False, transition_pmi=transition_pmi)
+    if needs_side_features(cfg):
+        poi_cat = ensure_poi_cat_table(cache, train_data=train_data)
+        side = gather_side_features(
+            data, indices, candidate_rows_list,
+            poi_coords=cache.poi_coords,
+            poi_cat_table=poi_cat,
+            n_categories=len(cache.meta["cat_vocab"]),
+            max_length=seq_len,
+            tables=count_tables if cfg.causal_counts else None,
+            candidate_context=cfg.candidate_context == "on",
+            candidate_context_time=cfg.candidate_context_time,
+            session_summary=cfg.session_summary == "on",
+            user_pref=cfg.user_pref == "on" and count_tables is not None,
+            transition_pmi=transition_pmi,
+        )
+        ctx = merge_feature_context(ctx, side)
+    if update and cfg.causal_counts and count_tables is not None:
+        for sample_index in indices.tolist():
+            count_tables.update_sample(data, sample_index)
+    return ctx
 
 
 def masked_candidate_lists(rows, mask):
@@ -599,6 +699,21 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
             parts.append(f"--transition-lambda {args.get('transition_lambda', cfg.get('transition_lambda'))}")
         if args.get("visit_bins", cfg.get("visit_bins")) is not None:
             parts.append(f"--visit-bins {args.get('visit_bins', cfg.get('visit_bins'))}")
+    for key, flag in (
+            ("candidate_context", "--candidate-context"),
+            ("candidate_context_time", "--candidate-context-time"),
+            ("session_summary", "--session-summary"),
+            ("user_pref", "--user-pref"),
+            ("transition_pmi", "--transition-pmi"),
+            ("expert_cross_attn", "--expert-cross-attn"),
+            ("expert_cross_attn_sparse", "--expert-cross-attn-sparse"),
+    ):
+        value = args.get(key, cfg.get(key))
+        if value is not None and value != "off":
+            parts.append(f"{flag} {value}")
+        elif key == "expert_cross_attn_sparse" and cfg.get("expert_cross_attn", "off") not in (None, "off"):
+            # Always record sparse setting when expert cross-attn is active.
+            parts.append(f"{flag} {value or 'on'}")
     if args.get("negatives") is not None:
         parts.append(f"--negatives {args['negatives']}")
     if args.get("max_train_candidates") is not None:
@@ -771,7 +886,9 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     device = table.routing_prior.device
     pools, _resolutions = cache.candidate_pools(data)
     use_counts = count_tables is not None and model.cfg.causal_counts
-    if use_counts:
+    use_side = needs_side_features(model.cfg)
+    chronological = use_counts or (use_side and model.cfg.user_pref == "on")
+    if chronological:
         order = chronological_indices(data)
         batches = list(order.split(batch_size))
         # Collect ranks in original sample order for stable group reporting.
@@ -783,15 +900,16 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
         check_interrupt()
         h, valid, target = device_batch(data, idx, device)
         count_ctx = None
-        if use_counts:
+        if use_counts or use_side:
             seq_len = int(valid.shape[1])
             if cache.uses_full_catalog_pools():
                 cand_lists = [list(range(len(cache.pois))) for _ in idx.tolist()]
             else:
                 cand_lists = [pools[i].tolist() for i in idx.tolist()]
             # Read features causally, then update tables with GT (same protocol as train).
-            count_ctx = gather_batch_context(
-                count_tables, data, idx, cand_lists, seq_len, update=True)
+            count_ctx = gather_features_causal(
+                model.cfg, cache, data, idx, cand_lists, seq_len, count_tables,
+                update=use_counts)
             count_ctx = count_ctx_to_device(count_ctx, device)
         encoded = model.encode(h, valid, count_ctx)
         if cache.uses_full_catalog_pools():
@@ -859,11 +977,31 @@ def train(args):
     transition_attn = getattr(args, "transition_attn", "bias")
     transition_lambda = float(getattr(args, "transition_lambda", 1.0))
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
+    # Optional overlays (default off).
+    candidate_context = getattr(args, "candidate_context", "off")
+    candidate_context_time = getattr(args, "candidate_context_time", "off")
+    session_summary = getattr(args, "session_summary", "off")
+    user_pref = getattr(args, "user_pref", "off")
+    transition_pmi = getattr(args, "transition_pmi", "off")
+    expert_cross_attn = getattr(args, "expert_cross_attn", "off")
+    expert_cross_attn_sparse = getattr(args, "expert_cross_attn_sparse", "on")
+    if user_pref == "on" and not causal_counts:
+        raise ValueError("--user-pref on requires causal counts (omit --no-causal-counts)")
+    if candidate_context_time == "causal_slot" and not causal_counts:
+        raise ValueError("--candidate-context-time causal_slot requires causal counts")
+    if transition_pmi == "on" and not causal_counts:
+        raise ValueError("--transition-pmi on requires causal counts")
     cfg = ModelConfig(args.dim, args.heads, args.layers, args.dropout, args.top_k,
                       args.temperature, args.lambda_prior, use_surd=not args.no_surd,
                       router_mode=args.router_mode, hybrid_lambda=args.hybrid_lambda,
                       causal_counts=causal_counts, transition_attn=transition_attn,
-                      transition_lambda=transition_lambda, visit_bins=visit_bins)
+                      transition_lambda=transition_lambda, visit_bins=visit_bins,
+                      candidate_context=candidate_context,
+                      candidate_context_time=candidate_context_time,
+                      session_summary=session_summary, user_pref=user_pref,
+                      transition_pmi=transition_pmi,
+                      expert_cross_attn=expert_cross_attn,
+                      expert_cross_attn_sparse=expert_cross_attn_sparse)
     device = select_device(args.device)
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
@@ -873,7 +1011,9 @@ def train(args):
     print(f"model_param_device={param_device} router_mode={cfg.router_mode} "
           f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior} "
           f"causal_counts={cfg.causal_counts} transition_attn={cfg.transition_attn} "
-          f"visit_bins={cfg.visit_bins}", flush=True)
+          f"visit_bins={cfg.visit_bins} candidate_context={cfg.candidate_context} "
+          f"session_summary={cfg.session_summary} user_pref={cfg.user_pref} "
+          f"expert_cross_attn={cfg.expert_cross_attn}", flush=True)
     if param_device.type != device.type or (
             device.index is not None and param_device.index not in (None, device.index)):
         raise RuntimeError(f"model landed on {param_device}, expected {device}")
@@ -894,6 +1034,13 @@ def train(args):
     settings["transition_attn"] = cfg.transition_attn
     settings["transition_lambda"] = cfg.transition_lambda
     settings["visit_bins"] = cfg.visit_bins
+    settings["candidate_context"] = cfg.candidate_context
+    settings["candidate_context_time"] = cfg.candidate_context_time
+    settings["session_summary"] = cfg.session_summary
+    settings["user_pref"] = cfg.user_pref
+    settings["transition_pmi"] = cfg.transition_pmi
+    settings["expert_cross_attn"] = cfg.expert_cross_attn
+    settings["expert_cross_attn_sparse"] = cfg.expert_cross_attn_sparse
     # Default on: test after every epoch (in addition to final best-ckpt test).
     eval_test_every_epoch = bool(getattr(args, "eval_test_every_epoch", True))
     settings["eval_test_every_epoch"] = eval_test_every_epoch
@@ -903,6 +1050,9 @@ def train(args):
     pool_stats, pools_by_split = report_candidate_pool_stats(
         cache, {"train": data, "validation": val, "test": test})
     train_pools = pools_by_split["train"]
+    # Mode category per POI (runtime; no prepare) for candidate-context / typed queries.
+    if needs_side_features(cfg):
+        ensure_poi_cat_table(cache, train_data=data)
     # Causal online tables: fit visit-bin edges on the train stream once; freeze for val/test.
     online_tables = None
     visit_bin_edges = None
@@ -938,6 +1088,15 @@ def train(args):
             visit_bins=cfg.visit_bins,
             visit_bin_edges=None if visit_bin_edges is None else visit_bin_edges.tolist(),
         ),
+        overlays=dict(
+            candidate_context=cfg.candidate_context,
+            candidate_context_time=cfg.candidate_context_time,
+            session_summary=cfg.session_summary,
+            user_pref=cfg.user_pref,
+            transition_pmi=cfg.transition_pmi,
+            expert_cross_attn=cfg.expert_cross_attn,
+            expert_cross_attn_sparse=cfg.expert_cross_attn_sparse,
+        ),
         definition=("per-sample pool size after multi-source union "
                     "(neighborhood + popular + user-frequent + random negatives) "
                     "+ force-include in-catalog target (always, including val/test) "
@@ -969,11 +1128,12 @@ def train(args):
                 target.detach().cpu(), len(cache.pois), args.negatives, rng,
                 pools=batch_pools, max_candidates=max_train_candidates)
             count_ctx = None
-            if cfg.causal_counts:
+            if cfg.causal_counts or needs_side_features(cfg):
                 # Per-sample read from current tables, then update with GT next hop.
                 cand_lists = masked_candidate_lists(rows, cand_mask)
-                count_ctx = gather_batch_context(
-                    online_tables, data, idx, cand_lists, int(valid.shape[1]), update=True)
+                count_ctx = gather_features_causal(
+                    cfg, cache, data, idx, cand_lists, int(valid.shape[1]),
+                    online_tables, update=cfg.causal_counts, train_data=data)
                 count_ctx = count_ctx_to_device(count_ctx, device)
             rows, cand_mask = rows.to(device), cand_mask.to(device)
             prior, confidence = final(rows.masked_fill(~cand_mask, -1))
@@ -1123,7 +1283,11 @@ def load_model(args):
     load_weights(model, checkpoint["weights"])
     print(f"model_param_device={next(model.parameters()).device} "
           f"router_mode={cfg.router_mode} causal_counts={cfg.causal_counts} "
-          f"transition_attn={cfg.transition_attn}", flush=True)
+          f"transition_attn={cfg.transition_attn} "
+          f"candidate_context={cfg.candidate_context} "
+          f"expert_cross_attn={cfg.expert_cross_attn}", flush=True)
+    if needs_side_features(cfg):
+        ensure_poi_cat_table(cache)
     return cache, model.eval(), cache.table("final", device), checkpoint
 
 
@@ -1217,14 +1381,14 @@ def explain(args):
     h, valid, target = device_batch(data, torch.tensor([i]), device)
     pools, resolutions = cache.candidate_pools(data)
     pool, resolution = pools[i], resolutions[i]
-    if count_tables is not None:
+    if count_tables is not None or needs_side_features(cfg):
         if cache.uses_full_catalog_pools():
             cand_lists = [list(range(len(cache.pois)))]
         else:
             cand_lists = [pool.tolist()]
-        count_ctx = gather_batch_context(
-            count_tables, data, torch.tensor([i]), cand_lists, int(valid.shape[1]),
-            update=False)
+        count_ctx = gather_features_causal(
+            cfg, cache, data, torch.tensor([i]), cand_lists, int(valid.shape[1]),
+            count_tables, update=False, train_data=cache.split("train"))
         count_ctx = count_ctx_to_device(count_ctx, device)
     encoded = model.encode(h, valid, count_ctx)
     if args.poi_id is not None and args.poi_id not in table.row_of:
@@ -1314,14 +1478,15 @@ def recommend(args):
         check_interrupt()
         h, valid, _ = device_batch(data, idx, table.routing_prior.device, labels=False)
         count_ctx = None
-        if base_tables is not None:
+        if base_tables is not None or needs_side_features(cfg):
             if cache.uses_full_catalog_pools():
                 cand_lists = [list(range(len(cache.pois))) for _ in idx.tolist()]
             else:
                 cand_lists = [pools[i].tolist() for i in idx.tolist()]
             # Read-only: do not mutate the shared train-end snapshot across batches.
-            count_ctx = gather_batch_context(
-                base_tables, data, idx, cand_lists, int(valid.shape[1]), update=False)
+            count_ctx = gather_features_causal(
+                model.cfg, cache, data, idx, cand_lists, int(valid.shape[1]),
+                base_tables, update=False, train_data=cache.split("train"))
             count_ctx = count_ctx_to_device(count_ctx, table.routing_prior.device)
         encoded = model.encode(h, valid, count_ctx)
         if cache.uses_full_catalog_pools():

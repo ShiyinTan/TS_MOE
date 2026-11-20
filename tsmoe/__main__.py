@@ -7,6 +7,9 @@ import torch
 
 from .counts import DEFAULT_VISIT_BINS, TRANSITION_ATTN_MODES
 from .engine import evaluate_cli, explain, recommend, train
+from .model import (
+    CANDIDATE_CONTEXT_MODES, CANDIDATE_CONTEXT_TIME_MODES, EXPERT_CROSS_ATTN_MODES, ON_OFF,
+)
 from .prepare import prepare
 from .inspect import inspect_prior
 
@@ -141,6 +144,38 @@ def main():
         "--visit-bins", type=positive, default=DEFAULT_VISIT_BINS,
         help=f"equal-frequency bins of user cumulative visit count for T/L "
              f"(default {DEFAULT_VISIT_BINS}; fit on train stream, freeze for val/test)")
+    t.add_argument(
+        "--candidate-context", choices=CANDIDATE_CONTEXT_MODES, default="off",
+        help="fuse candidate category emb + Δgeo (haversine/east/north log1p) into "
+             "the candidate query before shared cross-attn (default off). "
+             "Does not enter hard_prior router logits. See docs/candidate-context.md")
+    t.add_argument(
+        "--candidate-context-time", choices=CANDIDATE_CONTEXT_TIME_MODES, default="off",
+        help="optional time side of candidate-context: off (default); last_slot = "
+             "last hour/weekday one-hot; causal_slot = + causal same-hour POI freq "
+             "(requires causal counts). Never enters hard_prior")
+    t.add_argument(
+        "--session-summary", choices=ON_OFF, default="off",
+        help="session/intent summary (window cat hist, traj-length bin, "
+             "activity-center→last distance) added to shared base/context "
+             "(default off; never hard_prior)")
+    t.add_argument(
+        "--user-pref", choices=ON_OFF, default="off",
+        help="causal user–cat / user–hour preference MLP into base/context "
+             "(default off; requires causal counts; never hard_prior)")
+    t.add_argument(
+        "--transition-pmi", choices=ON_OFF, default="off",
+        help="use POI→POI / cat→POI PMI instead of raw counts in transition "
+             "cross-attn (default off; requires causal counts). Text embeddings deferred")
+    t.add_argument(
+        "--expert-cross-attn", choices=EXPERT_CROSS_ATTN_MODES, default="off",
+        help="expert-local cross-attn: off (default, shared only); hybrid (E1) = "
+             "keep shared + typed expert MHA (transition stays on shared P/C); "
+             "full (E2) = drop shared MoE path for expert-local only")
+    t.add_argument(
+        "--expert-cross-attn-sparse", choices=ON_OFF, default="on",
+        help="when expert-cross-attn ≠ off: only run expert-local attn for sources "
+             "in router top-k experts (E3; default on)")
     t.add_argument("--seed", type=int, default=42)
     t.add_argument(
         "--eval-test-every-epoch",

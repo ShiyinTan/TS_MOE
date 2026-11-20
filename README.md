@@ -6,7 +6,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 
 **依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。因果在线计数 + `--transition-attn` 见 [`docs/causal-counts.md`](docs/causal-counts.md)（§3.8；**默认 on**）。系统对照实验（因子表、可复制命令、结果登记）：[`docs/ablation.md`](docs/ablation.md)。
+**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。因果在线计数 + `--transition-attn` 见 [`docs/causal-counts.md`](docs/causal-counts.md)（§3.8；**默认 on**）。候选上下文 / 会话 / 用户偏好 / 专家内交叉注意力 overlays（**默认均 off**）：[`docs/candidate-context.md`](docs/candidate-context.md)。系统对照实验（因子表、overlay 命令表、结果登记）：[`docs/ablation.md`](docs/ablation.md)。
 
 面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
 
@@ -25,6 +25,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
    - [3.6 Router 模式（`--router-mode`）](#36-router-模式--router-mode)
    - [3.7 STHGCN T/L 特征（须重 prepare）](#37-sthgcn-tl-特征须重-prepare)
    - [3.8 因果在线计数 + `--transition-attn`](#38-因果在线计数--transition-attn)
+   - [3.8a 候选上下文 / 会话 / 偏好 / 专家内交叉注意力（默认 off）](#38a-候选上下文--会话--偏好--专家内交叉注意力默认-off)
    - [3.9 结果目录与 Acc@1](#39-结果目录与-acc1)
    - [3.10 独立评估](#310-独立评估)
    - [3.11 GPU 占用与中断](#311-gpu-占用与中断)
@@ -457,6 +458,26 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_nocounts \
 | `gate` | `[历史; 候选; φ(count)]` → sigmoid 门控缩放注意力权重 |
 | `rel_key` | `MLP(φ(count))` 注入 key（随候选变化） |
 
+### 3.8a 候选上下文 / 会话 / 偏好 / 专家内交叉注意力（默认 off）
+
+运行时 overlays（**无需 re-prepare**；**默认全部 off**，不改今日 Acc@1 路径）。新信号进 base / 共享 query / 专家 attn，**不进** `hard_prior`。说明与 defaults 矩阵：[`docs/candidate-context.md`](docs/candidate-context.md)；叠在默认 train 上的对照命令表：[`docs/ablation.md`](docs/ablation.md) §3.1。
+
+| Flag | 默认 | 含义 |
+| --- | --- | --- |
+| `--candidate-context` | `off` | 候选 cat emb + Δgeo → 融合进候选 query |
+| `--candidate-context-time` | `off` | `last_slot` / `causal_slot`（后者须因果 on） |
+| `--session-summary` | `off` | 会话摘要 → shared base/context |
+| `--user-pref` | `off` | 因果 user–cat / user–hour → base（须因果 on） |
+| `--transition-pmi` | `off` | 转移 attn 用 PMI（须因果 on） |
+| `--expert-cross-attn` | `off` | `hybrid`（E1）/ `full`（E2） |
+| `--expert-cross-attn-sparse` | `on` | E≠off 时仅 top-k 源跑 expert attn（E3） |
+
+```bash
+# 示例：A + E1（同一 cache）
+python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_e1 \
+  --candidate-context on --expert-cross-attn hybrid --device cuda
+```
+
 ### 3.9 结果目录与 Acc@1
 
 | 位置 | 内容 |
@@ -533,6 +554,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督 |
 | `train --causal-counts` / `--no-causal-counts` | 因果在线计数 + transition 交叉注意力（**默认 on**；见 §3.8） |
 | `train --transition-attn` | `bias`（默认）/ `gate` / `rel_key` |
+| `train --candidate-context` 等 overlays | **默认 off**；见 §3.8a / [`docs/candidate-context.md`](docs/candidate-context.md) |
 | `train --transition-lambda` | bias 项尺度，默认 `1.0` |
 | `train --visit-bins` | T/L 用户累计访问等频分箱数，默认 `10` |
 | `train --eval-test-every-epoch` / `--no-eval-test-every-epoch` | 每 epoch 跑 test 并写 `results/.../eval_test/epoch_*.json`（**默认 on**） |
@@ -585,6 +607,7 @@ TS_MOE/
   docs/router-modes.md        # --router-mode hard_prior / surd_mlp / hybrid
   docs/sthgcn-tl-features.md  # T/L ↔ STHGCN Φ(Δt)/Φ(Δs) 对齐
   docs/causal-counts.md       # 因果在线计数 + --transition-attn
+  docs/candidate-context.md   # overlays A/B/C/D/E（默认 off）
   docs/ablation.md            # 消融协议、因子表、可复制命令、结果登记
   docs/ablation_log.template.md  # 结果表模板（可复制到 results/）
   docs/ablation_log.template.csv
@@ -607,6 +630,7 @@ TS_MOE/
 | `docs/router-modes.md` | `--router-mode`：hard_prior / surd_mlp / hybrid |
 | `docs/sthgcn-tl-features.md` | T/L 与 STHGCN 对齐；换 schema 须重 prepare |
 | `docs/causal-counts.md` | 因果在线计数、等频分箱、`--transition-attn` |
+| `docs/candidate-context.md` | 候选上下文 / 会话 / 用户偏好 / PMI / 专家内交叉注意力 |
 | `docs/ablation.md` | 消融实验手册（开关总表、顺序、命令、结果登记） |
 | `docs/ablation_log.template.md` / `.csv` | 结果登记模板（运行时自动写 `results/ablation_log.*`） |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
@@ -662,6 +686,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 4. 在线：四源 Transformer 编码历史（T/L MLP→`dim`）；**Router 默认 `hard_prior`**（仅候选 U/S SURD → π，无序列）；可选 `surd_mlp` / `hybrid`；Top-K 稀疏专家；`base + 门控 MoE 残差`。
 5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
 6. **因果在线计数**（默认 on）：按时间戳训练；用户/全局访问与转移表先读后写；POI/C 嵌入加计数 MLP；T/L 加等频访问分箱；P/C 交叉注意力默认 `bias` 注入转移（可选 `gate` / `rel_key`）。见 [`docs/causal-counts.md`](docs/causal-counts.md) 与 §3.8。
+7. **Overlays（默认 off）**：候选上下文（cat+Δgeo±时段）、会话摘要、用户偏好、转移 PMI、专家内交叉注意力（E1 hybrid / E2 full / E3 sparse）；均不进 `hard_prior`。见 [`docs/candidate-context.md`](docs/candidate-context.md) 与 §3.8a。
 
 缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、SURD `final` 表、候选构造与文件摘要。旧 `basic_fixed_features_v1` 或含 fold SURD 的缓存不兼容，须重新 prepare（默认覆盖同路径旧缓存）。
 
