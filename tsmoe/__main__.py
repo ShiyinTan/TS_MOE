@@ -258,6 +258,11 @@ def main():
              "(bins <1 / 1–6 / 6–24 / >24). Uses bin counts with pooled fallback; "
              "off = last-only/multi-hop pooled. Prefer over --tsb-decay-hours")
     t.add_argument(
+        "--cat-stage-bias", type=float, default=0.0,
+        help="add λ·log1p(last_cat→cand_cat) soft category-stage prior to scores "
+             "(default 0 = off). Needs --candidate-context on + causal counts. "
+             "Soft only (no hard top-C filter)")
+    t.add_argument(
         "--tsb-decay-hours", type=float, default=0.0,
         help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
              "hours from last history tip to target (Hawkes-lite; 0 = off)")
@@ -401,6 +406,7 @@ def main():
                                     or getattr(args, "revisit_score_bias", 0.0) < 0
                                     or getattr(args, "radiation_score_bias", 0.0) < 0
                                     or getattr(args, "jump_length_bias", 0.0) < 0
+                                    or getattr(args, "cat_stage_bias", 0.0) < 0
                                     or getattr(args, "tsb_decay_hours", 0.0) < 0
                                     or getattr(args, "geo_score_power", 1.0) <= 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
@@ -408,7 +414,7 @@ def main():
                    "transition-lambda / transition-score-bias / category-score-bias / "
                    "pop-score-bias / geo-score-bias / surd-score-bias / "
                    "revisit-score-bias / radiation-score-bias / jump-length-bias / "
-                   "tsb-decay-hours must be nonnegative; "
+                   "cat-stage-bias / tsb-decay-hours must be nonnegative; "
                    "geo-score-power must be positive")
     if args.command == "evaluate" and float(getattr(args, "score_temperature", 1.0) or 1.0) <= 0:
         root.error("--score-temperature must be positive")
@@ -424,6 +430,10 @@ def main():
             and float(getattr(args, "jump_length_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):
         root.error("--jump-length-bias > 0 requires --candidate-context on")
+    if (args.command == "train"
+            and float(getattr(args, "cat_stage_bias", 0.0) or 0.0) > 0
+            and getattr(args, "candidate_context", "off") == "off"):
+        root.error("--cat-stage-bias > 0 requires --candidate-context on")
     if args.command == "train" and getattr(args, "return_gate", "off") == "on":
         if float(getattr(args, "revisit_score_bias", 0.0) or 0.0) <= 0:
             root.error("--return-gate on requires --revisit-score-bias > 0")

@@ -67,6 +67,7 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("tsb_history_k", 1)
     cfg.setdefault("tsb_history_decay", 0.5)
     cfg.setdefault("tsb_dt_edges", ())
+    cfg.setdefault("cat_stage_bias", 0.0)
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
@@ -153,6 +154,29 @@ def attach_target_gap_hours(ctx, data, indices):
     return out
 
 
+def attach_cat_stage_counts(ctx, tables, data, indices):
+    """last_cat→cand_cat raw counts [B,M] for --cat-stage-bias (needs cand_cat_rows)."""
+    from .counts import history_catalog_rows
+    if ctx is None or "cand_cat_rows" not in ctx or tables is None:
+        return ctx
+    cat_rows = ctx["cand_cat_rows"]
+    b, m = cat_rows.shape
+    out = torch.zeros(b, m, dtype=torch.float32)
+    idxs = indices.tolist() if torch.is_tensor(indices) else list(indices)
+    for bi, sample_index in enumerate(idxs):
+        _hp, hc = history_catalog_rows(data, sample_index)
+        if not hc:
+            continue
+        last_c = int(hc[-1])
+        for j in range(m):
+            cc = int(cat_rows[bi, j].item())
+            if cc >= 0 and last_c >= 0:
+                out[bi, j] = tables.cat_cat_count(last_c, cc)
+    merged = dict(ctx)
+    merged["cat_stage_count"] = out
+    return merged
+
+
 def slice_count_ctx(ctx, start, end):
     """Slice candidate-aligned count / side features for a scoring chunk."""
     if ctx is None:
@@ -223,6 +247,8 @@ def build_batch_feature_context(
         or bool(getattr(cfg, "tsb_dt_edges", ()) or ()))
     if need_gap:
         ctx = attach_target_gap_hours(ctx, data, indices)
+    if float(getattr(cfg, "cat_stage_bias", 0.0) or 0.0) > 0 and count_tables is not None:
+        ctx = attach_cat_stage_counts(ctx, count_tables, data, indices)
     return ctx
 
 
@@ -260,6 +286,8 @@ def gather_features_causal(
         or bool(getattr(cfg, "tsb_dt_edges", ()) or ()))
     if need_gap:
         ctx = attach_target_gap_hours(ctx, data, indices)
+    if float(getattr(cfg, "cat_stage_bias", 0.0) or 0.0) > 0:
+        ctx = attach_cat_stage_counts(ctx, count_tables, data, indices)
     if update and cfg.causal_counts and count_tables is not None:
         for sample_index in indices.tolist():
             count_tables.update_sample(data, sample_index)
@@ -1208,6 +1236,7 @@ def train(args):
     tsb_history_k = int(getattr(args, "tsb_history_k", 1) or 1)
     tsb_history_decay = float(getattr(args, "tsb_history_decay", 0.5) or 0.5)
     tsb_dt_edges = tuple(parse_dt_bin_edges(getattr(args, "transition_dt_bins", "off")))
+    cat_stage_bias = float(getattr(args, "cat_stage_bias", 0.0) or 0.0)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
@@ -1245,6 +1274,8 @@ def train(args):
         raise ValueError("--tsb-history-k must be >= 1")
     if tsb_history_decay <= 0:
         raise ValueError("--tsb-history-decay must be positive")
+    if cat_stage_bias < 0:
+        raise ValueError("--cat-stage-bias must be nonnegative")
     if return_gate == "on":
         if revisit_score_bias <= 0:
             raise ValueError("--return-gate on requires --revisit-score-bias > 0")
@@ -1286,6 +1317,10 @@ def train(args):
         raise ValueError("--radiation-score-bias > 0 requires causal counts")
     if jump_length_bias > 0 and candidate_context == "off":
         raise ValueError("--jump-length-bias > 0 requires --candidate-context on")
+    if cat_stage_bias > 0 and candidate_context == "off":
+        raise ValueError("--cat-stage-bias > 0 requires --candidate-context on")
+    if cat_stage_bias > 0 and not causal_counts:
+        raise ValueError("--cat-stage-bias > 0 requires causal counts")
     # Jump lognormal: CLI override, else fit from cache distance_stats when bias>0.
     jump_mu_arg = getattr(args, "jump_mu", None)
     jump_sigma_arg = getattr(args, "jump_sigma", None)
@@ -1341,6 +1376,7 @@ def train(args):
                       tsb_history_k=tsb_history_k,
                       tsb_history_decay=tsb_history_decay,
                       tsb_dt_edges=tsb_dt_edges,
+                      cat_stage_bias=cat_stage_bias,
                       tsb_decay_hours=tsb_decay_hours,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
@@ -1378,6 +1414,7 @@ def train(args):
           f"explore_score_bias={cfg.explore_score_bias} "
           f"tsb_history_k={cfg.tsb_history_k} tsb_history_decay={cfg.tsb_history_decay} "
           f"tsb_dt_edges={cfg.tsb_dt_edges} "
+          f"cat_stage_bias={cfg.cat_stage_bias} "
           f"tsb_decay_hours={cfg.tsb_decay_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
@@ -1429,6 +1466,7 @@ def train(args):
     settings["tsb_history_k"] = cfg.tsb_history_k
     settings["tsb_history_decay"] = cfg.tsb_history_decay
     settings["tsb_dt_edges"] = list(cfg.tsb_dt_edges)
+    settings["cat_stage_bias"] = cfg.cat_stage_bias
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias

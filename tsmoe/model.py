@@ -136,6 +136,8 @@ class ModelConfig:
     # Δt-bin tsb: hour edges e.g. (1,6,24) → bins <1h / 1–6 / 6–24 / >24; empty = off.
     # Uses bin-specific last→cand counts with pooled fallback when bin sparse.
     tsb_dt_edges: tuple = ()
+    # Category-stage Acc@1 prior: λ·log1p(last_cat→cand_cat); soft (no hard filter).
+    cat_stage_bias: float = 0.
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
     tsb_decay_hours: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
@@ -231,6 +233,8 @@ class ModelConfig:
             raise ValueError("tsb_dt_edges must be positive hours")
         if edges != tuple(sorted(edges)):
             raise ValueError("tsb_dt_edges must be sorted ascending")
+        if self.cat_stage_bias < 0:
+            raise ValueError("cat_stage_bias must be nonnegative")
         if self.return_gate == "on":
             if self.revisit_score_bias <= 0:
                 raise ValueError("return_gate on requires --revisit-score-bias > 0")
@@ -938,6 +942,11 @@ class TSMoE(nn.Module):
             if spatial_scale is not None:
                 jump = jump * spatial_scale
             score = score + jlb * jump
+        # Category-stage: λ·log1p(last_cat→cand_cat) soft prior (needs cat_stage_count).
+        csb_stage = float(getattr(self.cfg, "cat_stage_bias", 0.0) or 0.0)
+        if csb_stage > 0 and count_ctx is not None and "cat_stage_count" in count_ctx:
+            stage = count_ctx["cat_stage_count"][:, :rows.shape[1]].to(score.device).clamp_min(0)
+            score = score + csb_stage * torch.log1p(stage)
         # Revisit prior: user→cand causal visit mass (cand_poi_feat dim 0 = log1p(user)).
         # When return_gate=on: mix π·(λ_ret·revisit) + (1−π)·(λ_exp·explore spatial).
         rsb = float(getattr(self.cfg, "revisit_score_bias", 0.0) or 0.0)

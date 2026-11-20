@@ -438,6 +438,11 @@ class CausalCountTables:
             return 0.0
         return float(self.poi_poi[src][dst])
 
+    def cat_cat_count(self, src_cat, dst_cat):
+        if not (self._cat_ok(src_cat) and self._cat_ok(dst_cat)):
+            return 0.0
+        return float(self.cat_cat[src_cat][dst_cat])
+
     def cat_poi_count(self, src_cat, dst_poi):
         if not (self._cat_ok(src_cat) and self._poi_ok(dst_poi)):
             return 0.0
