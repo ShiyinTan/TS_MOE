@@ -1111,6 +1111,7 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(legacy.category_score_bias, 0.0)
         self.assertEqual(legacy.pop_score_bias, 0.0)
         self.assertEqual(legacy.geo_score_bias, 0.0)
+        self.assertEqual(legacy.geo_score_power, 1.0)
         self.assertEqual(legacy.surd_bias_gate, "off")
         self.assertEqual(legacy.surd_score_bias, 0.0)
         self.assertEqual(legacy.tsb_gate_mode, "off")
@@ -1164,8 +1165,18 @@ class TestCausalCounts(unittest.TestCase):
         torch.testing.assert_close(s_csb[1], s0[1], atol=1e-5, rtol=1e-5)
         self.assertGreater(float(s_psb[0] - s0[0]), 2.0)
         self.assertGreater(float(s0[1] - s_gsb[1]), 1.0)  # far cand penalized
+        # Gravity α>1 penalizes far candidates more than α=1 for same λ.
+        gsb_p = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, geo_score_bias=1., geo_score_power=2.)).eval()
+        gsb_p.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s_p2 = gsb_p(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        self.assertGreater(float(s_gsb[1] - s_p2[1]), 0.5)
         with self.assertRaises(ValueError):
             ModelConfig(8, 2, 1, 0., 2, geo_score_bias=1.0)  # needs candidate_context
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on",
+                        geo_score_bias=1.0, geo_score_power=0.0)
 
     def test_surd_bias_gate_helpers_and_score_bias(self):
         """SURD/SMI gates: helpers + additive surd_score_bias lifts high-gate cands."""

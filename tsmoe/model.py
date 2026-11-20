@@ -99,6 +99,8 @@ class ModelConfig:
     # Proximity Acc@1 prior: −λ·log1p(haversine km) when delta_geo is present (0 = off).
     # Needs --candidate-context on (WIN already sets it).
     geo_score_bias: float = 0.
+    # Gravity-style distance exponent on geo prior: −λ·log1p(km^α). α=1 ≡ default log1p(km).
+    geo_score_power: float = 1.
     visit_bins: int = DEFAULT_VISIT_BINS
     # Optional overlays (all default off — Acc@1 path unchanged unless set).
     candidate_context: str = "off"
@@ -143,6 +145,8 @@ class ModelConfig:
             raise ValueError("geo_score_bias must be nonnegative")
         if self.geo_score_bias > 0 and self.candidate_context == "off":
             raise ValueError("geo_score_bias > 0 requires --candidate-context on")
+        if self.geo_score_power <= 0:
+            raise ValueError("geo_score_power must be positive")
         if self.visit_bins < 1:
             raise ValueError("visit_bins must be positive")
         if self.candidate_context not in CANDIDATE_CONTEXT_MODES:
@@ -675,11 +679,18 @@ class TSMoE(nn.Module):
                 and "cand_poi_feat" in count_ctx):
             pop = count_ctx["cand_poi_feat"][:, :rows.shape[1], 1].to(score.device)
             score = score + psb * pop.clamp_min(0)
-        # Proximity prior: closer candidates score higher (−λ · log1p km).
+        # Proximity prior: closer candidates score higher (−λ · log1p(km^α)).
+        # delta_geo[...,0] stores log1p(km); α=1 recovers −λ·log1p(km).
         gsb = float(getattr(self.cfg, "geo_score_bias", 0.0) or 0.0)
         if gsb > 0 and count_ctx is not None and "delta_geo" in count_ctx:
-            hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device)
-            score = score - gsb * hav.clamp_min(0)
+            hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+            alpha = float(getattr(self.cfg, "geo_score_power", 1.0) or 1.0)
+            if abs(alpha - 1.0) < 1e-8:
+                geo_pen = hav
+            else:
+                km = torch.expm1(hav).clamp_min(0)
+                geo_pen = torch.log1p(km.pow(alpha))
+            score = score - gsb * geo_pen
         # Direct SURD/SMI score contribution (default λ=0).
         ssb = float(getattr(self.cfg, "surd_score_bias", 0.0) or 0.0)
         if ssb > 0 and cand_gate is not None:

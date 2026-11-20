@@ -177,8 +177,12 @@ def main():
              "(default 0 = off). Popularity Acc@1 prior; needs causal counts")
     t.add_argument(
         "--geo-score-bias", type=float, default=0.0,
-        help="subtract λ·log1p(haversine km) from scores so nearer POIs rank higher "
+        help="subtract λ·log1p(haversine km^α) from scores so nearer POIs rank higher "
              "(default 0 = off). Needs --candidate-context on (delta_geo). No re-prepare")
+    t.add_argument(
+        "--geo-score-power", type=float, default=1.0,
+        help="gravity exponent α on geo-score-bias: −λ·log1p(km^α) "
+             "(default 1 = classic log1p km; try 0.5–2). No-op when geo-score-bias=0")
     t.add_argument(
         "--surd-bias-gate", choices=SURD_BIAS_GATE_MODES, default="off",
         help="per-candidate gate from SURD / Specific MI controlling score/attn "
@@ -311,11 +315,13 @@ def main():
                                     or getattr(args, "category_score_bias", 0.0) < 0
                                     or getattr(args, "pop_score_bias", 0.0) < 0
                                     or getattr(args, "geo_score_bias", 0.0) < 0
-                                    or getattr(args, "surd_score_bias", 0.0) < 0):
+                                    or getattr(args, "surd_score_bias", 0.0) < 0
+                                    or getattr(args, "geo_score_power", 1.0) <= 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
                    "transition-lambda / transition-score-bias / category-score-bias / "
-                   "pop-score-bias / geo-score-bias / surd-score-bias must be nonnegative")
+                   "pop-score-bias / geo-score-bias / surd-score-bias must be nonnegative; "
+                   "geo-score-power must be positive")
     if (args.command == "train"
             and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):

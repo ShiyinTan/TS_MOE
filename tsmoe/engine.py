@@ -45,6 +45,7 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("category_score_bias", 0.0)
     cfg.setdefault("pop_score_bias", 0.0)
     cfg.setdefault("geo_score_bias", 0.0)
+    cfg.setdefault("geo_score_power", 1.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
     cfg.setdefault("candidate_context", "off")
@@ -768,9 +769,16 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
                 ("category_score_bias", "--category-score-bias"),
                 ("pop_score_bias", "--pop-score-bias"),
                 ("geo_score_bias", "--geo-score-bias"),
+                ("geo_score_power", "--geo-score-power"),
         ):
-            val = args.get(key, cfg.get(key, 0.0))
-            if val is not None and float(val) != 0.0:
+            val = args.get(key, cfg.get(key, 0.0 if "bias" in key else 1.0))
+            if val is None:
+                continue
+            # Always emit nonzero biases; emit power only when ≠ default 1.
+            if "power" in key:
+                if abs(float(val) - 1.0) > 1e-12:
+                    parts.append(f"{flag} {val}")
+            elif float(val) != 0.0:
                 parts.append(f"{flag} {val}")
         if args.get("visit_bins", cfg.get("visit_bins")) is not None:
             parts.append(f"--visit-bins {args.get('visit_bins', cfg.get('visit_bins'))}")
@@ -1089,6 +1097,9 @@ def train(args):
     category_score_bias = float(getattr(args, "category_score_bias", 0.0) or 0.0)
     pop_score_bias = float(getattr(args, "pop_score_bias", 0.0) or 0.0)
     geo_score_bias = float(getattr(args, "geo_score_bias", 0.0) or 0.0)
+    geo_score_power = float(getattr(args, "geo_score_power", 1.0) or 1.0)
+    if geo_score_power <= 0:
+        raise ValueError("--geo-score-power must be positive")
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
     # Optional overlays (default off).
     candidate_context = getattr(args, "candidate_context", "off")
@@ -1130,6 +1141,7 @@ def train(args):
                       category_score_bias=category_score_bias,
                       pop_score_bias=pop_score_bias,
                       geo_score_bias=geo_score_bias,
+                      geo_score_power=geo_score_power,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
                       candidate_context_time=candidate_context_time,
@@ -1154,6 +1166,7 @@ def train(args):
           f"transition_score_bias={cfg.transition_score_bias} "
           f"category_score_bias={cfg.category_score_bias} "
           f"pop_score_bias={cfg.pop_score_bias} geo_score_bias={cfg.geo_score_bias} "
+          f"geo_score_power={cfg.geo_score_power} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
           f"visit_bins={cfg.visit_bins} candidate_context={cfg.candidate_context} "
@@ -1183,6 +1196,7 @@ def train(args):
     settings["category_score_bias"] = cfg.category_score_bias
     settings["pop_score_bias"] = cfg.pop_score_bias
     settings["geo_score_bias"] = cfg.geo_score_bias
+    settings["geo_score_power"] = cfg.geo_score_power
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias
     settings["tsb_gate_mode"] = cfg.tsb_gate_mode
@@ -1252,6 +1266,7 @@ def train(args):
             category_score_bias=cfg.category_score_bias,
             pop_score_bias=cfg.pop_score_bias,
             geo_score_bias=cfg.geo_score_bias,
+            geo_score_power=cfg.geo_score_power,
             visit_bins=cfg.visit_bins,
             visit_bin_edges=None if visit_bin_edges is None else visit_bin_edges.tolist(),
         ),
