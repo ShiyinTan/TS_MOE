@@ -231,7 +231,6 @@ class ModelConfig:
             raise ValueError("tsb_dt_edges must be positive hours")
         if edges != tuple(sorted(edges)):
             raise ValueError("tsb_dt_edges must be sorted ascending")
-        self.tsb_dt_edges = edges
         if self.return_gate == "on":
             if self.revisit_score_bias <= 0:
                 raise ValueError("return_gate on requires --revisit-score-bias > 0")
