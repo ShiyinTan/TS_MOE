@@ -89,6 +89,7 @@ python -m tsmoe ablation-summary --results results
 | **专家内交叉注意力 E** | E0 off / E1 hybrid / E2 full | **`off`（默认）** / `hybrid` / `full` | `--expert-cross-attn` | 否 | `abl_e1_hybrid` / `abl_e2_full` |
 | **E3 稀疏** | 仅 top-k 专家跑 expert attn | **`on`（E≠off 时）** / `off` | `--expert-cross-attn-sparse` | 否 | `abl_e1_e3` |
 | **转移分数偏置** | `λ·log1p(last→cand POI)` 加到候选分数 | **`0`（默认）** / `>0` | `--transition-score-bias`（须因果 on） | 否† | `abl_tsb_*` |
+| **SURD/SMI 偏置门控** | 用 SURD / Specific MI 控制 tsb / attn / 直接分数偏置 | **`off`（默认）** | `--surd-bias-gate` + `--surd-score-bias` / `--tsb-gate-mode` / `--surd-attn-gate` | 否† | `abl_surd_gate_*` |
 | **λ_bpr / margin** | hard-neg BPR + logit margin | **`0`（默认）** | `--lambda-bpr` / `--bpr-margin` | 否 | `abl_bpr_*` |
 
 † `causal_slot` / `user-pref` / `transition-pmi` 扩展在线计数表（**无需** re-prepare）。新特征 **不进** `hard_prior`。文本 emb **未实现**（见 [`candidate-context.md`](candidate-context.md)）。
@@ -117,8 +118,35 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_off --de
 | recommended: A+B | `--candidate-context on --session-summary on` | `abl_ctx_sess` |
 | recommended: A+B+C | `--candidate-context on --session-summary on --user-pref on` | `abl_ctx_sess_upref` |
 | recommended: A+E1 | `--candidate-context on --expert-cross-attn hybrid` | `abl_ctx_e1` |
+| SURD gate `unique_p` residual + weak ssb | `--surd-bias-gate unique_p --tsb-gate-mode residual --surd-score-bias 0.26 --transition-score-bias 2.0` | `abl_surd_gate_up_res` |
+| **LOCKED WIN (TM-34):** A+time + BPR + SURD residual | see §3.2 | `hc_sg_Atime_bpr029_ssb026` |
 
 细节见：候选 [`candidates.md`](candidates.md)；Router [`router-modes.md`](router-modes.md)；STHGCN [`sthgcn-tl-features.md`](sthgcn-tl-features.md)；因果 [`causal-counts.md`](causal-counts.md)；overlays [`candidate-context.md`](candidate-context.md)。
+
+### 3.2 LOCKED WIN — Tokyo vs STHGCN (known_only)
+
+**Recipe name:** `hc_sg_Atime_bpr029_ssb026` · **cache:** `runs/tokyo/cache_abl_tgt_last` · **ep1** · `--checkpoint-metric acc1`
+
+| | Acc@1 / R@1 | R@5 | R@10 | R@20 |
+| --- | ---: | ---: | ---: | ---: |
+| STHGCN | 0.255788 | 0.441345 | 0.511687 | 0.574311 |
+| **TS_MOE** | **0.260274** | **0.441517** | **0.519494** | **0.586934** |
+
+```bash
+python -m tsmoe train \
+  --cache runs/tokyo/cache_abl_tgt_last \
+  --out runs/tokyo/hc_sg_Atime_bpr029_ssb026 \
+  --seed 42 --device cuda \
+  --router-mode hard_prior --dim 256 --heads 8 \
+  --lambda-bpr 0.29 \
+  --transition-score-bias 2.0 \
+  --surd-bias-gate unique_p --tsb-gate-mode residual --surd-score-bias 0.26 \
+  --candidate-context on --candidate-context-time last_slot \
+  --epochs 1 --checkpoint-metric acc1
+# → results/tokyo/hc_sg_Atime_bpr029_ssb026/eval_test/metrics.json  (read known_only)
+```
+
+Judge **`known_only`** Acc@1 / Recall@k (not `all_targets`). Flags default-off; see [`causal-counts.md`](causal-counts.md).
 
 ---
 
@@ -592,6 +620,14 @@ python -m tsmoe ablation-summary --results results
 | `abl_ctx_sess_upref` | `… + --user-pref on` |  |  |  | combo |
 | `abl_ctx_e1` | `--candidate-context on --expert-cross-attn hybrid` |  |  |  | combo |
 
+### 7.9 SURD/SMI bias gates + LOCKED WIN（known_only；`cache_abl_tgt_last`）
+
+Judge **`known_only`** Acc@1 / Recall@k vs STHGCN floors (0.255788 / 0.441345 / 0.511687 / 0.574311). Full recipe §3.2.
+
+| run_name | key flags | Acc@1 | R@5 | R@10 | R@20 | notes |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| `hc_sg_Atime_bpr029_ssb026` | `dim256` `λ_bpr=0.29` `tsb=2` `unique_p` residual `ssb=0.26` A+time `ep1` `acc1` | **0.260274** | **0.441517** | **0.519494** | **0.586934** | **LOCKED WIN** · beats STHGCN Acc+R@1/5/10/20 |
+
 ---
 
 ## 8. 清单
@@ -601,6 +637,7 @@ python -m tsmoe ablation-summary --results results
 - [ ] 负采样填入 §7.2
 - [ ] 因果 on/off + transition 三档填入 §7.3
 - [ ] Overlay A/B/C/D/E 填入 §7.8（§3.1 表）
+- [x] SURD-gate LOCKED WIN 填入 §7.9 / §3.2（`hc_sg_Atime_bpr029_ssb026`）
 - [ ] 候选变体（含 §5a `abl_cand_baseline` / `abl_cand_random`）填入 §7.4
 - [ ] 目标协议填入 §7.5
 - [ ] `--filter-unknown on` 填入 §7.5b（独立 cache；对照 `known_only` 说明）

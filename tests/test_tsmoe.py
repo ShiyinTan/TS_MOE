@@ -45,7 +45,10 @@ from tsmoe.engine import (
 from tsmoe.features import (
     GEO_FEAT_DIM, build_poi_cat_table, delta_geo_features, gather_side_features,
 )
-from tsmoe.model import ModelConfig, TSMoE, TransitionCrossAttention, objective
+from tsmoe.model import (
+    ModelConfig, TSMoE, TransitionCrossAttention, apply_surd_gate,
+    compute_surd_bias_gate, objective,
+)
 from tsmoe.quantizer import BasicSourceQuantizer
 from tsmoe.surd import _self_test
 
@@ -1105,6 +1108,57 @@ class TestCausalCounts(unittest.TestCase):
             dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,
             lambda_prior=.1, use_surd=True, causal_counts=True))
         self.assertEqual(legacy.transition_score_bias, 0.0)
+        self.assertEqual(legacy.surd_bias_gate, "off")
+        self.assertEqual(legacy.surd_score_bias, 0.0)
+        self.assertEqual(legacy.tsb_gate_mode, "off")
+        self.assertEqual(legacy.surd_attn_gate, "off")
+
+    def test_surd_bias_gate_helpers_and_score_bias(self):
+        """SURD/SMI gates: helpers + additive surd_score_bias lifts high-gate cands."""
+        prior = torch.zeros(1, 3, 26)
+        prior[0, 0, 0] = 0.8  # Unique_P high on cand 0
+        prior[0, 1, 0] = 0.1
+        prior[0, 2, 1] = 0.9  # Unique_C only on cand 2
+        conf = torch.tensor([[1.0, 1.0, 0.5]])
+        g = compute_surd_bias_gate("unique_p", prior, conf)
+        self.assertIsNone(compute_surd_bias_gate("off", prior, conf))
+        self.assertAlmostEqual(float(g[0, 0]), 0.8, places=5)
+        self.assertAlmostEqual(float(g[0, 1]), 0.1, places=5)
+        self.assertAlmostEqual(float(g[0, 2]), 0.0, places=5)
+        smi = torch.zeros(1, 3, 15)
+        smi[0, 0, 0] = 4.0
+        smi[0, 0, 1:] = 1.0  # total 4+14=18 → frac P = 4/18
+        smi[0, 1, 0] = 0.0
+        smi[0, 1, 1:] = 1.0
+        g_smi = compute_surd_bias_gate("smi_p", prior, conf, smi)
+        self.assertGreater(float(g_smi[0, 0]), float(g_smi[0, 1]))
+        term = torch.tensor([[2.0, 2.0, 2.0]])
+        torch.testing.assert_close(apply_surd_gate(term, g, "off"), term)
+        torch.testing.assert_close(
+            apply_surd_gate(term, g, "mul")[0, 0], torch.tensor(1.6))
+        torch.testing.assert_close(
+            apply_surd_gate(term, g, "residual")[0, 0], torch.tensor(3.6))
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, surd_score_bias=1.0)  # needs gate
+        # Score path: surd_score_bias alone (no tsb) raises cand0 over cand1.
+        torch.manual_seed(0)
+        data, n_pois, n_cats = self._tiny_split()
+        h, valid, _ = make_batch(data, chronological_indices(data)[:1])
+        cand = torch.arange(min(3, n_pois)).expand(1, -1)
+        n_c = cand.shape[1]
+        prior_b = torch.zeros(1, n_c, 26)
+        prior_b[0, 0, 0] = 0.9
+        if n_c > 1:
+            prior_b[0, 1, 0] = 0.05
+        conf_b = torch.ones(1, n_c)
+        cfg = ModelConfig(
+            8, 2, 1, 0., 2, router_mode="hard_prior", causal_counts=False,
+            surd_bias_gate="unique_p", surd_score_bias=3.0)
+        model = TSMoE(n_pois, n_cats, 4, cfg).eval()
+        with torch.no_grad():
+            s = model(h, valid, cand, prior_b, conf_b)["score"][0]
+        if n_c > 1:
+            self.assertGreater(float(s[0] - s[1]), 1.0)
 
     def test_objective_bpr_and_margin(self):
         scores = torch.tensor([[3.0, 2.5, 0.0]])

@@ -52,7 +52,25 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("transition_pmi", "off")
     cfg.setdefault("expert_cross_attn", "off")
     cfg.setdefault("expert_cross_attn_sparse", "on")
+    # SURD/SMI bias gates default off for legacy checkpoints.
+    cfg.setdefault("surd_bias_gate", "off")
+    cfg.setdefault("surd_score_bias", 0.0)
+    cfg.setdefault("tsb_gate_mode", "off")
+    cfg.setdefault("surd_attn_gate", "off")
     return ModelConfig(**cfg)
+
+
+def needs_surd_specific(cfg):
+    """True when score/attn path needs Specific MI from the SURD table."""
+    mode = getattr(cfg, "surd_bias_gate", "off")
+    return mode in ("smi_p", "smi_pc")
+
+
+def lookup_surd_specific(table, rows, cfg):
+    """Return Specific MI tensor for ``rows`` when the gate mode needs it."""
+    if not needs_surd_specific(cfg):
+        return None
+    return table.specific(rows)
 
 
 _COUNT_WEIGHT_PREFIXES = (
@@ -425,8 +443,10 @@ def all_scores(model, table, encoded, valid, size, chunk, count_ctx=None):
         end = min(size, start + chunk)
         rows = torch.arange(start, end, device=valid.device).expand(len(valid), -1)
         prior, confidence = table(rows)
-        scored = model.score(encoded, valid, rows, prior, confidence,
-                             count_ctx=slice_count_ctx(count_ctx, start, end))
+        scored = model.score(
+            encoded, valid, rows, prior, confidence,
+            count_ctx=slice_count_ctx(count_ctx, start, end),
+            surd_specific=lookup_surd_specific(table, rows, model.cfg))
         parts.append(scored["score"].cpu())
     scores = torch.cat(parts, 1)
     if not torch.isfinite(scores).all():
@@ -453,7 +473,8 @@ def score_pools(model, table, encoded, valid, pools, chunk, count_ctx=None):
         prior, confidence = table(safe)
         scored = model.score(
             encoded, valid, chunk_rows, prior, confidence, candidate_mask=chunk_mask,
-            count_ctx=slice_count_ctx(count_ctx, start, end))
+            count_ctx=slice_count_ctx(count_ctx, start, end),
+            surd_specific=lookup_surd_specific(table, safe, model.cfg))
         part = scored["score"].cpu()
         part = part.masked_fill(~chunk_mask.cpu(), float("-inf"))
         parts.append(part)
@@ -742,6 +763,18 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
             parts.append(f"--transition-score-bias {tsb}")
         if args.get("visit_bins", cfg.get("visit_bins")) is not None:
             parts.append(f"--visit-bins {args.get('visit_bins', cfg.get('visit_bins'))}")
+    gate = args.get("surd_bias_gate", cfg.get("surd_bias_gate", "off"))
+    if gate not in (None, "off"):
+        parts.append(f"--surd-bias-gate {gate}")
+        ssb = args.get("surd_score_bias", cfg.get("surd_score_bias", 0.0))
+        if ssb is not None and float(ssb) != 0.0:
+            parts.append(f"--surd-score-bias {ssb}")
+        tsb_g = args.get("tsb_gate_mode", cfg.get("tsb_gate_mode", "off"))
+        if tsb_g not in (None, "off"):
+            parts.append(f"--tsb-gate-mode {tsb_g}")
+        attn_g = args.get("surd_attn_gate", cfg.get("surd_attn_gate", "off"))
+        if attn_g not in (None, "off"):
+            parts.append(f"--surd-attn-gate {attn_g}")
     for key, flag in (
             ("candidate_context", "--candidate-context"),
             ("candidate_context_time", "--candidate-context-time"),
@@ -1060,6 +1093,14 @@ def train(args):
         raise ValueError("--transition-pmi on requires causal counts")
     if transition_score_bias > 0 and not causal_counts:
         raise ValueError("--transition-score-bias > 0 requires causal counts")
+    surd_bias_gate = getattr(args, "surd_bias_gate", "off")
+    surd_score_bias = float(getattr(args, "surd_score_bias", 0.0) or 0.0)
+    tsb_gate_mode = getattr(args, "tsb_gate_mode", "off")
+    surd_attn_gate = getattr(args, "surd_attn_gate", "off")
+    if surd_attn_gate != "off" and not causal_counts:
+        raise ValueError("--surd-attn-gate ≠ off requires causal counts")
+    if surd_attn_gate != "off" and transition_attn != "bias":
+        raise ValueError("--surd-attn-gate only applies to --transition-attn bias")
     cfg = ModelConfig(args.dim, args.heads, args.layers, args.dropout, args.top_k,
                       args.temperature, args.lambda_prior, use_surd=not args.no_surd,
                       router_mode=args.router_mode, hybrid_lambda=args.hybrid_lambda,
@@ -1072,7 +1113,11 @@ def train(args):
                       user_id_emb=user_id_emb,
                       transition_pmi=transition_pmi,
                       expert_cross_attn=expert_cross_attn,
-                      expert_cross_attn_sparse=expert_cross_attn_sparse)
+                      expert_cross_attn_sparse=expert_cross_attn_sparse,
+                      surd_bias_gate=surd_bias_gate,
+                      surd_score_bias=surd_score_bias,
+                      tsb_gate_mode=tsb_gate_mode,
+                      surd_attn_gate=surd_attn_gate)
     device = select_device(args.device)
     torch.manual_seed(args.seed)
     rng = random.Random(args.seed)
@@ -1083,6 +1128,8 @@ def train(args):
           f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior} "
           f"causal_counts={cfg.causal_counts} transition_attn={cfg.transition_attn} "
           f"transition_score_bias={cfg.transition_score_bias} "
+          f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
+          f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
           f"visit_bins={cfg.visit_bins} candidate_context={cfg.candidate_context} "
           f"session_summary={cfg.session_summary} user_pref={cfg.user_pref} "
           f"user_id_emb={cfg.user_id_emb} n_users={getattr(model, 'n_users', 0)} "
@@ -1107,6 +1154,10 @@ def train(args):
     settings["transition_attn"] = cfg.transition_attn
     settings["transition_lambda"] = cfg.transition_lambda
     settings["transition_score_bias"] = cfg.transition_score_bias
+    settings["surd_bias_gate"] = cfg.surd_bias_gate
+    settings["surd_score_bias"] = cfg.surd_score_bias
+    settings["tsb_gate_mode"] = cfg.tsb_gate_mode
+    settings["surd_attn_gate"] = cfg.surd_attn_gate
     settings["visit_bins"] = cfg.visit_bins
     settings["candidate_context"] = cfg.candidate_context
     settings["candidate_context_time"] = cfg.candidate_context_time
@@ -1221,9 +1272,11 @@ def train(args):
                     online_tables, update=cfg.causal_counts, train_data=data)
                 count_ctx = count_ctx_to_device(count_ctx, device)
             rows, cand_mask = rows.to(device), cand_mask.to(device)
-            prior, confidence = final(rows.masked_fill(~cand_mask, -1))
+            safe_rows = rows.masked_fill(~cand_mask, -1)
+            prior, confidence = final(safe_rows)
             result = model(h, valid, rows, prior, confidence, candidate_mask=cand_mask,
-                           count_ctx=count_ctx)
+                           count_ctx=count_ctx,
+                           surd_specific=lookup_surd_specific(final, safe_rows, cfg))
             loss, parts = objective(
                 result, positive.to(device), args.lambda_surd, args.lambda_balance,
                 float(getattr(args, "lambda_bpr", 0.0) or 0.0),
@@ -1528,7 +1581,8 @@ def explain(args):
             else:
                 detail_ctx = None
     result = model.score(encoded, valid, rows, prior, confidence, details=True,
-                         count_ctx=detail_ctx)
+                         count_ctx=detail_ctx,
+                         surd_specific=lookup_surd_specific(table, rows, model.cfg))
     def get(key):
         return result[key][0, 0].tolist()
     top = [EXPERT_ORDER[j] for j in get("top")]

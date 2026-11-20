@@ -20,6 +20,53 @@ CANDIDATE_CONTEXT_MODES = ("off", "on")
 CANDIDATE_CONTEXT_TIME_MODES = ("off", "last_slot", "causal_slot")
 ON_OFF = ("off", "on")
 EXPERT_CROSS_ATTN_MODES = ("off", "hybrid", "full")
+# Per-candidate gate from SURD routing prior / Specific MI (see docs/causal-counts.md).
+SURD_BIAS_GATE_MODES = ("off", "unique_p", "smi_p", "smi_pc", "u_mass", "confidence")
+# How the gate modulates transition-score-bias / transition-attn λ.
+# off = unchanged; mul = term·g; residual = term·(1+g) (SURD amplifies).
+SURD_GATE_APPLY_MODES = ("off", "mul", "residual")
+
+
+def compute_surd_bias_gate(mode, prior26, confidence, specific15=None):
+    """Nonnegative per-candidate gate from SURD / Specific MI (SUBSET_ORDER).
+
+    ``unique_p`` / ``u_mass`` use routing-prior atoms; ``smi_p`` / ``smi_pc`` use
+    Specific MI (normalized by Σ specific); ``confidence`` uses SURD confidence.
+    Returns ``None`` when ``mode == "off"``.
+    """
+    if mode in (None, "off"):
+        return None
+    if mode not in SURD_BIAS_GATE_MODES:
+        raise ValueError(f"surd_bias_gate must be one of {SURD_BIAS_GATE_MODES}")
+    w = confidence
+    if not torch.is_tensor(w):
+        raise TypeError("confidence must be a tensor")
+    if mode == "confidence":
+        return w.clamp_min(0)
+    if mode == "unique_p":
+        return (w * prior26[..., 0].clamp_min(0)).clamp_min(0)
+    if mode == "u_mass":
+        return (w * prior26[..., :4].sum(-1).clamp_min(0)).clamp_min(0)
+    if mode in ("smi_p", "smi_pc"):
+        if specific15 is None:
+            raise ValueError(f"surd_bias_gate={mode} requires specific_information")
+        # SUBSET_ORDER: P=0, C=1, T=2, L=3, PC=4, …
+        idx = 0 if mode == "smi_p" else 4
+        total = specific15.sum(-1).clamp_min(1e-8)
+        frac = specific15[..., idx].clamp_min(0) / total
+        return (w * frac).clamp_min(0)
+    raise ValueError(f"unknown surd_bias_gate {mode}")
+
+
+def apply_surd_gate(term, gate, mode):
+    """Apply ``off|mul|residual`` gate to a score/attn term (broadcasts on gate)."""
+    if mode in (None, "off") or gate is None:
+        return term
+    if mode == "mul":
+        return term * gate
+    if mode == "residual":
+        return term * (1.0 + gate)
+    raise ValueError(f"surd gate apply mode must be one of {SURD_GATE_APPLY_MODES}")
 
 
 @dataclass(frozen=True)
@@ -57,6 +104,14 @@ class ModelConfig:
     expert_cross_attn: str = "off"
     # When expert_cross_attn ≠ off: only run expert-local attn for router top-k (E3).
     expert_cross_attn_sparse: str = "on"
+    # SURD / Specific-MI controlled bias weights (all default off / 0).
+    surd_bias_gate: str = "off"
+    # Additive score term: λ · gate (needs surd_bias_gate ≠ off when λ > 0).
+    surd_score_bias: float = 0.
+    # How gate modulates transition-score-bias (off keeps WIN-style flat λ).
+    tsb_gate_mode: str = "off"
+    # How gate modulates transition-attn λ in bias mode (broadcast over history).
+    surd_attn_gate: str = "off"
 
     def __post_init__(self):
         if self.dim < 1 or self.heads < 1 or self.dim % self.heads or self.layers < 1:
@@ -90,6 +145,24 @@ class ModelConfig:
                 raise ValueError(f"{name} must be one of {ON_OFF}")
         if self.expert_cross_attn not in EXPERT_CROSS_ATTN_MODES:
             raise ValueError(f"expert_cross_attn must be one of {EXPERT_CROSS_ATTN_MODES}")
+        if self.surd_bias_gate not in SURD_BIAS_GATE_MODES:
+            raise ValueError(f"surd_bias_gate must be one of {SURD_BIAS_GATE_MODES}")
+        if self.surd_score_bias < 0:
+            raise ValueError("surd_score_bias must be nonnegative")
+        if self.tsb_gate_mode not in SURD_GATE_APPLY_MODES:
+            raise ValueError(f"tsb_gate_mode must be one of {SURD_GATE_APPLY_MODES}")
+        if self.surd_attn_gate not in SURD_GATE_APPLY_MODES:
+            raise ValueError(f"surd_attn_gate must be one of {SURD_GATE_APPLY_MODES}")
+        needs_gate = (
+            self.surd_score_bias > 0
+            or self.tsb_gate_mode != "off"
+            or self.surd_attn_gate != "off")
+        if needs_gate and self.surd_bias_gate == "off":
+            raise ValueError(
+                "surd_score_bias / tsb_gate_mode / surd_attn_gate require "
+                "--surd-bias-gate ≠ off")
+        if not self.use_surd and self.surd_bias_gate != "off":
+            raise ValueError("--surd-bias-gate requires SURD (omit --no-surd)")
 
 
 def mlp(inputs, hidden, outputs, dropout=0.):
@@ -150,11 +223,14 @@ class TransitionCrossAttention(nn.Module):
             self.gate_mlp = None
             self.rel_key = None
 
-    def forward(self, query, key, value, key_padding_mask, transition_counts):
+    def forward(self, query, key, value, key_padding_mask, transition_counts,
+                cand_gate=None, gate_apply="off"):
         """
         query: [B, C, D] candidates · key/value: [B, L, D] history
         key_padding_mask: [B, L] True = **ignore** (same as nn.MultiheadAttention)
         transition_counts: [B, C, L] raw counts (≥0) or PMI (any real) when use_pmi
+        cand_gate: optional [B, C] SURD/SMI gate; only scales **bias**-mode λ·φ
+        gate_apply: off | mul | residual (see ``apply_surd_gate``)
         """
         b, c, _ = query.shape
         length = key.shape[1]
@@ -177,7 +253,11 @@ class TransitionCrossAttention(nn.Module):
             v = self.v_proj(value).view(b, length, h, d).transpose(1, 2)
             logits = torch.matmul(q, k.transpose(-2, -1)) * self.scale   # [B,H,C,L]
             if self.mode == "bias":
-                logits = logits + self.transition_lambda * phi[:, None, :, :]
+                bias_term = self.transition_lambda * phi  # [B,C,L]
+                if cand_gate is not None and gate_apply not in (None, "off"):
+                    g = cand_gate.to(bias_term.dtype)[:, :, None]
+                    bias_term = apply_surd_gate(bias_term, g, gate_apply)
+                logits = logits + bias_term[:, None, :, :]
         if key_padding_mask is not None:
             logits = logits.masked_fill(key_padding_mask[:, None, None, :], float("-inf"))
         weights = torch.softmax(logits, dim=-1)
@@ -391,11 +471,12 @@ class TSMoE(nn.Module):
         tok = count_ctx["user_token"].to(device).long().clamp(0, self.n_users + 1)
         return self.user_id_to_full(self.user_emb(tok))  # [B, 5D]
 
-    def _cross_attend(self, encoded, valid, candidate, count_ctx=None):
+    def _cross_attend(self, encoded, valid, candidate, count_ctx=None, cand_gate=None):
         """Per-source candidate←history attention; P/C use transition modes when enabled."""
         pad_mask = ~valid
         use = (count_ctx is not None and self.cfg.causal_counts
                and "poi_transition" in count_ctx and "cat_transition" in count_ctx)
+        attn_gate_mode = getattr(self.cfg, "surd_attn_gate", "off")
         z = []
         for s in SOURCE_ORDER:
             if use and s in self.transition_attn:
@@ -403,8 +484,13 @@ class TSMoE(nn.Module):
                 # Align width to this candidate chunk.
                 c = candidate.shape[1]
                 counts = counts[:, :c, :encoded[s].shape[1]].to(candidate.device)
+                gate = None
+                if (cand_gate is not None and attn_gate_mode not in (None, "off")
+                        and self.cfg.transition_attn == "bias"):
+                    gate = cand_gate[:, :c]
                 z.append(self.transition_attn[s](
-                    candidate, encoded[s], encoded[s], pad_mask, counts))
+                    candidate, encoded[s], encoded[s], pad_mask, counts,
+                    cand_gate=gate, gate_apply=attn_gate_mode))
             else:
                 z.append(self.attention[s](
                     candidate, encoded[s], encoded[s],
@@ -465,10 +551,17 @@ class TSMoE(nn.Module):
         return [SOURCE_ORDER[i] for i in sorted(needed)]
 
     def score(self, encoded, valid, rows, prior26, confidence, *, candidate_mask=None,
-              details=False, count_ctx=None):
+              details=False, count_ctx=None, surd_specific=None):
         mask = torch.ones_like(rows, dtype=torch.bool) if candidate_mask is None else candidate_mask
         if mask.shape != rows.shape:
             raise ValueError("candidate mask and candidate rows must have identical shapes")
+        prior, w = prior26.detach(), confidence.detach()
+        if not self.cfg.use_surd:
+            w = torch.zeros_like(w)
+        # Optional SURD/SMI gate (default off — flat transition / no additive SURD score).
+        gate_mode = getattr(self.cfg, "surd_bias_gate", "off")
+        smi = None if surd_specific is None else surd_specific.detach()
+        cand_gate = compute_surd_bias_gate(gate_mode, prior, w, smi)
         candidate, typed = self._build_candidate_vector(rows, mask, count_ctx)
         eca = self.cfg.expert_cross_attn
         # Shared cross-attn (E0 / E1). E2 (full) skips shared attn for MoE; still builds base z.
@@ -477,7 +570,7 @@ class TSMoE(nn.Module):
             local = self._expert_local_attend(encoded, valid, typed)
             z = [local[s] for s in SOURCE_ORDER]
         else:
-            z = self._cross_attend(encoded, valid, candidate, count_ctx)
+            z = self._cross_attend(encoded, valid, candidate, count_ctx, cand_gate=cand_gate)
         full = torch.cat([*z, candidate], -1)
         # B/C/user_id addons → base/context only (never hard_prior logits).
         sess = self._session_addon(count_ctx, rows.shape[0], candidate.device)
@@ -490,9 +583,6 @@ class TSMoE(nn.Module):
         if uid is not None:
             full = full + uid[:, None, :]
         base = self.base(full).squeeze(-1)
-        prior, w = prior26.detach(), confidence.detach()
-        if not self.cfg.use_surd:
-            w = torch.zeros_like(w)
         # U/S mass over the 15 experts (atoms 0..3 Unique, 15..25 Synergy); R is gate context only.
         mass = torch.cat((prior[..., :4], prior[..., 15:]), -1)
         alpha, rho = mass.sum(-1), prior[..., 4:15].sum(-1)
@@ -546,11 +636,18 @@ class TSMoE(nn.Module):
             tr = count_ctx["poi_transition"][:, :rows.shape[1], :valid.shape[1]].to(score.device)
             last = valid.long().sum(-1).clamp_min(1) - 1  # [B]
             last_tr = tr.gather(2, last.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
-            score = score + tb * torch.log1p(last_tr.clamp_min(0))
+            tsb_term = tb * torch.log1p(last_tr.clamp_min(0))
+            tsb_term = apply_surd_gate(
+                tsb_term, cand_gate, getattr(self.cfg, "tsb_gate_mode", "off"))
+            score = score + tsb_term
+        # Direct SURD/SMI score contribution (default λ=0).
+        ssb = float(getattr(self.cfg, "surd_score_bias", 0.0) or 0.0)
+        if ssb > 0 and cand_gate is not None:
+            score = score + ssb * cand_gate
         score = score.masked_fill(~mask, -torch.inf)
         result = dict(score=score, log_pi=log_pi, top=top, weights=weights, gate_logits=gate_logits,
                       gate=gate, mass=mass, alpha=alpha, confidence=w, mask=mask,
-                      router_mode=mode)
+                      router_mode=mode, surd_gate=cand_gate)
         if details:
             result.update(base=base, learned=learned, bias=bias, logits=logits, projected=projected,
                           contributions=gate[..., None] * weights * projected,
@@ -559,8 +656,9 @@ class TSMoE(nn.Module):
 
     def forward(self, history, valid, rows, prior, confidence, **kwargs):
         count_ctx = kwargs.pop("count_ctx", None)
+        surd_specific = kwargs.pop("surd_specific", None)
         return self.score(self.encode(history, valid, count_ctx), valid, rows, prior, confidence,
-                          count_ctx=count_ctx, **kwargs)
+                          count_ctx=count_ctx, surd_specific=surd_specific, **kwargs)
 
 
 def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0.,

@@ -274,8 +274,11 @@ class FrozenSURDTable(nn.Module):
         V = len(self.poi_ids)
         if stats["routing_prior"].shape != (V, 26) or stats["confidence"].shape != (V,):
             raise ValueError("invalid prior/confidence shape")
+        if stats["specific_information"].shape != (V, 15):
+            raise ValueError("invalid specific_information shape")
         for name in ("routing_prior", "confidence", "global_prior", "raw_surd",
-                     "normalized_surd", "total_information", "target_count"):
+                     "normalized_surd", "total_information", "target_count",
+                     "specific_information", "global_mi"):
             self.register_buffer(name, stats[name].detach().to(dtype=dtype).clone())
         for name in ("observed", "has_information", "near_tie"):
             self.register_buffer(name, stats[name].detach().to(torch.bool).clone())
@@ -285,7 +288,7 @@ class FrozenSURDTable(nn.Module):
         stats = torch.load(Path(path), map_location="cpu", weights_only=True)
         return cls(stats, dtype=dtype)
 
-    def forward(self, candidate_rows):
+    def _safe_rows(self, candidate_rows):
         if candidate_rows.dtype not in INTEGER_DTYPES:
             raise TypeError("candidate_rows must be integer catalog row indices")
         rows = candidate_rows.to(device=self.routing_prior.device, dtype=torch.long)
@@ -293,11 +296,21 @@ class FrozenSURDTable(nn.Module):
             raise IndexError("only -1 or valid catalog rows are allowed")
         unknown = rows == -1
         safe_rows = rows.clamp_min(0)  # -1 must never silently index the last row.
+        return rows, unknown, safe_rows
+
+    def forward(self, candidate_rows):
+        rows, unknown, safe_rows = self._safe_rows(candidate_rows)
         prior = self.routing_prior[safe_rows]
         weight = self.confidence[safe_rows]
         prior = torch.where(unknown[..., None], self.global_prior, prior)
         weight = torch.where(unknown, torch.zeros_like(weight), weight)
         return prior, weight
+
+    def specific(self, candidate_rows):
+        """Per-candidate 15-D Specific MI (SUBSET_ORDER); unknown → global_mi."""
+        _, unknown, safe_rows = self._safe_rows(candidate_rows)
+        smi = self.specific_information[safe_rows]
+        return torch.where(unknown[..., None], self.global_mi, smi)
 
 
 def gather_fold_priors(tables, fold_ids, candidate_rows):

@@ -60,6 +60,26 @@ Optional **Acc@1** prior (default **0 = off**), independent of `--transition-att
 
 Needs causal counts on. Tokyo hillclimb WIN used `--transition-score-bias 2.0` with `dim 256`, `--lambda-bpr 0.25`, `--epochs 1`, `--checkpoint-metric acc1` on a last/last multi-source cache.
 
+## SURD / Specific-MI bias gates (default **off**)
+
+Let the frozen per-POI SURD table (or its Specific MI) **control** how strongly transition / score biases fire per candidate. No re-prepare.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--surd-bias-gate` | `off` | Gate feature \(g_c\): `unique_p` / `smi_p` / `smi_pc` / `u_mass` / `confidence` |
+| `--surd-score-bias` | `0` | Add \(\lambda\cdot g_c\) to ranking scores (SURD contributes directly) |
+| `--tsb-gate-mode` | `off` | How \(g_c\) modulates `--transition-score-bias`: `mul` = term·g; `residual` = term·(1+g) |
+| `--surd-attn-gate` | `off` | Same apply modes for `--transition-attn bias` λ·φ (broadcast over history) |
+
+Gate definitions (all × SURD confidence except raw `confidence`):
+
+- **`unique_p`** — routing-prior Unique_P atom
+- **`u_mass`** — sum of Unique_P/C/T/L atoms
+- **`smi_p` / `smi_pc`** — Specific MI for subset P / PC, normalized by Σ specific
+- **`confidence`** — SURD confidence only
+
+`residual` keeps the flat WIN-style term and **amplifies** high-SURD candidates; `mul` **focuses** the bias on high-SURD candidates (can weaken low-SURD ones).
+
 ## Flags
 
 | Flag | Default | Meaning |
@@ -68,6 +88,10 @@ Needs causal counts on. Tokyo hillclimb WIN used `--transition-score-bias 2.0` w
 | `--transition-attn {bias,gate,rel_key}` | `bias` | Transition injection mode |
 | `--transition-lambda` | `1.0` | Bias scale for attn logits |
 | `--transition-score-bias` | `0.0` | Add `λ·log1p(last→cand POI transition)` to ranking scores (0 = off) |
+| `--surd-bias-gate` | `off` | SURD/SMI gate feature for score/attn biases |
+| `--surd-score-bias` | `0.0` | Add `λ·gate` to scores (needs gate ≠ off) |
+| `--tsb-gate-mode` | `off` | `off` / `mul` / `residual` on transition-score-bias |
+| `--surd-attn-gate` | `off` | `off` / `mul` / `residual` on transition-attn bias λ |
 | `--visit-bins` | `10` | Equal-frequency bins for T/L visit embedding |
 
 Stored in the checkpoint `config` (+ `count_tables` / `visit_bin_edges` when enabled) so `evaluate` / `explain` / `recommend` match training.
@@ -90,6 +114,16 @@ python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_last \
   --out runs/tokyo/hc_str_tsb20 --dim 256 --heads 8 \
   --lambda-bpr 0.25 --transition-score-bias 2.0 \
   --epochs 1 --checkpoint-metric acc1 --device cuda
+
+# LOCKED WIN (TM-34): beats STHGCN Acc@1 + R@1/5/10/20 on known_only
+# Acc 0.260274 · R@5 0.441517 · R@10 0.519494 · R@20 0.586934
+python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_last \
+  --out runs/tokyo/hc_sg_Atime_bpr029_ssb026 --seed 42 --device cuda \
+  --router-mode hard_prior --dim 256 --heads 8 \
+  --lambda-bpr 0.29 --transition-score-bias 2.0 \
+  --surd-bias-gate unique_p --tsb-gate-mode residual --surd-score-bias 0.26 \
+  --candidate-context on --candidate-context-time last_slot \
+  --epochs 1 --checkpoint-metric acc1
 
 # Ablate the whole module (shuffled minibatches restored)
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_nocounts \

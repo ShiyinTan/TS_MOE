@@ -10,6 +10,7 @@ from .counts import DEFAULT_VISIT_BINS, TRANSITION_ATTN_MODES
 from .engine import evaluate_cli, explain, recommend, train
 from .model import (
     CANDIDATE_CONTEXT_MODES, CANDIDATE_CONTEXT_TIME_MODES, EXPERT_CROSS_ATTN_MODES, ON_OFF,
+    SURD_BIAS_GATE_MODES, SURD_GATE_APPLY_MODES,
 )
 from .prepare import prepare
 from .inspect import inspect_prior
@@ -166,6 +167,23 @@ def main():
         help="add λ·log1p(last→cand POI transition) to ranking scores "
              "(default 0 = off). Light graph Acc@1 prior; needs causal counts")
     t.add_argument(
+        "--surd-bias-gate", choices=SURD_BIAS_GATE_MODES, default="off",
+        help="per-candidate gate from SURD / Specific MI controlling score/attn "
+             "biases: off (default); unique_p; smi_p; smi_pc; u_mass; confidence. "
+             "See docs/causal-counts.md. No re-prepare.")
+    t.add_argument(
+        "--surd-score-bias", type=float, default=0.0,
+        help="add λ·gate to ranking scores so SURD/SMI contributes directly "
+             "(default 0 = off). Requires --surd-bias-gate ≠ off")
+    t.add_argument(
+        "--tsb-gate-mode", choices=SURD_GATE_APPLY_MODES, default="off",
+        help="how --surd-bias-gate modulates transition-score-bias: off (default, "
+             "flat λ); mul = term·g; residual = term·(1+g). Needs gate ≠ off")
+    t.add_argument(
+        "--surd-attn-gate", choices=SURD_GATE_APPLY_MODES, default="off",
+        help="how --surd-bias-gate modulates transition-attn λ (bias mode only): "
+             "off (default); mul; residual. Needs gate ≠ off + causal counts")
+    t.add_argument(
         "--visit-bins", type=positive, default=DEFAULT_VISIT_BINS,
         help=f"equal-frequency bins of user cumulative visit count for T/L "
              f"(default {DEFAULT_VISIT_BINS}; fit on train stream, freeze for val/test)")
@@ -275,10 +293,23 @@ def main():
                                         args.lambda_balance, args.weight_decay) < 0
                                     or min(args.lr, args.grad_clip) <= 0
                                     or getattr(args, "transition_lambda", 1.0) < 0
-                                    or getattr(args, "transition_score_bias", 0.0) < 0):
+                                    or getattr(args, "transition_score_bias", 0.0) < 0
+                                    or getattr(args, "surd_score_bias", 0.0) < 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
-                   "transition-lambda / transition-score-bias must be nonnegative")
+                   "transition-lambda / transition-score-bias / surd-score-bias "
+                   "must be nonnegative")
+    if args.command == "train":
+        gate = getattr(args, "surd_bias_gate", "off")
+        needs_gate = (
+            float(getattr(args, "surd_score_bias", 0.0) or 0.0) > 0
+            or getattr(args, "tsb_gate_mode", "off") != "off"
+            or getattr(args, "surd_attn_gate", "off") != "off")
+        if needs_gate and gate == "off":
+            root.error("--surd-score-bias / --tsb-gate-mode / --surd-attn-gate "
+                       "require --surd-bias-gate ≠ off")
+        if gate != "off" and getattr(args, "no_surd", False):
+            root.error("--surd-bias-gate requires SURD (omit --no-surd)")
     if hasattr(args, "threads"):
         torch.set_num_threads(args.threads)
     try:
