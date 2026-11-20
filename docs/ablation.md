@@ -88,6 +88,8 @@ python -m tsmoe ablation-summary --results results
 | **转移 PMI D** | 转移 attn 用 PMI 替代 raw count | **`off`（默认）** / `on` | `--transition-pmi`（须因果 on） | 否† | `abl_tr_pmi` |
 | **专家内交叉注意力 E** | E0 off / E1 hybrid / E2 full | **`off`（默认）** / `hybrid` / `full` | `--expert-cross-attn` | 否 | `abl_e1_hybrid` / `abl_e2_full` |
 | **E3 稀疏** | 仅 top-k 专家跑 expert attn | **`on`（E≠off 时）** / `off` | `--expert-cross-attn-sparse` | 否 | `abl_e1_e3` |
+| **转移分数偏置** | `λ·log1p(last→cand POI)` 加到候选分数 | **`0`（默认）** / `>0` | `--transition-score-bias`（须因果 on） | 否† | `abl_tsb_*` |
+| **λ_bpr / margin** | hard-neg BPR + logit margin | **`0`（默认）** | `--lambda-bpr` / `--bpr-margin` | 否 | `abl_bpr_*` |
 
 † `causal_slot` / `user-pref` / `transition-pmi` 扩展在线计数表（**无需** re-prepare）。新特征 **不进** `hard_prior`。文本 emb **未实现**（见 [`candidate-context.md`](candidate-context.md)）。
 

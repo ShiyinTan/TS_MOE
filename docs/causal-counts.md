@@ -50,13 +50,24 @@ Only **P** and **C** sources use transition-aware cross-attn (candidate ← hist
 
 `φ(count) = log1p(count)`. Scale for bias mode: `--transition-lambda` (default `1.0`).
 
+## Score-level transition prior (`--transition-score-bias`)
+
+Optional **Acc@1** prior (default **0 = off**), independent of `--transition-attn`:
+
+\[
+\text{score}_c \mathrel{+}= \lambda \cdot \log(1 + \text{count}(\text{last history POI} \to c))
+\]
+
+Needs causal counts on. Tokyo hillclimb WIN used `--transition-score-bias 2.0` with `dim 256`, `--lambda-bpr 0.25`, `--epochs 1`, `--checkpoint-metric acc1` on a last/last multi-source cache.
+
 ## Flags
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--causal-counts` / `--no-causal-counts` | **on** | Enable / disable the whole module |
 | `--transition-attn {bias,gate,rel_key}` | `bias` | Transition injection mode |
-| `--transition-lambda` | `1.0` | Bias scale |
+| `--transition-lambda` | `1.0` | Bias scale for attn logits |
+| `--transition-score-bias` | `0.0` | Add `λ·log1p(last→cand POI transition)` to ranking scores (0 = off) |
 | `--visit-bins` | `10` | Equal-frequency bins for T/L visit embedding |
 
 Stored in the checkpoint `config` (+ `count_tables` / `visit_bin_edges` when enabled) so `evaluate` / `explain` / `recommend` match training.
@@ -73,6 +84,12 @@ python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_gate \
   --transition-attn gate --epochs 1 --dim 16 --heads 2 --layers 1
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_rel \
   --transition-attn rel_key --epochs 1 --dim 16 --heads 2 --layers 1
+
+# Score-level last→cand transition prior (Acc@1 hillclimb)
+python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_last \
+  --out runs/tokyo/hc_str_tsb20 --dim 256 --heads 8 \
+  --lambda-bpr 0.25 --transition-score-bias 2.0 \
+  --epochs 1 --checkpoint-metric acc1 --device cuda
 
 # Ablate the whole module (shuffled minibatches restored)
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_nocounts \
