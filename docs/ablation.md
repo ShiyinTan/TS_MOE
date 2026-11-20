@@ -89,7 +89,10 @@ python -m tsmoe ablation-summary --results results
 | **专家内交叉注意力 E** | E0 off / E1 hybrid / E2 full | **`off`（默认）** / `hybrid` / `full` | `--expert-cross-attn` | 否 | `abl_e1_hybrid` / `abl_e2_full` |
 | **E3 稀疏** | 仅 top-k 专家跑 expert attn | **`on`（E≠off 时）** / `off` | `--expert-cross-attn-sparse` | 否 | `abl_e1_e3` |
 | **转移分数偏置** | `λ·log1p(last→cand POI)` 加到候选分数 | **`0`（默认）** / `>0` | `--transition-score-bias`（须因果 on） | 否† | `abl_tsb_*` |
-| **SURD/SMI 偏置门控** | 用 SURD / Specific MI 控制 tsb / attn / 直接分数偏置 | **`off`（默认）** | `--surd-bias-gate` + `--surd-score-bias` / `--tsb-gate-mode` / `--surd-attn-gate` | 否† | `abl_surd_gate_*` |
+| **类别→POI 分数偏置** | `λ·log1p(last_cat→cand_poi)` 超图先验 | **`0`（默认）** / `>0` | `--category-score-bias`（须因果 on） | 否† | `abl_csb_*` |
+| **热门分数偏置** | `λ·log1p(global visits)` | **`0`（默认）** / `>0` | `--pop-score-bias`（须因果 on） | 否† | `abl_psb_*` |
+| **距离分数偏置** | `−λ·log1p(haversine km)` 近者优先 | **`0`（默认）** / `>0` | `--geo-score-bias`（须 A on） | 否 | `abl_gsb_*` |
+| **SURD/SMI 偏置门控** | 用 SURD / Specific MI 控制 tsb / csb / attn / 直接分数偏置 | **`off`（默认）** | `--surd-bias-gate` + `--surd-score-bias` / `--tsb-gate-mode` / `--surd-attn-gate` | 否† | `abl_surd_gate_*` |
 | **λ_bpr / margin** | hard-neg BPR + logit margin | **`0`（默认）** | `--lambda-bpr` / `--bpr-margin` | 否 | `abl_bpr_*` |
 
 † `causal_slot` / `user-pref` / `transition-pmi` 扩展在线计数表（**无需** re-prepare）。新特征 **不进** `hard_prior`。文本 emb **未实现**（见 [`candidate-context.md`](candidate-context.md)）。
@@ -119,6 +122,9 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_off --de
 | recommended: A+B+C | `--candidate-context on --session-summary on --user-pref on` | `abl_ctx_sess_upref` |
 | recommended: A+E1 | `--candidate-context on --expert-cross-attn hybrid` | `abl_ctx_e1` |
 | SURD gate `unique_p` residual + weak ssb | `--surd-bias-gate unique_p --tsb-gate-mode residual --surd-score-bias 0.26 --transition-score-bias 2.0` | `abl_surd_gate_up_res` |
+| cat→poi score bias | `--category-score-bias 0.5` | `abl_csb_05` |
+| pop score bias | `--pop-score-bias 0.3` | `abl_psb_03` |
+| geo score bias (needs A) | `--candidate-context on --geo-score-bias 0.5` | `abl_gsb_05` |
 | **LOCKED WIN (TM-34):** A+time + BPR + SURD residual | see §3.2 | `hc_sg_Atime_bpr029_ssb026` |
 
 细节见：候选 [`candidates.md`](candidates.md)；Router [`router-modes.md`](router-modes.md)；STHGCN [`sthgcn-tl-features.md`](sthgcn-tl-features.md)；因果 [`causal-counts.md`](causal-counts.md)；overlays [`candidate-context.md`](candidate-context.md)。

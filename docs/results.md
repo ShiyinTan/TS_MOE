@@ -93,6 +93,9 @@ Optional Acc@1 ranking auxiliaries (see also [`causal-counts.md`](causal-counts.
 | `--lambda-bpr` | Hard-neg BPR weight `softplus(-(s_pos-max_neg-margin))` (default 0) |
 | `--bpr-margin` | Logit margin inside BPR (default 0; only if λ_bpr > 0) |
 | `--transition-score-bias` | `λ·log1p(last→cand POI transition)` added to scores (default 0) |
+| `--category-score-bias` | `λ·log1p(last_cat→cand_poi)` hypergraph score prior (default 0) |
+| `--pop-score-bias` | `λ·log1p(global POI visits)` popularity score prior (default 0) |
+| `--geo-score-bias` | `−λ·log1p(haversine km)` proximity prior; needs `--candidate-context on` (default 0) |
 | `--surd-bias-gate` / `--surd-score-bias` / `--tsb-gate-mode` / `--surd-attn-gate` | SURD/SMI-controlled bias weights (all default off / 0; see [`causal-counts.md`](causal-counts.md)) |
 
 **LOCKED WIN (Tokyo known_only vs STHGCN):** `hc_sg_Atime_bpr029_ssb026` — Acc@1 **0.260274**, R@5 **0.441517**, R@10 **0.519494**, R@20 **0.586934**. Full flags in [`ablation.md`](ablation.md) §3.2 / [`causal-counts.md`](causal-counts.md).

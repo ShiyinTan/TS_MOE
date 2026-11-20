@@ -60,6 +60,18 @@ Optional **Acc@1** prior (default **0 = off**), independent of `--transition-att
 
 Needs causal counts on. Tokyo hillclimb WIN used `--transition-score-bias 2.0` with `dim 256`, `--lambda-bpr 0.25`, `--epochs 1`, `--checkpoint-metric acc1` on a last/last multi-source cache.
 
+## Extra score-level graph / feature priors (default **0 = off**)
+
+All are Acc@1 score additives on top of the model; **no re-prepare**. Defaults keep the TM-34 WIN path unchanged.
+
+| Flag | Formula (added to score) | Needs |
+| --- | --- | --- |
+| `--category-score-bias` | \(\lambda\cdot\log(1+\text{count}(\text{last cat}\to c))\) via `cat_transition` | causal on |
+| `--pop-score-bias` | \(\lambda\cdot\log(1+\text{global visits}(c))\) from causal cand feats | causal on |
+| `--geo-score-bias` | \(-\lambda\cdot\log(1+\text{haversine km})\) (nearer ranks higher) | `--candidate-context on` |
+
+`--tsb-gate-mode` also modulates `--category-score-bias` when a SURD gate is active (same `mul` / `residual` rules as tsb).
+
 ## SURD / Specific-MI bias gates (default **off**)
 
 Let the frozen per-POI SURD table (or its Specific MI) **control** how strongly transition / score biases fire per candidate. No re-prepare.
@@ -68,7 +80,7 @@ Let the frozen per-POI SURD table (or its Specific MI) **control** how strongly 
 | --- | --- | --- |
 | `--surd-bias-gate` | `off` | Gate feature \(g_c\): `unique_p` / `smi_p` / `smi_pc` / `u_mass` / `confidence` |
 | `--surd-score-bias` | `0` | Add \(\lambda\cdot g_c\) to ranking scores (SURD contributes directly) |
-| `--tsb-gate-mode` | `off` | How \(g_c\) modulates `--transition-score-bias`: `mul` = term·g; `residual` = term·(1+g) |
+| `--tsb-gate-mode` | `off` | How \(g_c\) modulates `--transition-score-bias` / `--category-score-bias`: `mul` = term·g; `residual` = term·(1+g) |
 | `--surd-attn-gate` | `off` | Same apply modes for `--transition-attn bias` λ·φ (broadcast over history) |
 
 Gate definitions (all × SURD confidence except raw `confidence`):
@@ -88,9 +100,12 @@ Gate definitions (all × SURD confidence except raw `confidence`):
 | `--transition-attn {bias,gate,rel_key}` | `bias` | Transition injection mode |
 | `--transition-lambda` | `1.0` | Bias scale for attn logits |
 | `--transition-score-bias` | `0.0` | Add `λ·log1p(last→cand POI transition)` to ranking scores (0 = off) |
+| `--category-score-bias` | `0.0` | Add `λ·log1p(last_cat→cand_poi)` (hypergraph; 0 = off) |
+| `--pop-score-bias` | `0.0` | Add `λ·log1p(global POI visits)` (0 = off) |
+| `--geo-score-bias` | `0.0` | Subtract `λ·log1p(haversine km)` (needs candidate-context; 0 = off) |
 | `--surd-bias-gate` | `off` | SURD/SMI gate feature for score/attn biases |
 | `--surd-score-bias` | `0.0` | Add `λ·gate` to scores (needs gate ≠ off) |
-| `--tsb-gate-mode` | `off` | `off` / `mul` / `residual` on transition-score-bias |
+| `--tsb-gate-mode` | `off` | `off` / `mul` / `residual` on transition- / category-score-bias |
 | `--surd-attn-gate` | `off` | `off` / `mul` / `residual` on transition-attn bias λ |
 | `--visit-bins` | `10` | Equal-frequency bins for T/L visit embedding |
 

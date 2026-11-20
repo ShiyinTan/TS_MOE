@@ -92,6 +92,13 @@ class ModelConfig:
     transition_lambda: float = 1.
     # Additive Acc@1 prior: λ·log1p(last→cand POI transition) on scores (0 = off).
     transition_score_bias: float = 0.
+    # Hypergraph-style Acc@1 prior: λ·log1p(last_cat→cand_poi) via cat_transition (0 = off).
+    category_score_bias: float = 0.
+    # Popularity Acc@1 prior: λ·log1p(global POI visits) from causal cand feats (0 = off).
+    pop_score_bias: float = 0.
+    # Proximity Acc@1 prior: −λ·log1p(haversine km) when delta_geo is present (0 = off).
+    # Needs --candidate-context on (WIN already sets it).
+    geo_score_bias: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
     # Optional overlays (all default off — Acc@1 path unchanged unless set).
     candidate_context: str = "off"
@@ -108,7 +115,7 @@ class ModelConfig:
     surd_bias_gate: str = "off"
     # Additive score term: λ · gate (needs surd_bias_gate ≠ off when λ > 0).
     surd_score_bias: float = 0.
-    # How gate modulates transition-score-bias (off keeps WIN-style flat λ).
+    # How gate modulates transition-score-bias / category-score-bias (off = flat λ).
     tsb_gate_mode: str = "off"
     # How gate modulates transition-attn λ in bias mode (broadcast over history).
     surd_attn_gate: str = "off"
@@ -128,6 +135,14 @@ class ModelConfig:
             raise ValueError("transition_lambda must be nonnegative")
         if self.transition_score_bias < 0:
             raise ValueError("transition_score_bias must be nonnegative")
+        if self.category_score_bias < 0:
+            raise ValueError("category_score_bias must be nonnegative")
+        if self.pop_score_bias < 0:
+            raise ValueError("pop_score_bias must be nonnegative")
+        if self.geo_score_bias < 0:
+            raise ValueError("geo_score_bias must be nonnegative")
+        if self.geo_score_bias > 0 and self.candidate_context == "off":
+            raise ValueError("geo_score_bias > 0 requires --candidate-context on")
         if self.visit_bins < 1:
             raise ValueError("visit_bins must be positive")
         if self.candidate_context not in CANDIDATE_CONTEXT_MODES:
@@ -540,6 +555,14 @@ class TSMoE(nn.Module):
         return score.reshape_as(mask) + self.moe_head.bias, (
             projected_scores.reshape_as(weights) if details else None)
 
+    @staticmethod
+    def _last_hop_log1p(transition, rows, valid, device):
+        """Gather last-history column of [B,M,L] transition tensor → λ·log1p scale input."""
+        tr = transition[:, :rows.shape[1], :valid.shape[1]].to(device)
+        last = valid.long().sum(-1).clamp_min(1) - 1  # [B]
+        last_tr = tr.gather(2, last.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
+        return torch.log1p(last_tr.clamp_min(0))
+
     def _sources_for_topk(self, top):
         """Source indices needed by the selected top-k experts (for E3 sparse)."""
         needed = set()
@@ -629,17 +652,34 @@ class TSMoE(nn.Module):
         residual, projected = self.dispatch(
             z, top, weights, mask, details, expert_z=expert_z_list)
         score = base + gate * residual
+        gate_mode = getattr(self.cfg, "tsb_gate_mode", "off")
         # Light graph prior: last-history → candidate POI transition count → Acc@1 bias.
         tb = float(self.cfg.transition_score_bias or 0.0)
         if (tb > 0 and count_ctx is not None and self.cfg.causal_counts
                 and "poi_transition" in count_ctx):
-            tr = count_ctx["poi_transition"][:, :rows.shape[1], :valid.shape[1]].to(score.device)
-            last = valid.long().sum(-1).clamp_min(1) - 1  # [B]
-            last_tr = tr.gather(2, last.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
-            tsb_term = tb * torch.log1p(last_tr.clamp_min(0))
-            tsb_term = apply_surd_gate(
-                tsb_term, cand_gate, getattr(self.cfg, "tsb_gate_mode", "off"))
+            tsb_term = tb * self._last_hop_log1p(
+                count_ctx["poi_transition"], rows, valid, score.device)
+            tsb_term = apply_surd_gate(tsb_term, cand_gate, gate_mode)
             score = score + tsb_term
+        # Hypergraph prior: last category → candidate POI (cat_transition).
+        csb = float(getattr(self.cfg, "category_score_bias", 0.0) or 0.0)
+        if (csb > 0 and count_ctx is not None and self.cfg.causal_counts
+                and "cat_transition" in count_ctx):
+            csb_term = csb * self._last_hop_log1p(
+                count_ctx["cat_transition"], rows, valid, score.device)
+            csb_term = apply_surd_gate(csb_term, cand_gate, gate_mode)
+            score = score + csb_term
+        # Popularity prior: causal global POI log1p visits (cand_poi_feat dim 1).
+        psb = float(getattr(self.cfg, "pop_score_bias", 0.0) or 0.0)
+        if (psb > 0 and count_ctx is not None and self.cfg.causal_counts
+                and "cand_poi_feat" in count_ctx):
+            pop = count_ctx["cand_poi_feat"][:, :rows.shape[1], 1].to(score.device)
+            score = score + psb * pop.clamp_min(0)
+        # Proximity prior: closer candidates score higher (−λ · log1p km).
+        gsb = float(getattr(self.cfg, "geo_score_bias", 0.0) or 0.0)
+        if gsb > 0 and count_ctx is not None and "delta_geo" in count_ctx:
+            hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device)
+            score = score - gsb * hav.clamp_min(0)
         # Direct SURD/SMI score contribution (default λ=0).
         ssb = float(getattr(self.cfg, "surd_score_bias", 0.0) or 0.0)
         if ssb > 0 and cand_gate is not None:
