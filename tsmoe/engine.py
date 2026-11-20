@@ -1285,6 +1285,9 @@ def train(args):
                 "--explore-score-bias > 0")
     if tsb_decay_hours < 0:
         raise ValueError("--tsb-decay-hours must be nonnegative")
+    ce_focal_gamma = float(getattr(args, "ce_focal_gamma", 0.0) or 0.0)
+    if ce_focal_gamma < 0:
+        raise ValueError("--ce-focal-gamma must be nonnegative")
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
     # Optional overlays (default off).
     candidate_context = getattr(args, "candidate_context", "off")
@@ -1598,7 +1601,8 @@ def train(args):
             loss, parts = objective(
                 result, positive.to(device), args.lambda_surd, args.lambda_balance,
                 float(getattr(args, "lambda_bpr", 0.0) or 0.0),
-                float(getattr(args, "bpr_margin", 0.0) or 0.0))
+                float(getattr(args, "bpr_margin", 0.0) or 0.0),
+                float(getattr(args, "ce_focal_gamma", 0.0) or 0.0))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)

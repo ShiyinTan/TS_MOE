@@ -1414,6 +1414,33 @@ class TestCausalCounts(unittest.TestCase):
         self.assertGreater(float(bpr), 0.0)
         self.assertGreater(float(bpr_m), float(bpr))
 
+    def test_objective_focal_ce_downweights_easy(self):
+        # Easy: high logit on label 0 → p_t≈1 → focal≈0 when γ>0.
+        easy = dict(
+            score=torch.tensor([[10.0, -10.0, -10.0]]),
+            mask=torch.tensor([[True, True, True]]),
+            confidence=torch.ones(1, 3),
+            log_pi=torch.zeros(1, 3, 15), mass=torch.zeros(1, 3, 15),
+            gate=torch.ones(1, 3), gate_logits=torch.zeros(1, 3),
+            alpha=torch.zeros(1, 3))
+        hard = dict(
+            score=torch.tensor([[0.1, 0.0, -1.0]]),
+            mask=torch.tensor([[True, True, True]]),
+            confidence=torch.ones(1, 3),
+            log_pi=torch.zeros(1, 3, 15), mass=torch.zeros(1, 3, 15),
+            gate=torch.ones(1, 3), gate_logits=torch.zeros(1, 3),
+            alpha=torch.zeros(1, 3))
+        labels = torch.tensor([0])
+        _, (rec_plain_e, *_) = objective(easy, labels, ce_focal_gamma=0.)
+        _, (rec_focal_e, *_) = objective(easy, labels, ce_focal_gamma=2.)
+        _, (rec_plain_h, *_) = objective(hard, labels, ce_focal_gamma=0.)
+        _, (rec_focal_h, *_) = objective(hard, labels, ce_focal_gamma=2.)
+        self.assertLess(float(rec_focal_e), float(rec_plain_e) * 0.05)
+        # Hard example retains more of its CE under focal than the easy one.
+        self.assertGreater(
+            float(rec_focal_h) / max(float(rec_plain_h), 1e-8),
+            float(rec_focal_e) / max(float(rec_plain_e), 1e-8))
+
     def test_legacy_checkpoint_disables_causal_counts(self):
         legacy = model_config_from_checkpoint(dict(
             dim=8, heads=2, layers=1, dropout=0., top_k=4, temperature=1.,

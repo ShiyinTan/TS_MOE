@@ -1023,7 +1023,7 @@ class TSMoE(nn.Module):
 
 
 def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0.,
-              bpr_margin=0.):
+              bpr_margin=0., ce_focal_gamma=0.):
     """Ranking objective: CE (+ optional SURD aux/balance) + optional hard-negative BPR.
 
     ``lambda_bpr > 0`` adds ``softplus(-(s_pos - max_neg - margin))`` averaged over
@@ -1031,13 +1031,24 @@ def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0
     competitor. ``bpr_margin`` (default 0) requires the positive to beat the
     hardest negative by that logit margin. Default ``lambda_bpr=0`` keeps the
     historical loss.
+
+    ``ce_focal_gamma > 0`` replaces plain CE with focal
+    ``(1 − p_t)^γ · (−log p_t)`` (γ=0 keeps mean CE).
     """
     mask, w = result["mask"], result["confidence"]
     log_pi, mass, gate = result["log_pi"], result["mass"], result["gate"]
     if not mask.gather(1, labels[:, None]).all():
         raise ValueError("every positive must be in the valid candidate set")
     scores = result["score"]
-    rec = F.cross_entropy(scores, labels)
+    gamma = float(ce_focal_gamma or 0.0)
+    if gamma < 0:
+        raise ValueError("ce_focal_gamma must be nonnegative")
+    ce = F.cross_entropy(scores, labels, reduction="none")
+    if gamma > 0:
+        pt = (-ce).exp().clamp(max=1.0)
+        rec = ((1.0 - pt).pow(gamma) * ce).mean()
+    else:
+        rec = ce.mean()
     weights = w * mask / mask.sum()
     bce = F.binary_cross_entropy_with_logits(result["gate_logits"], result["alpha"], reduction="none")
     aux = (weights * (bce - (mass * log_pi).sum(-1))).sum()

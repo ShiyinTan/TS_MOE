@@ -127,6 +127,10 @@ def main():
         help="logit margin inside hard-neg BPR (default 0); only used when "
              "--lambda-bpr > 0. Try 0.5–2.0 to force a clearer Acc@1 gap")
     t.add_argument(
+        "--ce-focal-gamma", type=float, default=0.,
+        help="focal CE γ on rec term: (1−p_t)^γ · (−log p_t); 0 = plain CE. "
+             "Try 1–2 for Acc@1 hard-miss emphasis (do not pair with CE-τ)")
+    t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "
              "mass only (no sequence in router); surd_mlp = softmax(MLP(SURD)/T); "
