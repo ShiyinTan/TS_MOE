@@ -23,7 +23,7 @@ Each `eval_*` directory contains:
 
 Ranking is over the cache candidate set (spatial neighborhood by default; see [`candidates.md`](candidates.md)), not necessarily the full POI catalog.
 
-**`known_only`:** metrics on samples whose ground-truth next POI is **in the training catalog** (out-of-catalog targets are dropped from the denominator). This is **not** “only when the target is in the candidate pool” (GT is always forced into the pool). Chinese one-liner and details: [`ablation.md`](ablation.md) §6.1.
+**`known_only`:** metrics on samples whose ground-truth next POI is **in the training catalog** (out-of-catalog targets are dropped from the denominator). This is **not** “only when the target is in the candidate pool” (GT is always forced into the pool). Chinese one-liner and details: [`ablation.md`](ablation.md) §6.1. To **remove** unknown users / out-of-catalog targets from the prepared val/test data (STHGCN-style), use `prepare --filter-unknown on` (default **off**; re-prepare) — that is a different ablation from `known_only`.
 
 Optional: `evaluate --output path.json` still mirrors the JSON to an extra path.
 

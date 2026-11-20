@@ -681,6 +681,8 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
     if cache.cfg.get("eval_targets") is not None:
         targets.append(f"--eval-targets {cache.cfg['eval_targets']}")
     parts.extend(targets)
+    if cache.cfg.get("filter_unknown", "off") == "on":
+        parts.append("--filter-unknown on")
     cfg = model_config or {}
     args = training_args or {}
     router = args.get("router_mode", cfg.get("router_mode"))
@@ -801,6 +803,7 @@ def build_eval_payload(args, cache, metrics, device, checkpoint_path=None, check
         split=getattr(args, "split", None),
         catalog_size=len(cache.pois),
         target_mode=cache.cfg["eval_targets"],
+        filter_unknown=cache.cfg.get("filter_unknown", "off"),
         cache=str(Path(args.cache).resolve()),
         cache_id=cache.id,
         checkpoint=str(Path(ckpt_path).resolve()) if ckpt_path else None,
@@ -1468,7 +1471,8 @@ def recommend(args):
     cfg = model.cfg
     groups, _ = read_split(args.history)
     cats = Categories.from_manifest(cache.meta["preprocessing"])
-    data = build_split(groups, cats, cache.pois, cache.meta["cat_vocab"], cache.cfg["max_length"], "predict")
+    data, _ = build_split(
+        groups, cats, cache.pois, cache.meta["cat_vocab"], cache.cfg["max_length"], "predict")
     pools, resolutions = cache.candidate_pools(data)
     # Use frozen train-end tables (no GT updates on recommend histories).
     base_tables = train_end_count_tables(cache, cfg, checkpoint, cache.split("train"))

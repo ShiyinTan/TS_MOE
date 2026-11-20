@@ -84,7 +84,7 @@ class TestDesign(unittest.TestCase):
             event = next(iter(groups.values()))[0]
             from dataclasses import replace
             self.assertEqual(cat(event), cat(replace(event, category_code=123)))
-            data = build_split(groups, cat, [1, 3, 5, 7], [0, 1, 2, 3], 2, "all")
+            data, _ = build_split(groups, cat, [1, 3, 5, 7], [0, 1, 2, 3], 2, "all")
             h, v, _ = make_batch(data, torch.arange(3), offline=True)
             self.assertEqual(h["P"].tolist(), [[1, -1], [1, 3], [3, 5]])
             self.assertEqual(data["P"][data["end"]].tolist(), [3, 5, 7])
@@ -794,6 +794,73 @@ class TestDesign(unittest.TestCase):
                 info = Cache(alt).meta["audit"][split]
                 self.assertEqual(info["samples"], info["trails"])
 
+    def test_filter_unknown_sthgcn_style_prepare(self):
+        """``--filter-unknown on`` drops cold-start users and OOV targets from val/test data.
+
+        Unlike eval ``known_only`` (metric denominator only), samples are removed at prepare.
+        Default ``off`` keeps status-quo unknown_targets > 0 on the demo OOV POI.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = generate(root / "data")
+            # Add a validation trail owned by a user who never appears in train.
+            val_path = directory / "demo_checkins_validation.csv"
+            with val_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+                fields = list(rows[0].keys())
+            cold = dict(rows[0])
+            cold.update(
+                trail_id="validation_cold_user",
+                user_id="9999",
+                venue_id="1",
+                timestamp="2018-06-01 10:00:00",
+            )
+            cold2 = dict(cold)
+            cold2.update(timestamp="2018-06-01 10:15:00", venue_id="2")
+            cold3 = dict(cold)
+            cold3.update(timestamp="2018-06-01 10:30:00", venue_id="3")
+            with val_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows + [cold, cold2, cold3])
+
+            baseline = root / "cache_off"
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", baseline)
+            base_meta = json.loads((baseline / "manifest.json").read_text())
+            self.assertEqual(base_meta["config"].get("filter_unknown", "off"), "off")
+            self.assertGreater(base_meta["audit"]["validation"]["unknown_targets"], 0)
+            self.assertGreater(base_meta["audit"]["validation"]["samples"], 0)
+            off_val_n = base_meta["audit"]["validation"]["samples"]
+
+            filtered = root / "cache_on"
+            run_cli("prepare", "--data-root", directory, "--city", "demo", "--out", filtered,
+                    "--filter-unknown", "on")
+            on_meta = json.loads((filtered / "manifest.json").read_text())
+            self.assertEqual(on_meta["config"]["filter_unknown"], "on")
+            self.assertNotEqual(on_meta["fingerprint"], base_meta["fingerprint"])
+            val_audit = on_meta["audit"]["validation"]
+            self.assertEqual(val_audit["filter_unknown"], "on")
+            self.assertGreaterEqual(val_audit["trails_dropped_unknown_user"], 1)
+            self.assertGreaterEqual(val_audit["samples_skipped_unknown_poi_target"], 1)
+            self.assertEqual(val_audit["unknown_targets"], 0)
+            self.assertLess(val_audit["samples"], off_val_n)
+            # All remaining val targets are in-catalog.
+            val = Cache(filtered).split("validation")
+            rows = val["poi_token"][val["end"]] - 2
+            self.assertTrue((rows >= 0).all())
+
+            # key_flags / ablation-summary expectation for abl_filter_unknown.
+            flags = format_ablation_key_flags(Cache(filtered))
+            self.assertIn("--filter-unknown on", flags)
+            status, _ = validate_run_name_settings(
+                "tokyo/abl_filter_unknown",
+                extract_recorded_settings(
+                    {"filter_unknown": "on", "cli": {"filter_unknown": "on"}},
+                    key_flags=flags,
+                ),
+            )
+            self.assertEqual(status, "ok")
+
     def test_prepare_overwrites_on_fingerprint_change(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -889,7 +956,8 @@ class TestCausalCounts(unittest.TestCase):
         cats = Categories(groups)
         pois = [1, 2, 3, 4]
         cat_vocab = sorted({cats(e) for events in groups.values() for e in events})
-        return build_split(groups, cats, pois, cat_vocab, 4, "all"), len(pois), len(cat_vocab)
+        data, _ = build_split(groups, cats, pois, cat_vocab, 4, "all")
+        return data, len(pois), len(cat_vocab)
 
     def test_chronological_order_no_shuffle(self):
         data, _, _ = self._tiny_split()
@@ -1213,6 +1281,10 @@ class AblationSummaryTests(unittest.TestCase):
         self.assertEqual(
             expected_settings_for_run_name("abl_e1_dense"),
             {"expert_cross_attn": "hybrid", "expert_cross_attn_sparse": "off"},
+        )
+        self.assertEqual(
+            expected_settings_for_run_name("tokyo/abl_filter_unknown"),
+            {"filter_unknown": "on"},
         )
         self.assertIsNone(expected_settings_for_run_name("tokyo/model"))
 

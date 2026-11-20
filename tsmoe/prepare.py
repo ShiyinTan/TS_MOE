@@ -18,7 +18,8 @@ from .candidates import (
 )
 from .data import (
     FEATURE_METHOD, L_DIM, SPLITS, STHGCN_BASIS_DIM, T_DIM, Categories,
-    build_split, file_digest, make_batch, read_split,
+    build_split, file_digest, filter_groups_by_users, make_batch, read_split,
+    train_user_ids,
 )
 from .quantizer import BasicSourceQuantizer, SOURCES
 from .runtime import check_interrupt, install_interrupt_handler
@@ -69,7 +70,7 @@ def prepare(args):
         "tau_pos", "train_targets", "eval_targets", "kappa_n", "kappa_i",
         "candidate_radius", "popular_radius", "popular_radius_multiplier", "popular_top_k",
         "popular_by", "user_frequent_top_k", "user_frequent_min_visits",
-        "random_negatives", "random_negatives_seed")}
+        "random_negatives", "random_negatives_seed", "filter_unknown")}
     # feature_method is fingerprinted so T/L schema changes force re-prepare.
     config.update(version="tsmoe.massivesteps.v1", feature_method=FEATURE_METHOD,
                   t_dim=T_DIM, l_dim=L_DIM, sthgcn_basis_dim=STHGCN_BASIS_DIM,
@@ -171,14 +172,31 @@ def build_cache(cfg, paths, fingerprint, stage):
                                    f"coord_valid + step_valid; dim={L_DIM}; distance_encoder_type=time"),
                          tie_break="input CSV row within trail", dedup_key=["user_id", "trail_id", "timestamp", "venue_id"],
                          missing="quarantine invalid timestamps; missing historical IDs use UNK; missing target ID skipped",
+                         filter_unknown=(
+                             "off: keep cold-start users and out-of-catalog targets (eval known_only "
+                             "only changes metric denominators). on: STHGCN-style remove_unseen_user_poi "
+                             "— drop val/test trails whose user never appears in train, and drop "
+                             "prediction samples whose true next POI is outside the train catalog"
+                         ),
                          categories="training code via stable category ID; ambiguous/missing mapping uses SHA-256 stable ID",
                          category_mapping=cats.codes, ambiguous_category_codes=sorted(cats.ambiguous),
                          max_length=cfg["max_length"],
                          history="shared right-padding; first step clears relative Φ / gap_valid / step_valid",
                          candidate_construction=candidate_construction)
+    filter_unknown = cfg.get("filter_unknown", "off")
+    if filter_unknown not in ("off", "on"):
+        raise ValueError("filter_unknown must be 'off' or 'on'")
+    known_users = train_user_ids(train_groups)
     audit, owners, held_trails = {}, {}, set()
     for split in SPLITS:
         groups, audit[split] = ((train_groups, train_audit) if split == "train" else read_split(paths[split]))
+        trails_before = len(groups)
+        users_before = len(train_user_ids(groups))
+        dropped_user_trails = 0
+        if filter_unknown == "on" and split != "train":
+            kept = filter_groups_by_users(groups, known_users)
+            dropped_user_trails = trails_before - len(kept)
+            groups = kept
         if groups.keys() & held_trails:
             raise ValueError("trail shared by official split files; refusing overlapping histories")
         held_trails.update(groups)
@@ -186,14 +204,33 @@ def build_cache(cfg, paths, fingerprint, stage):
             if owners.setdefault(trail, user) != user:
                 raise ValueError(f"trail {trail!r} has conflicting owners across splits")
         mode = cfg["train_targets"] if split == "train" else cfg["eval_targets"]
-        data = build_split(groups, cats, pois, cat_vocab, cfg["max_length"], mode)
+        require_known = filter_unknown == "on" and split != "train"
+        data, split_stats = build_split(
+            groups, cats, pois, cat_vocab, cfg["max_length"], mode,
+            require_in_catalog_target=require_known)
         rows = data["poi_token"][data["end"]] - 2
-        audit[split].update(samples=len(rows), known_targets=int((rows >= 0).sum()),
-                            unknown_targets=int((rows < 0).sum()), target_mode=mode)
+        audit[split].update(
+            samples=len(rows), known_targets=int((rows >= 0).sum()),
+            unknown_targets=int((rows < 0).sum()), target_mode=mode,
+            filter_unknown=filter_unknown,
+            trails_before_user_filter=trails_before,
+            users_before_user_filter=users_before,
+            trails_dropped_unknown_user=dropped_user_trails,
+            samples_skipped_unknown_poi_target=int(split_stats["skipped_unknown_targets"]),
+        )
         if split == "train":
             train = data
         else:
             torch.save(data, stage / f"{split}.pt")
+    if filter_unknown == "on":
+        print(
+            f"filter_unknown=on (STHGCN-style): train_users={len(known_users)} "
+            f"val trails_dropped_unknown_user={audit['validation']['trails_dropped_unknown_user']} "
+            f"val skipped_unknown_poi_target={audit['validation']['samples_skipped_unknown_poi_target']} "
+            f"test trails_dropped_unknown_user={audit['test']['trails_dropped_unknown_user']} "
+            f"test skipped_unknown_poi_target={audit['test']['samples_skipped_unknown_poi_target']}",
+            flush=True,
+        )
     args_q = dict(n_clusters=cfg["clusters"], hash_dim=cfg["hash_dim"], seed=cfg["quant_seed"],
                   max_length=cfg["max_length"], tau_pos=cfg["tau_pos"])
     # Deterministic per-history summaries have no fitted parameters.

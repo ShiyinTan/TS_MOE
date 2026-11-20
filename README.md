@@ -543,6 +543,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `prepare --user-frequent-top-k` / `--user-frequent-min-visits` | 默认 `50` / `2`（`0` 关闭用户常去） |
 | `prepare --random-negatives` / `--random-negatives-seed` | 默认 `50` / `0`（`0` 关闭随机负例） |
 | `prepare --train-targets` / `--eval-targets` | `all` 或 `last`（默认均为 `all`）；**仅 prepare**；见 §3.3 |
+| `prepare --filter-unknown` | `off`（默认）/ `on`：STHGCN 式剔除 val/test 中未见用户与目录外目标（**须重 prepare**；≠ eval `known_only`） |
 | `prepare --no-overwrite` | 禁止覆盖已有 `--out`（默认允许：指纹不同或缓存不完整时就地重建） |
 | `train --dim`、`--heads`、`--layers` | 128、4、2 |
 | `train --epochs`、`--batch-size`、`--lr` | 20、32、0.001 |
@@ -722,7 +723,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 - **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118；不自动探测本机 CUDA。
 - **无多进程 / 多卡数据并行开关**：可选单卡 `--device cuda:0`；无 `--gpus` / DDP CLI。
 - **大数据内存**：大型城市 prepare 峰值随训练前缀增长；无分片 / 外存统计路径。
-- **换候选构造或目标协议须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives，也不能覆盖 `--train-targets` / `--eval-targets`（见 §3.3、§3.4）。
+- **换候选构造或目标协议须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives，也不能覆盖 `--train-targets` / `--eval-targets` / `--filter-unknown`（见 §3.3、§3.4；[`docs/ablation.md`](docs/ablation.md)）。
 - **换 T/L 特征 schema 须重 prepare**：旧 `basic_fixed_features_v1` 与当前 `sthgcn_tl_features_v1` 不兼容（见 §3.7）。
 
 ---
