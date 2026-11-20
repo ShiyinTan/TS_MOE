@@ -46,6 +46,8 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("pop_score_bias", 0.0)
     cfg.setdefault("geo_score_bias", 0.0)
     cfg.setdefault("geo_score_power", 1.0)
+    cfg.setdefault("revisit_score_bias", 0.0)
+    cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
     cfg.setdefault("candidate_context", "off")
@@ -108,6 +110,27 @@ def count_ctx_to_device(ctx, device):
     if ctx is None:
         return None
     return {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in ctx.items()}
+
+
+def attach_target_gap_hours(ctx, data, indices):
+    """Hours between last history tip and target event (for tsb time-decay)."""
+    idxs = indices.tolist() if torch.is_tensor(indices) else list(indices)
+    gaps = []
+    for sample_index in idxs:
+        end = int(data["end"][sample_index])
+        start = int(data["start"][sample_index])
+        if end <= start:
+            gaps.append(0.0)
+            continue
+        tip_us = float(data["us"][end - 1])
+        tgt_us = float(data["us"][end])
+        gaps.append(max(0.0, (tgt_us - tip_us) / 3_600_000_000.0))  # us → hours
+    gap_t = torch.tensor(gaps, dtype=torch.float32)
+    if ctx is None:
+        return dict(target_gap_hours=gap_t)
+    out = dict(ctx)
+    out["target_gap_hours"] = gap_t
+    return out
 
 
 def slice_count_ctx(ctx, start, end):
@@ -175,6 +198,8 @@ def build_batch_feature_context(
             transition_pmi=transition_pmi,
         )
         ctx = merge_feature_context(ctx, side)
+    if float(getattr(cfg, "tsb_decay_hours", 0.0) or 0.0) > 0:
+        ctx = attach_target_gap_hours(ctx, data, indices)
     return ctx
 
 
@@ -207,6 +232,8 @@ def gather_features_causal(
             transition_pmi=transition_pmi,
         )
         ctx = merge_feature_context(ctx, side)
+    if float(getattr(cfg, "tsb_decay_hours", 0.0) or 0.0) > 0:
+        ctx = attach_target_gap_hours(ctx, data, indices)
     if update and cfg.causal_counts and count_tables is not None:
         for sample_index in indices.tolist():
             count_tables.update_sample(data, sample_index)
@@ -439,9 +466,11 @@ def candidates(targets, size, negatives, rng, pools=None):
     return rows, labels
 
 
-def all_scores(model, table, encoded, valid, size, chunk, count_ctx=None):
+def all_scores(model, table, encoded, valid, size, chunk, count_ctx=None,
+               score_temperature=1.0):
     """Keep only scalar scores on the CPU across chunks. Encode the batch history once."""
     parts = []
+    temp = float(score_temperature or 1.0)
     for start in range(0, size, chunk):
         check_interrupt()
         end = min(size, start + chunk)
@@ -451,18 +480,23 @@ def all_scores(model, table, encoded, valid, size, chunk, count_ctx=None):
             encoded, valid, rows, prior, confidence,
             count_ctx=slice_count_ctx(count_ctx, start, end),
             surd_specific=lookup_surd_specific(table, rows, model.cfg))
-        parts.append(scored["score"].cpu())
+        part = scored["score"].cpu()
+        if abs(temp - 1.0) > 1e-12:
+            part = part / temp
+        parts.append(part)
     scores = torch.cat(parts, 1)
     if not torch.isfinite(scores).all():
         raise FloatingPointError("nonfinite full-catalog scores")
     return scores
 
 
-def score_pools(model, table, encoded, valid, pools, chunk, count_ctx=None):
+def score_pools(model, table, encoded, valid, pools, chunk, count_ctx=None,
+                score_temperature=1.0):
     """Score variable-size candidate pools; pad with mask (shared train/eval path)."""
     width = max(int(pool.numel()) for pool in pools)
     rows = torch.zeros(len(pools), width, dtype=torch.long, device=valid.device)
     mask = torch.zeros(len(pools), width, dtype=torch.bool, device=valid.device)
+    temp = float(score_temperature or 1.0)
     for i, pool in enumerate(pools):
         n = int(pool.numel())
         rows[i, :n] = pool.to(valid.device)
@@ -480,6 +514,8 @@ def score_pools(model, table, encoded, valid, pools, chunk, count_ctx=None):
             count_ctx=slice_count_ctx(count_ctx, start, end),
             surd_specific=lookup_surd_specific(table, safe, model.cfg))
         part = scored["score"].cpu()
+        if abs(temp - 1.0) > 1e-12:
+            part = part / temp
         part = part.masked_fill(~chunk_mask.cpu(), float("-inf"))
         parts.append(part)
     scores = torch.cat(parts, 1)
@@ -995,7 +1031,7 @@ def save_eval_results(payload, out_dir, legacy_output=None):
 
 @torch.inference_mode()
 def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, desc="eval",
-             count_tables=None):
+             count_tables=None, score_temperature=1.0):
     """Rank samples; with ``count_tables``, walk chronologically (score then update)."""
     model.eval()
     ranks, grouped = [], defaultdict(list)
@@ -1005,6 +1041,7 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     use_counts = count_tables is not None and model.cfg.causal_counts
     use_side = needs_side_features(model.cfg)
     chronological = use_counts or (use_side and model.cfg.user_pref == "on")
+    score_temp = float(score_temperature or 1.0)
     if chronological:
         order = chronological_indices(data)
         batches = list(order.split(batch_size))
@@ -1031,13 +1068,14 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
         encoded = model.encode(h, valid, count_ctx)
         if cache.uses_full_catalog_pools():
             scores = all_scores(model, table, encoded, valid, len(cache.pois), chunk,
-                                count_ctx=count_ctx)
+                                count_ctx=count_ctx, score_temperature=score_temp)
             batch_ranks = ranks_of(scores, target).tolist()
         else:
             # Eval always ranks inside the full constructed multi-source pool.
             batch_pools = [pools[i] for i in idx.tolist()]
             pool_scores, pool_rows, pool_mask = score_pools(
-                model, table, encoded, valid, batch_pools, chunk, count_ctx=count_ctx)
+                model, table, encoded, valid, batch_pools, chunk, count_ctx=count_ctx,
+                score_temperature=score_temp)
             batch_ranks = ranks_in_pools(pool_scores, pool_rows, pool_mask, target.cpu())
         if rank_by_index is not None:
             for i, rank in zip(idx.tolist(), batch_ranks):
@@ -1098,8 +1136,14 @@ def train(args):
     pop_score_bias = float(getattr(args, "pop_score_bias", 0.0) or 0.0)
     geo_score_bias = float(getattr(args, "geo_score_bias", 0.0) or 0.0)
     geo_score_power = float(getattr(args, "geo_score_power", 1.0) or 1.0)
+    revisit_score_bias = float(getattr(args, "revisit_score_bias", 0.0) or 0.0)
+    tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
+    if revisit_score_bias < 0:
+        raise ValueError("--revisit-score-bias must be nonnegative")
+    if tsb_decay_hours < 0:
+        raise ValueError("--tsb-decay-hours must be nonnegative")
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
     # Optional overlays (default off).
     candidate_context = getattr(args, "candidate_context", "off")
@@ -1142,6 +1186,8 @@ def train(args):
                       pop_score_bias=pop_score_bias,
                       geo_score_bias=geo_score_bias,
                       geo_score_power=geo_score_power,
+                      revisit_score_bias=revisit_score_bias,
+                      tsb_decay_hours=tsb_decay_hours,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
                       candidate_context_time=candidate_context_time,
@@ -1167,6 +1213,8 @@ def train(args):
           f"category_score_bias={cfg.category_score_bias} "
           f"pop_score_bias={cfg.pop_score_bias} geo_score_bias={cfg.geo_score_bias} "
           f"geo_score_power={cfg.geo_score_power} "
+          f"revisit_score_bias={cfg.revisit_score_bias} "
+          f"tsb_decay_hours={cfg.tsb_decay_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
           f"visit_bins={cfg.visit_bins} candidate_context={cfg.candidate_context} "
@@ -1197,6 +1245,8 @@ def train(args):
     settings["pop_score_bias"] = cfg.pop_score_bias
     settings["geo_score_bias"] = cfg.geo_score_bias
     settings["geo_score_power"] = cfg.geo_score_power
+    settings["revisit_score_bias"] = cfg.revisit_score_bias
+    settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias
     settings["tsb_gate_mode"] = cfg.tsb_gate_mode
@@ -1528,12 +1578,16 @@ def evaluate_cli(args):
         print(f"causal_counts: loaded train-end tables "
               f"(visit_bins={cfg.visit_bins}); continuing chronological updates on "
               f"{args.split}", flush=True)
+    score_temp = float(getattr(args, "score_temperature", 1.0) or 1.0)
+    if score_temp <= 0:
+        raise ValueError("--score-temperature must be positive")
     metrics = evaluate(model, table, data, cache, args.eval_batch_size,
                        args.chunk, category_frequency, desc=f"eval {args.split}",
-                       count_tables=count_tables)
+                       count_tables=count_tables, score_temperature=score_temp)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
     payload["candidate_pool_stats"] = pool_stats.get(args.split)
+    payload["score_temperature"] = score_temp
     print_eval_tables(payload)
     out_dir = resolve_eval_out(args)
     save_eval_results(payload, out_dir, legacy_output=args.output)

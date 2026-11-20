@@ -184,6 +184,14 @@ def main():
         help="gravity exponent α on geo-score-bias: −λ·log1p(km^α) "
              "(default 1 = classic log1p km; try 0.5–2). No-op when geo-score-bias=0")
     t.add_argument(
+        "--revisit-score-bias", type=float, default=0.0,
+        help="add λ·log1p(user→cand visits) to scores (default 0 = off). "
+             "Needs causal counts; Acc@1 revisit prior")
+    t.add_argument(
+        "--tsb-decay-hours", type=float, default=0.0,
+        help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
+             "hours from last history tip to target (Hawkes-lite; 0 = off)")
+    t.add_argument(
         "--surd-bias-gate", choices=SURD_BIAS_GATE_MODES, default="off",
         help="per-candidate gate from SURD / Specific MI controlling score/attn "
              "biases: off (default); unique_p; smi_p; smi_pc; u_mass; confidence. "
@@ -268,6 +276,10 @@ def main():
     e.set_defaults(func=evaluate_cli)
     e.add_argument("--out", help="directory for metrics.json and report.txt "
                    "(default: results/<run_from_checkpoint>/eval_<split>)")
+    e.add_argument(
+        "--score-temperature", type=float, default=1.0,
+        help="divide ranking logits by T before Acc@1 (eval-time calibration; "
+             "default 1 = unchanged). Sweep on val, apply on test")
     x = commands.add_parser("explain", help="audit one candidate's prior, router and score contributions")
     x.add_argument("--sample-index", type=int, default=0)
     x.add_argument("--poi-id", type=int, help="external venue_id; default is the true POI or top prediction for OOV")
@@ -316,12 +328,17 @@ def main():
                                     or getattr(args, "pop_score_bias", 0.0) < 0
                                     or getattr(args, "geo_score_bias", 0.0) < 0
                                     or getattr(args, "surd_score_bias", 0.0) < 0
+                                    or getattr(args, "revisit_score_bias", 0.0) < 0
+                                    or getattr(args, "tsb_decay_hours", 0.0) < 0
                                     or getattr(args, "geo_score_power", 1.0) <= 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
                    "transition-lambda / transition-score-bias / category-score-bias / "
-                   "pop-score-bias / geo-score-bias / surd-score-bias must be nonnegative; "
+                   "pop-score-bias / geo-score-bias / surd-score-bias / "
+                   "revisit-score-bias / tsb-decay-hours must be nonnegative; "
                    "geo-score-power must be positive")
+    if args.command == "evaluate" and float(getattr(args, "score_temperature", 1.0) or 1.0) <= 0:
+        root.error("--score-temperature must be positive")
     if (args.command == "train"
             and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):

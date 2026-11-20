@@ -1112,6 +1112,8 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(legacy.pop_score_bias, 0.0)
         self.assertEqual(legacy.geo_score_bias, 0.0)
         self.assertEqual(legacy.geo_score_power, 1.0)
+        self.assertEqual(legacy.revisit_score_bias, 0.0)
+        self.assertEqual(legacy.tsb_decay_hours, 0.0)
         self.assertEqual(legacy.surd_bias_gate, "off")
         self.assertEqual(legacy.surd_score_bias, 0.0)
         self.assertEqual(legacy.tsb_gate_mode, "off")
@@ -1172,6 +1174,17 @@ class TestCausalCounts(unittest.TestCase):
         with torch.no_grad():
             s_p2 = gsb_p(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
         self.assertGreater(float(s_gsb[1] - s_p2[1]), 0.5)
+        # Revisit bias lifts high user→cand visit mass (cand_poi_feat dim 0).
+        feats2 = ctx["cand_poi_feat"].clone()
+        feats2[0, 0, 0] = 4.0
+        feats2[0, 1, 0] = 0.0
+        ctx["cand_poi_feat"] = feats2
+        rsb = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, revisit_score_bias=1.)).eval()
+        rsb.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s_rsb = rsb(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        self.assertGreater(float(s_rsb[0] - s0[0]), 3.0)
         with self.assertRaises(ValueError):
             ModelConfig(8, 2, 1, 0., 2, geo_score_bias=1.0)  # needs candidate_context
         with self.assertRaises(ValueError):

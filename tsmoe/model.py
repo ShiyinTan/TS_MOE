@@ -101,6 +101,10 @@ class ModelConfig:
     geo_score_bias: float = 0.
     # Gravity-style distance exponent on geo prior: −λ·log1p(km^α). α=1 ≡ default log1p(km).
     geo_score_power: float = 1.
+    # Acc@1 revisit prior: λ·log1p(user→cand visits) from cand_poi_feat[...,0] (0 = off).
+    revisit_score_bias: float = 0.
+    # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
+    tsb_decay_hours: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
     # Optional overlays (all default off — Acc@1 path unchanged unless set).
     candidate_context: str = "off"
@@ -147,6 +151,10 @@ class ModelConfig:
             raise ValueError("geo_score_bias > 0 requires --candidate-context on")
         if self.geo_score_power <= 0:
             raise ValueError("geo_score_power must be positive")
+        if self.revisit_score_bias < 0:
+            raise ValueError("revisit_score_bias must be nonnegative")
+        if self.tsb_decay_hours < 0:
+            raise ValueError("tsb_decay_hours must be nonnegative")
         if self.visit_bins < 1:
             raise ValueError("visit_bins must be positive")
         if self.candidate_context not in CANDIDATE_CONTEXT_MODES:
@@ -663,6 +671,11 @@ class TSMoE(nn.Module):
                 and "poi_transition" in count_ctx):
             tsb_term = tb * self._last_hop_log1p(
                 count_ctx["poi_transition"], rows, valid, score.device)
+            # Hawkes-lite: down-weight transition prior when last→target gap is large.
+            tau = float(getattr(self.cfg, "tsb_decay_hours", 0.0) or 0.0)
+            if tau > 0 and "target_gap_hours" in count_ctx:
+                gap = count_ctx["target_gap_hours"].to(score.device).clamp_min(0)
+                tsb_term = tsb_term * torch.exp(-gap / tau)[:, None]
             tsb_term = apply_surd_gate(tsb_term, cand_gate, gate_mode)
             score = score + tsb_term
         # Hypergraph prior: last category → candidate POI (cat_transition).
@@ -684,13 +697,19 @@ class TSMoE(nn.Module):
         gsb = float(getattr(self.cfg, "geo_score_bias", 0.0) or 0.0)
         if gsb > 0 and count_ctx is not None and "delta_geo" in count_ctx:
             hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
-            alpha = float(getattr(self.cfg, "geo_score_power", 1.0) or 1.0)
-            if abs(alpha - 1.0) < 1e-8:
+            geo_pow = float(getattr(self.cfg, "geo_score_power", 1.0) or 1.0)
+            if abs(geo_pow - 1.0) < 1e-8:
                 geo_pen = hav
             else:
                 km = torch.expm1(hav).clamp_min(0)
-                geo_pen = torch.log1p(km.pow(alpha))
+                geo_pen = torch.log1p(km.pow(geo_pow))
             score = score - gsb * geo_pen
+        # Revisit prior: user→cand causal visit mass (cand_poi_feat dim 0 = log1p(user)).
+        rsb = float(getattr(self.cfg, "revisit_score_bias", 0.0) or 0.0)
+        if (rsb > 0 and count_ctx is not None and self.cfg.causal_counts
+                and "cand_poi_feat" in count_ctx):
+            u_vis = count_ctx["cand_poi_feat"][:, :rows.shape[1], 0].to(score.device)
+            score = score + rsb * u_vis.clamp_min(0)
         # Direct SURD/SMI score contribution (default λ=0).
         ssb = float(getattr(self.cfg, "surd_score_bias", 0.0) or 0.0)
         if ssb > 0 and cand_gate is not None:
