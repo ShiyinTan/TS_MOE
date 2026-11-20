@@ -1083,10 +1083,30 @@ class TSMoE(nn.Module):
                           count_ctx=count_ctx, surd_specific=surd_specific, **kwargs)
 
 
+def soft_ema_targets(labels, mask, teacher_scores, beta):
+    """Build ``(1−β)·onehot(y) + β·softmax(teacher)`` over masked candidates (#39)."""
+    beta = float(beta or 0.0)
+    if beta < 0 or beta > 1:
+        raise ValueError("soft_target_beta must be in [0, 1]")
+    bsz, n_cand = mask.shape
+    onehot = F.one_hot(labels, num_classes=n_cand).to(dtype=torch.float32)
+    if beta <= 0:
+        return onehot
+    logits = teacher_scores.to(dtype=torch.float32).masked_fill(~mask, float("-inf"))
+    teacher_p = torch.softmax(logits, dim=1)
+    teacher_p = teacher_p.masked_fill(~mask, 0.0)
+    z = teacher_p.sum(dim=1, keepdim=True).clamp_min(1e-8)
+    teacher_p = teacher_p / z
+    mix = (1.0 - beta) * onehot + beta * teacher_p
+    mix = mix.masked_fill(~mask, 0.0)
+    return mix / mix.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+
 def soft_prior_targets(labels, mask, count_ctx, rows, valid, priors, beta):
     """Build ``(1−β)·onehot(y) + β·normalize(Σ prior masses)`` over masked cands.
 
     ``priors`` is an iterable of ``\"tsb\"`` / ``\"revisit\"`` (Acc-positive only).
+    ``\"ema\"`` is handled separately via ``soft_ema_targets``.
     """
     beta = float(beta or 0.0)
     if beta < 0 or beta > 1:
@@ -1098,9 +1118,12 @@ def soft_prior_targets(labels, mask, count_ctx, rows, valid, priors, beta):
         return onehot
     prior_mass = torch.zeros(bsz, n_cand, device=device, dtype=torch.float32)
     names = {str(p).strip().lower() for p in priors if str(p).strip()}
+    names.discard("ema")  # EMA softmax is mixed outside this helper.
     unknown = names - {"tsb", "revisit"}
     if unknown:
         raise ValueError(f"unsupported soft-target priors: {sorted(unknown)}")
+    if not names:
+        return onehot
     if count_ctx is None:
         raise ValueError("soft-target priors require count_ctx")
     if "tsb" in names:
@@ -1127,6 +1150,17 @@ def soft_prior_targets(labels, mask, count_ctx, rows, valid, priors, beta):
     mix = mix.masked_fill(~mask, 0.0)
     mix = mix / mix.sum(dim=1, keepdim=True).clamp_min(1e-8)
     return mix
+
+
+def blend_soft_target_mixes(mixes, mask):
+    """Average already-normalized soft target tensors, then renormalize on mask."""
+    if not mixes:
+        raise ValueError("blend_soft_target_mixes requires ≥1 mix")
+    if len(mixes) == 1:
+        return mixes[0]
+    stacked = torch.stack([m.to(dtype=torch.float32) for m in mixes], dim=0).mean(dim=0)
+    stacked = stacked.masked_fill(~mask, 0.0)
+    return stacked / stacked.sum(dim=1, keepdim=True).clamp_min(1e-8)
 
 
 def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0.,

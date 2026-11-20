@@ -1560,6 +1560,19 @@ class TestCausalCounts(unittest.TestCase):
         negs = set(rows[0, 1:][mask[0, 1:]].tolist())
         self.assertEqual(negs, {2, 3})
 
+    def test_soft_ema_targets_mixes_teacher_softmax(self):
+        """#39: EMA soft labels put mass on high teacher scores + one-hot."""
+        from tsmoe.model import soft_ema_targets
+        labels = torch.tensor([0])
+        mask = torch.ones(1, 3, dtype=torch.bool)
+        # Teacher strongly prefers col 2; with β=1 mix ≈ one-hot at 2 after softmax.
+        scores = torch.tensor([[0.0, 0.0, 10.0]])
+        soft = soft_ema_targets(labels, mask, scores, beta=1.0)
+        self.assertAlmostEqual(float(soft[0, 2].item()), 1.0, places=4)
+        soft05 = soft_ema_targets(labels, mask, scores, beta=0.5)
+        self.assertGreater(float(soft05[0, 0].item()), 0.4)
+        self.assertGreater(float(soft05[0, 2].item()), 0.4)
+
     def test_soft_prior_targets_mixes_onehot_and_priors(self):
         from tsmoe.model import soft_prior_targets
         labels = torch.tensor([0])

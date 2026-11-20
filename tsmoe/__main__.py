@@ -141,8 +141,13 @@ def main():
              "(1−β)·onehot + β·normalize(priors). 0 = hard labels. Try 0.05–0.1")
     t.add_argument(
         "--soft-target-prior", type=str, default="off",
-        help="comma list of soft-target priors: tsb,revisit (Acc-lift only); "
-             "off disables. Requires --soft-target-beta > 0 and causal counts")
+        help="comma list of soft-target priors: tsb,revisit,ema; "
+             "off disables. Requires --soft-target-beta > 0. "
+             "tsb|revisit need causal counts; ema uses EMA teacher softmax (#39)")
+    t.add_argument(
+        "--ema-decay", type=float, default=0.999,
+        help="EMA teacher decay θ'←d·θ'+(1−d)·θ when soft-target-prior includes "
+             "ema (default 0.999; try 0.99 for short ep1)")
     t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "

@@ -1,4 +1,5 @@
 """Training, exact catalog ranking, and candidate-level case study output."""
+import copy
 import json
 import math
 import os
@@ -24,7 +25,10 @@ from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_bat
 from .features import (
     build_poi_cat_table, gather_side_features, merge_feature_context, slice_side_ctx,
 )
-from .model import ModelConfig, TSMoE, objective, soft_prior_targets
+from .model import (
+    ModelConfig, TSMoE, blend_soft_target_mixes, objective, soft_ema_targets,
+    soft_prior_targets,
+)
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
@@ -1545,18 +1549,25 @@ def train(args):
     if soft_target_prior not in ("", "off", "none"):
         soft_priors = tuple(
             p.strip().lower() for p in soft_target_prior.split(",") if p.strip())
-        bad = set(soft_priors) - {"tsb", "revisit"}
+        bad = set(soft_priors) - {"tsb", "revisit", "ema"}
         if bad:
             raise ValueError(
-                "--soft-target-prior must be off or comma list of tsb|revisit")
+                "--soft-target-prior must be off or comma list of tsb|revisit|ema")
     if soft_target_beta > 0 and not soft_priors:
         raise ValueError("--soft-target-beta > 0 requires --soft-target-prior")
     if soft_priors and soft_target_beta <= 0:
         raise ValueError("--soft-target-prior requires --soft-target-beta > 0")
     if soft_target_beta > 0 and ce_focal_gamma > 0:
         raise ValueError("soft-target cannot combine with --ce-focal-gamma > 0")
-    if soft_target_beta > 0 and not causal_counts:
-        raise ValueError("--soft-target-beta > 0 requires causal counts")
+    count_priors = tuple(p for p in soft_priors if p in ("tsb", "revisit"))
+    use_ema_soft = "ema" in soft_priors
+    if count_priors and not causal_counts:
+        raise ValueError("soft-target tsb|revisit requires causal counts")
+    if soft_target_beta > 0 and not use_ema_soft and not count_priors:
+        raise ValueError("--soft-target-beta > 0 requires a soft-target prior")
+    ema_decay = float(getattr(args, "ema_decay", 0.999) or 0.999)
+    if use_ema_soft and not (0.0 < ema_decay < 1.0):
+        raise ValueError("--ema-decay must be in (0, 1) when soft-target-prior includes ema")
     neg_sample = str(getattr(args, "neg_sample", "uniform") or "uniform").lower()
     if neg_sample not in ("uniform", "adaptive_mix"):
         raise ValueError("--neg-sample must be uniform|adaptive_mix")
@@ -1683,6 +1694,14 @@ def train(args):
     rng = random.Random(args.seed)
     batches = torch.Generator().manual_seed(args.seed)
     model = cache.model(cfg).to(device)
+    ema_teacher = None
+    if use_ema_soft:
+        ema_teacher = copy.deepcopy(model)
+        ema_teacher.eval()
+        for p in ema_teacher.parameters():
+            p.requires_grad_(False)
+        print(f"ema_soft_teacher decay={ema_decay} beta={soft_target_beta} "
+              f"priors={','.join(soft_priors)}", flush=True)
     param_device = next(model.parameters()).device
     print(f"model_param_device={param_device} router_mode={cfg.router_mode} "
           f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior} "
@@ -1781,6 +1800,9 @@ def train(args):
     settings["neg_sample"] = neg_sample
     settings["neg_hard_frac"] = neg_hard_frac
     settings["neg_probe_mult"] = neg_probe_mult
+    settings["soft_target_beta"] = soft_target_beta
+    settings["soft_target_prior"] = ",".join(soft_priors) if soft_priors else "off"
+    settings["ema_decay"] = ema_decay if use_ema_soft else None
     # Default on: test after every epoch (in addition to final best-ckpt test).
     eval_test_every_epoch = bool(getattr(args, "eval_test_every_epoch", True))
     settings["eval_test_every_epoch"] = eval_test_every_epoch
@@ -1934,9 +1956,23 @@ def train(args):
                            surd_specific=lookup_surd_specific(final, safe_rows, cfg))
             soft_tgts = None
             if soft_target_beta > 0 and soft_priors:
-                soft_tgts = soft_prior_targets(
-                    positive.to(device), cand_mask, count_ctx, rows, valid,
-                    soft_priors, soft_target_beta)
+                mixes = []
+                if count_priors:
+                    mixes.append(soft_prior_targets(
+                        positive.to(device), cand_mask, count_ctx, rows, valid,
+                        count_priors, soft_target_beta))
+                if use_ema_soft and ema_teacher is not None:
+                    with torch.no_grad():
+                        teacher_out = ema_teacher(
+                            h, valid, rows, prior, confidence,
+                            candidate_mask=cand_mask, count_ctx=count_ctx,
+                            surd_specific=lookup_surd_specific(
+                                final, safe_rows, cfg))
+                        mixes.append(soft_ema_targets(
+                            positive.to(device), cand_mask,
+                            teacher_out["score"], soft_target_beta))
+                if mixes:
+                    soft_tgts = blend_soft_target_mixes(mixes, cand_mask)
             loss, parts = objective(
                 result, positive.to(device), args.lambda_surd, args.lambda_balance,
                 float(getattr(args, "lambda_bpr", 0.0) or 0.0),
@@ -1948,6 +1984,12 @@ def train(args):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)
             opt.step()
+            if ema_teacher is not None:
+                with torch.no_grad():
+                    for tp, sp in zip(ema_teacher.parameters(), model.parameters()):
+                        tp.mul_(ema_decay).add_(sp.data, alpha=1.0 - ema_decay)
+                    for tb, sb in zip(ema_teacher.buffers(), model.buffers()):
+                        tb.copy_(sb)
             counts += torch.bincount(result["top"].detach().reshape(-1), minlength=15)
             loss_sum += float(loss.detach()) * len(idx)
             components += torch.stack(parts).double().cpu() * len(idx)
