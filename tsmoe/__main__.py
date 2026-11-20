@@ -52,10 +52,12 @@ def main():
              "Requires re-prepare; fingerprinted.")
     p.add_argument(
         "--candidate-radius",
-        choices=("p70", "p80", "p90", "mean", "max", "full"), default="p90",
+        choices=("p70", "p80", "p90", "mean", "max", "full", "random"), default="p90",
         help="local spatial neighborhood radius from consecutive visit distances "
              "(default p90; also p70/p80/mean/max); full = global catalog only "
-             "(disables popular / user-frequent / random-negative sources). "
+             "(disables popular / user-frequent / random-negative sources); "
+             "random = random-only pool (GT + --random-negatives; no spatial / "
+             "popular / user-frequent; requires --random-negatives >= 1). "
              "Stored in the cache so train and evaluate share the same construction.")
     p.add_argument(
         "--popular-radius",
@@ -85,8 +87,10 @@ def main():
     p.add_argument(
         "--random-negatives", type=int, default=50,
         help="extra uniform random catalog negatives added to each constructed "
-             "pool (default 50; 0 disables). Seeded and fingerprinted; ignored "
-             "for --candidate-radius full / empty-union fallback")
+             "pool (default 50; 0 disables). Under --candidate-radius random this "
+             "is the pool size excluding GT (requires >= 1). Seeded and "
+             "fingerprinted; ignored for --candidate-radius full / empty-union "
+             "fallback")
     p.add_argument(
         "--random-negatives-seed", type=int, default=0,
         help="seed mixed with sample index for deterministic random negatives "
@@ -199,9 +203,9 @@ def main():
         "evaluate",
         help="rank within the full constructed cache candidate pool "
              "(multi-source neighborhood+popular+user-frequent+random by "
-             "default, or full catalog; in-catalog GT always present); report "
-             "Acc@1 / NDCG@1 / MRR (+ full @K tables and Head/Mid/Tail groups) "
-             "to metrics.json + report.txt")
+             "default; or --candidate-radius random / full; in-catalog GT "
+             "always present); report Acc@1 / NDCG@1 / MRR (+ full @K tables "
+             "and Head/Mid/Tail groups) to metrics.json + report.txt")
     e.set_defaults(func=evaluate_cli)
     e.add_argument("--out", help="directory for metrics.json and report.txt "
                    "(default: results/<run_from_checkpoint>/eval_<split>)")
@@ -239,6 +243,9 @@ def main():
             or args.popular_radius_multiplier <= 0):
         root.error("popular-top-k / user-frequent-top-k / random-negatives must be >= 0; "
                    "popular-radius-multiplier must be positive and finite")
+    if args.command == "prepare" and args.candidate_radius == "random" and args.random_negatives < 1:
+        root.error("--candidate-radius random requires --random-negatives >= 1 "
+                   "(random-only pool = GT + uniform catalog draws)")
     if args.command == "train" and (args.negatives < -1 or args.negatives == 0 or
                                     args.max_train_candidates == 0 or args.max_train_candidates < -1 or
                                     min(args.lambda_prior, args.hybrid_lambda, args.lambda_surd,

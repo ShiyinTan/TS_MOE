@@ -11,10 +11,13 @@ catalog):
 4. **Random negatives** — uniform catalog rows not already in the union
    (``--random-negatives``, default 50; ``0`` disables).
 
-``--candidate-radius full`` keeps the legacy full-catalog pool. Training may
-sample negatives / cap candidates; evaluation ranks inside the **full**
-constructed pool (no train-time sampling). Val/test pools always contain the
-in-catalog ground-truth target (no path may omit it).
+``--candidate-radius full`` keeps the legacy full-catalog pool.
+``--candidate-radius random`` builds a **random-only** pool: ground-truth (when
+in catalog) plus up to ``--random-negatives`` uniform catalog rows (same sampler
+/ seed as multi-source extras; neighborhood / popular / user-frequent unused).
+Training may sample negatives / cap candidates; evaluation ranks inside the
+**full** constructed pool (no train-time sampling). Val/test pools always
+contain the in-catalog ground-truth target (no path may omit it).
 """
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from typing import Mapping, Sequence
 import torch
 
 EARTH_RADIUS_KM = 6371.0088
-RADIUS_CHOICES = ("p70", "p80", "p90", "mean", "max", "full")
+RADIUS_CHOICES = ("p70", "p80", "p90", "mean", "max", "full", "random")
 DEFAULT_RADIUS = "p90"
 DISTANCE_STAT_KEYS = {
     "p70": "p70_km",
@@ -117,15 +120,16 @@ def summarize_distances(distances: Sequence[float]) -> dict:
 
 
 def pick_radius_km(stats: dict, method: str) -> float | None:
-    """Map --candidate-radius choice to km, or None for full-catalog mode."""
+    """Map --candidate-radius choice to km, or None for full / random modes."""
     if method not in RADIUS_CHOICES:
         raise ValueError(f"candidate-radius must be one of {RADIUS_CHOICES}, got {method!r}")
-    if method == "full":
+    if method in ("full", "random"):
+        # full = entire catalog; random = random_pool (no spatial radius).
         return None
     if not stats.get("count"):
         raise ValueError(
             "no consecutive check-in pairs with coordinates; cannot derive a spatial "
-            "radius (use --candidate-radius full or fix coordinates)")
+            "radius (use --candidate-radius full|random or fix coordinates)")
     key = DISTANCE_STAT_KEYS[method]
     value = stats[key]
     if value is None or not math.isfinite(value) or value < 0:
@@ -410,11 +414,14 @@ def resolve_candidate_pool(anchor_lat: float, anchor_lon: float, target_row: int
                            user_frequent_rows: Sequence[int] | None = None,
                            random_negatives: int = 0,
                            random_negatives_seed: int = 0,
-                           sample_index: int = 0) -> tuple[torch.Tensor, str]:
+                           sample_index: int = 0,
+                           random_only: bool = False) -> tuple[torch.Tensor, str]:
     """Resolve the train/eval candidate set for one sample.
 
     Returns (row_indices, resolution) where resolution is:
-      - ``full_catalog`` when radius is disabled
+      - ``full_catalog`` when radius is disabled (``--candidate-radius full``)
+      - ``random_pool`` when ``random_only`` (``--candidate-radius random``):
+        ground-truth plus up to ``random_negatives`` uniform catalog rows
       - ``multi_source`` when the union of neighborhood / popular / user-frequent
         is nonempty (random negatives may further enlarge the pool)
       - ``fallback_full_catalog`` when no primary source contributes and the pool
@@ -423,9 +430,29 @@ def resolve_candidate_pool(anchor_lat: float, anchor_lon: float, target_row: int
     Known in-catalog targets are **always** included in a constructed pool
     (including val/test). No resolution path may omit an in-catalog ground-truth
     target: ``full_catalog`` / ``fallback_full_catalog`` contain every row;
-    ``multi_source`` force-appends ``target_row`` when ``target_row >= 0``.
+    ``multi_source`` / ``random_pool`` force-append ``target_row`` when
+    ``target_row >= 0``.
     """
     full = torch.arange(catalog_size, dtype=torch.long)
+    if random_only:
+        # Random-only: reuse the same seeded sampler as multi-source extras.
+        # Neighborhood / popular / user-frequent are unused (no empty-union
+        # fallback to the full catalog).
+        union: list[int] = []
+        if target_row >= 0:
+            union.append(int(target_row))
+        if random_negatives > 0:
+            rng = _rng_for_sample(random_negatives_seed, sample_index)
+            extras = sample_random_catalog_rows(
+                catalog_size, set(union), random_negatives, rng)
+            if extras:
+                union.extend(extras)
+        if not union:
+            # No GT and no random draws — degenerate; fall back so scoring has a set.
+            return full, "fallback_full_catalog"
+        if target_row >= 0 and target_row not in set(union):
+            union.append(int(target_row))
+        return torch.tensor(union, dtype=torch.long), "random_pool"
     if radius_km is None:
         return full, "full_catalog"
 
@@ -503,6 +530,7 @@ def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size:
                     user_frequent: Mapping[str, Sequence[int]] | None = None,
                     random_negatives: int = 0,
                     random_negatives_seed: int = 0,
+                    random_only: bool = False,
                     verify_targets: bool = True):
     """Build per-sample candidate pools and resolution labels for a split tensor dict.
 
@@ -530,18 +558,19 @@ def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size:
         trail_index = int(data["trail"][prev])
         user = str(trails[trail_index][0])
         uf = None
-        if user_frequent is not None:
+        if user_frequent is not None and not random_only:
             uf = user_frequent.get(user)
         pool, how = resolve_candidate_pool(
             float(lats[prev]), float(lons[prev]), target_row,
             catalog_coords, radius_km, catalog_size,
-            popular_radius_km=popular_radius_km,
-            popularity=popularity,
-            popular_top_k=popular_top_k,
+            popular_radius_km=None if random_only else popular_radius_km,
+            popularity=None if random_only else popularity,
+            popular_top_k=0 if random_only else popular_top_k,
             user_frequent_rows=uf,
             random_negatives=random_negatives,
             random_negatives_seed=random_negatives_seed,
-            sample_index=i)
+            sample_index=i,
+            random_only=random_only)
         pools.append(pool)
         resolutions.append(how)
     if verify_targets:
@@ -680,14 +709,59 @@ def candidate_construction_record(
         poi_visit_counts: Sequence[int] | None = None,
         poi_target_counts: Sequence[int] | None = None) -> dict:
     """Manifest block documenting how train/eval candidates are built."""
-    spatial = method != "full"
-    sources = (
-        ["neighborhood", "popular", "user_frequent", "random_negatives"]
-        if spatial else ["full_catalog"])
+    if method == "full":
+        mode = "full_catalog"
+        sources = ["full_catalog"]
+        spatial = False
+        random_mode = False
+    elif method == "random":
+        mode = "random_pool"
+        sources = ["random_negatives"]
+        spatial = False
+        random_mode = True
+    else:
+        mode = "multi_source"
+        sources = ["neighborhood", "popular", "user_frequent", "random_negatives"]
+        spatial = True
+        random_mode = False
+    if random_mode:
+        notes = (
+            "Candidates = up to "
+            f"{random_negatives} uniform random catalog rows (seeded via "
+            "random_negatives_seed + sample index), always including the in-catalog "
+            "true target. Neighborhood / popular / user-frequent sources are unused "
+            "(no empty-union fallback to the full catalog). Train may sample "
+            "negatives from the pool; evaluation ranks inside the full constructed pool. "
+            "Pool size is typically smaller than multi-source — Acc@1 is not pool-size "
+            "normalized; raise --random-negatives toward baseline mean pool size for a "
+            "fairer difficulty match."
+        )
+        empty_fallback = None
+    elif spatial:
+        notes = (
+            "Candidates = union of (1) training-catalog POIs within radius_km of the "
+            "last observed check-in, (2) top popular_top_k POIs by train "
+            f"{popular_by} frequency within popular_radius_km, (3) this user's "
+            "top user_frequent_top_k training venues (min visits), (4) up to "
+            f"{random_negatives} uniform random catalog negatives (seeded). Deduped; "
+            "true target always added when in catalog (val/test included — no path "
+            "may omit it). If neighborhood/popular/user-frequent all contribute "
+            "nothing, that sample falls back to the full catalog. Train may sample "
+            "negatives from the pool; evaluation ranks inside the full constructed pool."
+        )
+        empty_fallback = "full_catalog"
+    else:
+        notes = (
+            "Candidates = the full training catalog for every sample "
+            "(--candidate-radius full). Popular / user-frequent / random-negative "
+            "sources are disabled. Train may sample negatives; evaluation ranks "
+            "inside the full catalog."
+        )
+        empty_fallback = None
     return dict(
-        method="multi_source" if spatial else "full_catalog",
+        method=mode,
         radius_statistic=method,
-        radius_km=radius_km,
+        radius_km=radius_km if spatial else None,
         default_statistic=DEFAULT_RADIUS,
         distance_stats=stats,
         popular_radius=popular_radius if spatial else None,
@@ -697,10 +771,13 @@ def candidate_construction_record(
         popular_by=popular_by if spatial else None,
         user_frequent_top_k=user_frequent_top_k if spatial else 0,
         user_frequent_min_visits=user_frequent_min_visits if spatial else None,
-        random_negatives=random_negatives if spatial else 0,
-        random_negatives_seed=random_negatives_seed if spatial else None,
+        random_negatives=(
+            random_negatives if (spatial or random_mode) else 0),
+        random_negatives_seed=(
+            random_negatives_seed if (spatial or random_mode) else None),
         sources=sources,
-        anchor="previous_checkin_coordinates",
+        anchor="previous_checkin_coordinates" if spatial else (
+            "none_random_pool" if random_mode else "none_full_catalog"),
         catalog_coordinates=(
             "finite mean lat/lon per catalog POI; missing check-in coords are imputed "
             "via trail-adjacent midpoints, then trail mean, then global observed mean"
@@ -711,22 +788,12 @@ def candidate_construction_record(
         poi_target_counts=list(poi_target_counts) if poi_target_counts is not None else None,
         include_target=True,
         ground_truth_always_in_pool=True,
-        empty_union_fallback="full_catalog",
+        empty_union_fallback=empty_fallback,
         train_eval_shared=True,
         train_sampling=(
             "train may subsample via --negatives / --max-train-candidates; "
             "evaluate uses the full constructed pool"
         ),
         eval_uses_full_pool=True,
-        notes=(
-            "Candidates = union of (1) training-catalog POIs within radius_km of the "
-            "last observed check-in, (2) top popular_top_k POIs by train "
-            f"{popular_by} frequency within popular_radius_km, (3) this user's "
-            "top user_frequent_top_k training venues (min visits), (4) up to "
-            f"{random_negatives} uniform random catalog negatives (seeded). Deduped; "
-            "true target always added when in catalog (val/test included — no path "
-            "may omit it). If neighborhood/popular/user-frequent all contribute "
-            "nothing, that sample falls back to the full catalog. Train may sample "
-            "negatives from the pool; evaluation ranks inside the full constructed pool."
-        ),
+        notes=notes,
     )

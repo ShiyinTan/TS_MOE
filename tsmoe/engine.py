@@ -320,10 +320,20 @@ class Cache:
 
     def uses_full_catalog_pools(self):
         """True when every sample scores against the full training catalog."""
-        return self.radius_km is None or self.candidate_construction.get("method") == "full_catalog"
+        method = self.candidate_construction.get("method")
+        if method == "full_catalog":
+            return True
+        if method in ("multi_source", "random_pool"):
+            return False
+        # Legacy caches without an explicit method: None radius ⇒ full catalog.
+        return self.radius_km is None
+
+    def uses_random_pools(self):
+        """True when prepare used ``--candidate-radius random``."""
+        return self.candidate_construction.get("method") == "random_pool"
 
     def candidate_pools(self, data):
-        """Same multi-source (or full-catalog) pools for train and evaluate.
+        """Same multi-source / random / full-catalog pools for train and evaluate.
 
         In-catalog ground-truth targets are always present (verified inside
         ``pools_for_split``); val/test ranking never drops the true next POI.
@@ -336,6 +346,7 @@ class Cache:
             user_frequent=self.user_frequent,
             random_negatives=self.random_negatives,
             random_negatives_seed=self.random_negatives_seed,
+            random_only=self.uses_random_pools(),
         )
 
     def pool_size_stats(self, data):
@@ -675,6 +686,12 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
             parts.append(f"--user-frequent-top-k {cc['user_frequent_top_k']}")
         if cc.get("random_negatives") is not None:
             parts.append(f"--random-negatives {cc['random_negatives']}")
+    elif cc.get("method") == "random_pool":
+        # Random-only: neighborhood / popular / user-frequent unused.
+        if cc.get("random_negatives") is not None:
+            parts.append(f"--random-negatives {cc['random_negatives']}")
+        if cc.get("random_negatives_seed") is not None:
+            parts.append(f"--random-negatives-seed {cc['random_negatives_seed']}")
     targets = []
     if cache.cfg.get("train_targets") is not None:
         targets.append(f"--train-targets {cache.cfg['train_targets']}")

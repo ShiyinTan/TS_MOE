@@ -71,6 +71,9 @@ RUN_NAME_EXPECTATIONS: dict[str, dict] = {
     "abl_cand_pop_p80": {"popular_radius": "p80"},
     "abl_cand_no_uf": {"user_frequent_top_k": 0},
     "abl_cand_nbhd": {"popular_top_k": 0, "user_frequent_top_k": 0},
+    # §5 head-to-head: default multi-source vs random-only pools
+    "abl_cand_baseline": {"candidate_radius": "p90"},
+    "abl_cand_random": {"candidate_radius": "random"},
     # Target protocol
     "abl_tgt_all": {"train_targets": "all", "eval_targets": "all"},
     "abl_tgt_last": {"train_targets": "last", "eval_targets": "last"},
