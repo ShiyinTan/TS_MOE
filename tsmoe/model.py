@@ -147,6 +147,9 @@ class ModelConfig:
     cat_stage_bias: float = 0.
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
     tsb_decay_hours: float = 0.
+    # PRME-style session-gap gate: keep full tsb only when Δt(last→now) ≤ τ hours; else 0.
+    # Distinct from continuous Hawkes decay / Δt-bins (both Acc Discard). 0 = off.
+    tsb_session_gap_hours: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
     # Optional overlays (all default off — Acc@1 path unchanged unless set).
     candidate_context: str = "off"
@@ -264,6 +267,8 @@ class ModelConfig:
                 raise ValueError("explore radiation requires causal counts")
         if self.tsb_decay_hours < 0:
             raise ValueError("tsb_decay_hours must be nonnegative")
+        if self.tsb_session_gap_hours < 0:
+            raise ValueError("tsb_session_gap_hours must be nonnegative")
         if self.visit_bins < 1:
             raise ValueError("visit_bins must be positive")
         if self.candidate_context not in CANDIDATE_CONTEXT_MODES:
@@ -866,6 +871,11 @@ class TSMoE(nn.Module):
             if tau > 0 and "target_gap_hours" in count_ctx:
                 gap = count_ctx["target_gap_hours"].to(score.device).clamp_min(0)
                 tsb_term = tsb_term * torch.exp(-gap / tau)[:, None]
+            # Session-gap gate (PRME-style): zero tsb across long breaks (not continuous decay).
+            gap_tau = float(getattr(self.cfg, "tsb_session_gap_hours", 0.0) or 0.0)
+            if gap_tau > 0 and "target_gap_hours" in count_ctx:
+                gap = count_ctx["target_gap_hours"].to(score.device).clamp_min(0)
+                tsb_term = tsb_term * (gap <= gap_tau).to(score.dtype)[:, None]
             tsb_term = apply_surd_gate(tsb_term, cand_gate, gate_mode)
             score = score + tsb_term
         # Hypergraph prior: last category → candidate POI (cat_transition).

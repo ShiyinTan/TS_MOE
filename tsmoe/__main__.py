@@ -298,6 +298,10 @@ def main():
         help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
              "hours from last history tip to target (Hawkes-lite; 0 = off)")
     t.add_argument(
+        "--tsb-session-gap", type=float, default=0.0, dest="tsb_session_gap_hours",
+        help="PRME-style gate: keep full tsb only when Δt(last→now) ≤ τ hours; "
+             "else zero tsb (default 0 = off). Sweep {6,12,24}; not continuous decay")
+    t.add_argument(
         "--surd-bias-gate", choices=SURD_BIAS_GATE_MODES, default="off",
         help="per-candidate gate from SURD / Specific MI controlling score/attn "
              "biases: off (default); unique_p; smi_p; smi_pc; u_mass; confidence. "

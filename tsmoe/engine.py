@@ -73,6 +73,7 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("tsb_dt_edges", ())
     cfg.setdefault("cat_stage_bias", 0.0)
     cfg.setdefault("tsb_decay_hours", 0.0)
+    cfg.setdefault("tsb_session_gap_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
     cfg.setdefault("candidate_context", "off")
@@ -1246,6 +1247,7 @@ def train(args):
     tsb_dt_edges = tuple(parse_dt_bin_edges(getattr(args, "transition_dt_bins", "off")))
     cat_stage_bias = float(getattr(args, "cat_stage_bias", 0.0) or 0.0)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
+    tsb_session_gap_hours = float(getattr(args, "tsb_session_gap_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
     if gauss_geo_bias < 0:
@@ -1301,6 +1303,8 @@ def train(args):
                 "--explore-score-bias > 0")
     if tsb_decay_hours < 0:
         raise ValueError("--tsb-decay-hours must be nonnegative")
+    if tsb_session_gap_hours < 0:
+        raise ValueError("--tsb-session-gap must be nonnegative hours")
     ce_focal_gamma = float(getattr(args, "ce_focal_gamma", 0.0) or 0.0)
     if ce_focal_gamma < 0:
         raise ValueError("--ce-focal-gamma must be nonnegative")
@@ -1424,6 +1428,7 @@ def train(args):
                       tsb_dt_edges=tsb_dt_edges,
                       cat_stage_bias=cat_stage_bias,
                       tsb_decay_hours=tsb_decay_hours,
+                      tsb_session_gap_hours=tsb_session_gap_hours,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
                       candidate_context_time=candidate_context_time,
@@ -1465,6 +1470,7 @@ def train(args):
           f"tsb_dt_edges={cfg.tsb_dt_edges} "
           f"cat_stage_bias={cfg.cat_stage_bias} "
           f"tsb_decay_hours={cfg.tsb_decay_hours} "
+          f"tsb_session_gap_hours={cfg.tsb_session_gap_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
           f"visit_bins={cfg.visit_bins} candidate_context={cfg.candidate_context} "
@@ -1521,6 +1527,7 @@ def train(args):
     settings["tsb_dt_edges"] = list(cfg.tsb_dt_edges)
     settings["cat_stage_bias"] = cfg.cat_stage_bias
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
+    settings["tsb_session_gap_hours"] = cfg.tsb_session_gap_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias
     settings["tsb_gate_mode"] = cfg.tsb_gate_mode
