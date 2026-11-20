@@ -756,6 +756,81 @@ def format_pool_size_line(split: str, stats: dict) -> str:
     return line
 
 
+def mix_adaptive_negatives(probe_rows: torch.Tensor, probe_mask: torch.Tensor,
+                           probe_scores: torch.Tensor, targets: torch.Tensor,
+                           n_negatives: int, hard_frac: float, rng: random.Random):
+    """Build train rows from a scored probe: hard top-k + random fill (#37).
+
+    ``probe_rows`` / ``probe_scores`` are [B, P] with positive typically at col 0
+    (as from ``sample_candidates``). Returns ``(rows, labels, mask)`` with
+    positive at column 0 and ``n_negatives`` mixed negatives (or fewer if pool thin).
+    """
+    if not 0.0 <= float(hard_frac) <= 1.0:
+        raise ValueError("neg-hard-frac must be in [0, 1]")
+    if int(n_negatives) < 1:
+        raise ValueError("adaptive_mix requires a positive --negatives count")
+    bsz = int(probe_rows.shape[0])
+    row_lists = []
+    for b in range(bsz):
+        tgt = int(targets[b].item())
+        valid = probe_mask[b].tolist()
+        members = [int(probe_rows[b, j].item()) for j, ok in enumerate(valid) if ok]
+        # Ensure target present; others are probe negatives / extras.
+        others = [r for r in dict.fromkeys(members) if r != tgt]
+        if not others:
+            row_lists.append([tgt])
+            continue
+        want = min(int(n_negatives), len(others))
+        n_hard = int(round(want * float(hard_frac)))
+        n_hard = max(0, min(n_hard, want))
+        n_rand = want - n_hard
+        # Score only probe columns that are true negatives.
+        scored = []
+        for j, ok in enumerate(valid):
+            if not ok:
+                continue
+            row = int(probe_rows[b, j].item())
+            if row == tgt:
+                continue
+            scored.append((float(probe_scores[b, j].item()), row))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        hard = []
+        seen = set()
+        for _, row in scored:
+            if row in seen:
+                continue
+            hard.append(row)
+            seen.add(row)
+            if len(hard) >= n_hard:
+                break
+        remain = [r for r in others if r not in seen]
+        if n_rand > 0:
+            if n_rand >= len(remain):
+                rand = remain
+            else:
+                rand = rng.sample(remain, n_rand)
+        else:
+            rand = []
+        # If hard short (flat scores / tiny probe), backfill from remain.
+        chosen = hard + rand
+        if len(chosen) < want:
+            extra_pool = [r for r in others if r not in set(chosen)]
+            need = want - len(chosen)
+            if need >= len(extra_pool):
+                chosen.extend(extra_pool)
+            elif need > 0:
+                chosen.extend(rng.sample(extra_pool, need))
+        row_lists.append([tgt, *chosen[:want]])
+    width = max(len(row) for row in row_lists)
+    padded = torch.full((len(row_lists), width), -1, dtype=torch.long)
+    mask = torch.zeros(len(row_lists), width, dtype=torch.bool)
+    for i, row in enumerate(row_lists):
+        padded[i, :len(row)] = torch.tensor(row, dtype=torch.long)
+        mask[i, :len(row)] = True
+    labels = torch.zeros(len(row_lists), dtype=torch.long)
+    return padded, labels, mask
+
+
 def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
                       rng: random.Random, pools: Sequence[torch.Tensor] | None = None,
                       max_candidates: int | None = None):

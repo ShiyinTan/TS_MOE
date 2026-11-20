@@ -156,6 +156,18 @@ def main():
                         "-1 uses every other pool member (still subject to "
                         "--max-train-candidates if set)")
     t.add_argument(
+        "--neg-sample", choices=("uniform", "adaptive_mix"), default="uniform",
+        help="negative sampler (#37): uniform (default) or adaptive_mix = "
+             "top model-scored hard negs ⊕ random pool negs (GenNi-style)")
+    t.add_argument(
+        "--neg-hard-frac", type=float, default=0.25,
+        help="fraction of --negatives taken as hard (top probe scores) when "
+             "--neg-sample adaptive_mix (default 0.25)")
+    t.add_argument(
+        "--neg-probe-mult", type=float, default=4.0,
+        help="probe size ≈ max(negatives, negatives×mult) for adaptive_mix "
+             "hard mining (default 4)")
+    t.add_argument(
         "--max-train-candidates", type=int, default=-1,
         help="cap total training candidates per sample including the positive "
              "(default -1 = no extra cap beyond --negatives); evaluation always "

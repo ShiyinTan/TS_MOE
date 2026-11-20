@@ -13,8 +13,8 @@ import torch
 from tqdm.auto import tqdm
 
 from .candidates import (
-    format_pool_size_line, pools_for_split, sample_candidates,
-    shrink_pools_spatial_prior, summarize_pool_sizes,
+    format_pool_size_line, mix_adaptive_negatives, pools_for_split,
+    sample_candidates, shrink_pools_spatial_prior, summarize_pool_sizes,
 )
 from .counts import (
     DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
@@ -1557,6 +1557,17 @@ def train(args):
         raise ValueError("soft-target cannot combine with --ce-focal-gamma > 0")
     if soft_target_beta > 0 and not causal_counts:
         raise ValueError("--soft-target-beta > 0 requires causal counts")
+    neg_sample = str(getattr(args, "neg_sample", "uniform") or "uniform").lower()
+    if neg_sample not in ("uniform", "adaptive_mix"):
+        raise ValueError("--neg-sample must be uniform|adaptive_mix")
+    neg_hard_frac = float(getattr(args, "neg_hard_frac", 0.25) or 0.0)
+    if not 0.0 <= neg_hard_frac <= 1.0:
+        raise ValueError("--neg-hard-frac must be in [0, 1]")
+    if neg_sample == "adaptive_mix" and int(getattr(args, "negatives", 0) or 0) < 1:
+        raise ValueError("--neg-sample adaptive_mix requires --negatives >= 1")
+    neg_probe_mult = float(getattr(args, "neg_probe_mult", 4.0) or 4.0)
+    if neg_probe_mult < 1.0:
+        raise ValueError("--neg-probe-mult must be >= 1")
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
     # Optional overlays (default off).
     candidate_context = getattr(args, "candidate_context", "off")
@@ -1767,10 +1778,16 @@ def train(args):
     settings["transition_pmi"] = cfg.transition_pmi
     settings["expert_cross_attn"] = cfg.expert_cross_attn
     settings["expert_cross_attn_sparse"] = cfg.expert_cross_attn_sparse
+    settings["neg_sample"] = neg_sample
+    settings["neg_hard_frac"] = neg_hard_frac
+    settings["neg_probe_mult"] = neg_probe_mult
     # Default on: test after every epoch (in addition to final best-ckpt test).
     eval_test_every_epoch = bool(getattr(args, "eval_test_every_epoch", True))
     settings["eval_test_every_epoch"] = eval_test_every_epoch
     max_train_candidates = None if args.max_train_candidates < 0 else args.max_train_candidates
+    if neg_sample == "adaptive_mix":
+        print(f"neg_sample=adaptive_mix hard_frac={neg_hard_frac} "
+              f"probe_mult={neg_probe_mult} negatives={args.negatives}", flush=True)
     category_frequency = Counter(data["C"].tolist())
     test = cache.split("test")
     pool_stats, pools_by_split = report_candidate_pool_stats(
@@ -1813,6 +1830,9 @@ def train(args):
         train_sampling=dict(
             negatives=args.negatives,
             max_train_candidates=args.max_train_candidates,
+            neg_sample=neg_sample,
+            neg_hard_frac=neg_hard_frac if neg_sample == "adaptive_mix" else None,
+            neg_probe_mult=neg_probe_mult if neg_sample == "adaptive_mix" else None,
             eval_uses_full_pool=True,
         ),
         causal_counts=dict(
@@ -1864,9 +1884,40 @@ def train(args):
             check_interrupt()
             h, valid, target = device_batch(data, idx, device)
             batch_pools = [train_pools[i] for i in idx.tolist()]
-            rows, positive, cand_mask = sample_candidates(
-                target.detach().cpu(), len(cache.pois), args.negatives, rng,
-                pools=batch_pools, max_candidates=max_train_candidates)
+            if neg_sample == "adaptive_mix":
+                # Probe a larger random pool subset, score no-grad, then mix hard+random.
+                probe_n = max(int(args.negatives), int(math.ceil(args.negatives * neg_probe_mult)))
+                probe_cap = None
+                if max_train_candidates is not None:
+                    probe_cap = max(max_train_candidates, probe_n + 1)
+                probe_rows, _, probe_mask = sample_candidates(
+                    target.detach().cpu(), len(cache.pois), probe_n, rng,
+                    pools=batch_pools, max_candidates=probe_cap)
+                probe_ctx = None
+                if cfg.causal_counts or needs_side_features(cfg):
+                    probe_lists = masked_candidate_lists(probe_rows, probe_mask)
+                    # Read-only probe (no table update yet).
+                    probe_ctx = gather_features_causal(
+                        cfg, cache, data, idx, probe_lists, int(valid.shape[1]),
+                        online_tables, update=False, train_data=data)
+                    probe_ctx = count_ctx_to_device(probe_ctx, device)
+                pr = probe_rows.to(device)
+                pm = probe_mask.to(device)
+                safe_probe = pr.masked_fill(~pm, -1)
+                with torch.no_grad():
+                    probe_prior, probe_conf = final(safe_probe)
+                    probe_out = model(
+                        h, valid, pr, probe_prior, probe_conf, candidate_mask=pm,
+                        count_ctx=probe_ctx,
+                        surd_specific=lookup_surd_specific(final, safe_probe, cfg))
+                    probe_scores = probe_out["score"].detach().cpu()
+                rows, positive, cand_mask = mix_adaptive_negatives(
+                    probe_rows, probe_mask, probe_scores, target.detach().cpu(),
+                    int(args.negatives), neg_hard_frac, rng)
+            else:
+                rows, positive, cand_mask = sample_candidates(
+                    target.detach().cpu(), len(cache.pois), args.negatives, rng,
+                    pools=batch_pools, max_candidates=max_train_candidates)
             count_ctx = None
             if cfg.causal_counts or needs_side_features(cfg):
                 # Per-sample read from current tables, then update with GT next hop.

@@ -17,9 +17,10 @@ from tsmoe.__main__ import main
 from tsmoe.candidates import (
     build_user_frequent, candidate_construction_record, catalog_coordinates,
     catalog_visit_counts, consecutive_visit_distances, format_pool_size_line,
-    haversine_km, neighborhood_indices, pick_popular_radius_km, pick_radius_km,
-    popular_indices, resolve_candidate_pool, sample_candidates,
-    shrink_pools_spatial_prior, summarize_distances, summarize_pool_sizes,
+    haversine_km, mix_adaptive_negatives, neighborhood_indices,
+    pick_popular_radius_km, pick_radius_km, popular_indices,
+    resolve_candidate_pool, sample_candidates, shrink_pools_spatial_prior,
+    summarize_distances, summarize_pool_sizes,
 )
 from tsmoe.prepare import dump_json
 from tsmoe.counts import (
@@ -1543,6 +1544,21 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(len(kept), 3)  # top2 nearest {0,1} + forced GT 3
         self.assertIn(3, kept)
         self.assertAlmostEqual(stats["natural_gt_coverage"], 0.0)
+
+    def test_mix_adaptive_negatives_prefers_hard_scores(self):
+        """#37: hard_frac takes top probe scores; rest random from remainders."""
+        # probe: pos=0, negs 1,2,3 with scores 0.1, 9.0, 5.0 → hard should be 2 then 3
+        probe_rows = torch.tensor([[0, 1, 2, 3]])
+        probe_mask = torch.ones(1, 4, dtype=torch.bool)
+        probe_scores = torch.tensor([[0.0, 0.1, 9.0, 5.0]])
+        targets = torch.tensor([0])
+        rows, labels, mask = mix_adaptive_negatives(
+            probe_rows, probe_mask, probe_scores, targets,
+            n_negatives=2, hard_frac=1.0, rng=random.Random(0))
+        self.assertEqual(int(rows[0, 0].item()), 0)
+        self.assertEqual(int(labels[0].item()), 0)
+        negs = set(rows[0, 1:][mask[0, 1:]].tolist())
+        self.assertEqual(negs, {2, 3})
 
     def test_soft_prior_targets_mixes_onehot_and_priors(self):
         from tsmoe.model import soft_prior_targets
