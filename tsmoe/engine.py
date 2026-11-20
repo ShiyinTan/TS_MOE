@@ -14,9 +14,9 @@ import torch
 from tqdm.auto import tqdm
 
 from .candidates import (
-    catalog_coordinates, format_pool_size_line, haversine_km,
-    mix_adaptive_negatives, pools_for_split, sample_candidates,
-    shrink_pools_spatial_prior, summarize_pool_sizes,
+    format_pool_size_line, haversine_km, mix_adaptive_negatives,
+    pools_for_split, sample_candidates, shrink_pools_spatial_prior,
+    summarize_pool_sizes,
 )
 from .counts import (
     DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
@@ -1764,8 +1764,9 @@ def train(args):
               f"top_k={kd_top_k} temp={kd_temp}", flush=True)
     geo_edge_src = geo_edge_dst = geo_edge_w = None
     if poi_geo_laplace > 0:
-        coords_list, _ = catalog_coordinates(cache.split("train"), cache.pois)
-        coords = torch.tensor(coords_list, dtype=torch.float64)
+        if getattr(cache, "poi_coords", None) is None:
+            raise ValueError("--poi-geo-laplace requires cache poi_coordinates")
+        coords = cache.poi_coords.detach().to(dtype=torch.float64)
         geo_edge_src, geo_edge_dst, geo_edge_w = build_geo_knn_edges(coords, geo_knn)
         geo_edge_src = geo_edge_src.to(device)
         geo_edge_dst = geo_edge_dst.to(device)
