@@ -127,6 +127,11 @@ def main():
         help="logit margin inside hard-neg BPR (default 0); only used when "
              "--lambda-bpr > 0. Try 0.5–2.0 to force a clearer Acc@1 gap")
     t.add_argument(
+        "--bpr-mode", choices=("max", "bpr_max", "simce"), default="max",
+        help="hard-neg aux form when --lambda-bpr > 0: max (historical "
+             "softplus vs max-neg), bpr_max (GRU4Rec+ softmax-weighted negs), "
+             "simce (binary CE on [s_pos, max_neg]). Do not pair with focal/CE-τ")
+    t.add_argument(
         "--ce-focal-gamma", type=float, default=0.,
         help="focal CE γ on rec term: (1−p_t)^γ · (−log p_t); 0 = plain CE. "
              "Try 1–2 for Acc@1 hard-miss emphasis (do not pair with CE-τ)")

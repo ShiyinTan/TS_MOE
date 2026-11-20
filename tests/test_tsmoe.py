@@ -1413,6 +1413,14 @@ class TestCausalCounts(unittest.TestCase):
             result, torch.tensor([0]), lambda_bpr=1., bpr_margin=1.0)
         self.assertGreater(float(bpr), 0.0)
         self.assertGreater(float(bpr_m), float(bpr))
+        # bpr_max / simce are finite and positive when a hard competitor exists.
+        _, (_, _, _, bpr_mx) = objective(
+            result, torch.tensor([0]), lambda_bpr=1., bpr_mode="bpr_max")
+        _, (_, _, _, bpr_sc) = objective(
+            result, torch.tensor([0]), lambda_bpr=1., bpr_mode="simce")
+        self.assertGreater(float(bpr_mx), 0.0)
+        self.assertGreater(float(bpr_sc), 0.0)
+        self.assertTrue(torch.isfinite(bpr_mx) and torch.isfinite(bpr_sc))
 
     def test_objective_focal_ce_downweights_easy(self):
         # Confident-but-not-saturated easy vs near-tie hard.

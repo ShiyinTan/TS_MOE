@@ -1023,15 +1023,18 @@ class TSMoE(nn.Module):
 
 
 def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0.,
-              bpr_margin=0., ce_focal_gamma=0.):
+              bpr_margin=0., ce_focal_gamma=0., bpr_mode="max"):
     """Ranking objective: CE (+ optional SURD aux/balance) + optional hard-negative BPR.
 
-    ``lambda_bpr > 0`` adds ``softplus(-(s_pos - max_neg - margin))`` averaged over
-    rows with ≥1 valid negative — a direct Acc@1 push against the strongest
-    competitor. ``bpr_margin`` (default 0) requires the positive to beat the
-    hardest negative by that logit margin. Default ``lambda_bpr=0`` keeps the
-    historical loss.
+    ``lambda_bpr > 0`` adds a hard-neg aux averaged over rows with ≥1 valid
+    negative. ``bpr_mode`` selects the competitor aggregation:
 
+    * ``max`` (default): ``softplus(-(s_pos - max_neg - margin))`` — historical.
+    * ``bpr_max``: GRU4Rec+ BPR-max — softplus against the softmax-weighted
+      mean of negative scores.
+    * ``simce``: binary CE between ``[s_pos, max_neg]`` (hardest competitor).
+
+    ``bpr_margin`` (default 0) applies to ``max`` / ``bpr_max`` only.
     ``ce_focal_gamma > 0`` replaces plain CE with focal
     ``(1 − p_t)^γ · (−log p_t)`` (γ=0 keeps mean CE).
     """
@@ -1043,6 +1046,9 @@ def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0
     gamma = float(ce_focal_gamma or 0.0)
     if gamma < 0:
         raise ValueError("ce_focal_gamma must be nonnegative")
+    mode = str(bpr_mode or "max")
+    if mode not in ("max", "bpr_max", "simce"):
+        raise ValueError("bpr_mode must be max|bpr_max|simce")
     ce = F.cross_entropy(scores, labels, reduction="none")
     if gamma > 0:
         pt = (-ce).exp().clamp(max=1.0)
@@ -1059,10 +1065,26 @@ def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0
         s_pos = scores.gather(1, labels[:, None]).squeeze(1)
         neg_mask = mask.clone()
         neg_mask.scatter_(1, labels[:, None], False)
-        s_neg = scores.masked_fill(~neg_mask, float("-inf")).max(dim=1).values
-        rows = neg_mask.any(dim=1) & torch.isfinite(s_neg)
+        rows = neg_mask.any(dim=1)
         if bool(rows.any()):
             margin = float(bpr_margin or 0.0)
-            bpr = F.softplus(-(s_pos[rows] - s_neg[rows] - margin)).mean()
+            neg_logits = scores.masked_fill(~neg_mask, float("-inf"))
+            if mode == "simce":
+                s_neg = neg_logits.max(dim=1).values
+                pair = torch.stack([s_pos[rows], s_neg[rows]], dim=1)
+                bpr = F.cross_entropy(pair, torch.zeros(pair.size(0), dtype=torch.long,
+                                                        device=pair.device))
+            elif mode == "bpr_max":
+                # Softmax over negatives only; masked cols already -inf → weight 0.
+                neg_w = torch.softmax(neg_logits, dim=1)
+                s_neg = (neg_w * scores.masked_fill(~neg_mask, 0.0)).sum(dim=1)
+                finite = rows & torch.isfinite(s_neg)
+                if bool(finite.any()):
+                    bpr = F.softplus(-(s_pos[finite] - s_neg[finite] - margin)).mean()
+            else:
+                s_neg = neg_logits.max(dim=1).values
+                finite = rows & torch.isfinite(s_neg)
+                if bool(finite.any()):
+                    bpr = F.softplus(-(s_pos[finite] - s_neg[finite] - margin)).mean()
     total = rec + lambda_surd * aux + lambda_balance * balance + float(lambda_bpr) * bpr
     return total, (rec.detach(), aux.detach(), balance.detach(), bpr.detach())
