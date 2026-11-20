@@ -1152,8 +1152,6 @@ def train(args):
         raise ValueError("--gauss-geo-bias must be nonnegative")
     if gauss_geo_bias > 0 and gauss_sigma_km <= 0:
         raise ValueError("--gauss-sigma-km must be positive when --gauss-geo-bias > 0")
-    if gauss_geo_bias > 0 and candidate_context == "off":
-        raise ValueError("--gauss-geo-bias > 0 requires --candidate-context on")
     if geo_adapt not in ("off", "sparse"):
         raise ValueError("--geo-adapt must be off|sparse")
     if geo_adapt_temp < 0:
@@ -1186,6 +1184,8 @@ def train(args):
         raise ValueError("--pop-score-bias > 0 requires causal counts")
     if geo_score_bias > 0 and candidate_context == "off":
         raise ValueError("--geo-score-bias > 0 requires --candidate-context on")
+    if gauss_geo_bias > 0 and candidate_context == "off":
+        raise ValueError("--gauss-geo-bias > 0 requires --candidate-context on")
     surd_bias_gate = getattr(args, "surd_bias_gate", "off")
     surd_score_bias = float(getattr(args, "surd_score_bias", 0.0) or 0.0)
     tsb_gate_mode = getattr(args, "tsb_gate_mode", "off")
