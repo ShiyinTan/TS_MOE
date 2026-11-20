@@ -41,6 +41,7 @@ def model_config_from_checkpoint(raw):
         cfg["causal_counts"] = False
     cfg.setdefault("transition_attn", "bias")
     cfg.setdefault("transition_lambda", 1.0)
+    cfg.setdefault("transition_score_bias", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
     cfg.setdefault("candidate_context", "off")
@@ -736,6 +737,9 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
         parts.append(f"--transition-attn {attn}")
         if args.get("transition_lambda", cfg.get("transition_lambda")) is not None:
             parts.append(f"--transition-lambda {args.get('transition_lambda', cfg.get('transition_lambda'))}")
+        tsb = args.get("transition_score_bias", cfg.get("transition_score_bias", 0.0))
+        if tsb is not None and float(tsb) != 0.0:
+            parts.append(f"--transition-score-bias {tsb}")
         if args.get("visit_bins", cfg.get("visit_bins")) is not None:
             parts.append(f"--visit-bins {args.get('visit_bins', cfg.get('visit_bins'))}")
     for key, flag in (
@@ -1037,6 +1041,7 @@ def train(args):
     causal_counts = not bool(getattr(args, "no_causal_counts", False))
     transition_attn = getattr(args, "transition_attn", "bias")
     transition_lambda = float(getattr(args, "transition_lambda", 1.0))
+    transition_score_bias = float(getattr(args, "transition_score_bias", 0.0) or 0.0)
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
     # Optional overlays (default off).
     candidate_context = getattr(args, "candidate_context", "off")
@@ -1053,11 +1058,14 @@ def train(args):
         raise ValueError("--candidate-context-time causal_slot requires causal counts")
     if transition_pmi == "on" and not causal_counts:
         raise ValueError("--transition-pmi on requires causal counts")
+    if transition_score_bias > 0 and not causal_counts:
+        raise ValueError("--transition-score-bias > 0 requires causal counts")
     cfg = ModelConfig(args.dim, args.heads, args.layers, args.dropout, args.top_k,
                       args.temperature, args.lambda_prior, use_surd=not args.no_surd,
                       router_mode=args.router_mode, hybrid_lambda=args.hybrid_lambda,
                       causal_counts=causal_counts, transition_attn=transition_attn,
-                      transition_lambda=transition_lambda, visit_bins=visit_bins,
+                      transition_lambda=transition_lambda,
+                      transition_score_bias=transition_score_bias, visit_bins=visit_bins,
                       candidate_context=candidate_context,
                       candidate_context_time=candidate_context_time,
                       session_summary=session_summary, user_pref=user_pref,
@@ -1074,6 +1082,7 @@ def train(args):
     print(f"model_param_device={param_device} router_mode={cfg.router_mode} "
           f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior} "
           f"causal_counts={cfg.causal_counts} transition_attn={cfg.transition_attn} "
+          f"transition_score_bias={cfg.transition_score_bias} "
           f"visit_bins={cfg.visit_bins} candidate_context={cfg.candidate_context} "
           f"session_summary={cfg.session_summary} user_pref={cfg.user_pref} "
           f"user_id_emb={cfg.user_id_emb} n_users={getattr(model, 'n_users', 0)} "
@@ -1097,6 +1106,7 @@ def train(args):
     settings["causal_counts"] = cfg.causal_counts
     settings["transition_attn"] = cfg.transition_attn
     settings["transition_lambda"] = cfg.transition_lambda
+    settings["transition_score_bias"] = cfg.transition_score_bias
     settings["visit_bins"] = cfg.visit_bins
     settings["candidate_context"] = cfg.candidate_context
     settings["candidate_context_time"] = cfg.candidate_context_time
@@ -1158,6 +1168,7 @@ def train(args):
             enabled=cfg.causal_counts,
             transition_attn=cfg.transition_attn,
             transition_lambda=cfg.transition_lambda,
+            transition_score_bias=cfg.transition_score_bias,
             visit_bins=cfg.visit_bins,
             visit_bin_edges=None if visit_bin_edges is None else visit_bin_edges.tolist(),
         ),

@@ -162,6 +162,10 @@ def main():
         "--transition-lambda", type=float, default=1.0,
         help="scale on log1p(transition) bias terms (default 1.0; bias mode)")
     t.add_argument(
+        "--transition-score-bias", type=float, default=0.0,
+        help="add λ·log1p(last→cand POI transition) to ranking scores "
+             "(default 0 = off). Light graph Acc@1 prior; needs causal counts")
+    t.add_argument(
         "--visit-bins", type=positive, default=DEFAULT_VISIT_BINS,
         help=f"equal-frequency bins of user cumulative visit count for T/L "
              f"(default {DEFAULT_VISIT_BINS}; fit on train stream, freeze for val/test)")
@@ -270,10 +274,11 @@ def main():
                                     min(args.lambda_prior, args.hybrid_lambda, args.lambda_surd,
                                         args.lambda_balance, args.weight_decay) < 0
                                     or min(args.lr, args.grad_clip) <= 0
-                                    or getattr(args, "transition_lambda", 1.0) < 0):
+                                    or getattr(args, "transition_lambda", 1.0) < 0
+                                    or getattr(args, "transition_score_bias", 0.0) < 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
-                   "transition-lambda must be nonnegative")
+                   "transition-lambda / transition-score-bias must be nonnegative")
     if hasattr(args, "threads"):
         torch.set_num_threads(args.threads)
     try:

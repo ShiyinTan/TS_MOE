@@ -43,6 +43,8 @@ class ModelConfig:
     # bias (default) | gate | rel_key — see docs/causal-counts.md.
     transition_attn: str = "bias"
     transition_lambda: float = 1.
+    # Additive Acc@1 prior: λ·log1p(last→cand POI transition) on scores (0 = off).
+    transition_score_bias: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
     # Optional overlays (all default off — Acc@1 path unchanged unless set).
     candidate_context: str = "off"
@@ -69,6 +71,8 @@ class ModelConfig:
             raise ValueError(f"transition_attn must be one of {TRANSITION_ATTN_MODES}")
         if self.transition_lambda < 0:
             raise ValueError("transition_lambda must be nonnegative")
+        if self.transition_score_bias < 0:
+            raise ValueError("transition_score_bias must be nonnegative")
         if self.visit_bins < 1:
             raise ValueError("visit_bins must be positive")
         if self.candidate_context not in CANDIDATE_CONTEXT_MODES:
@@ -534,7 +538,16 @@ class TSMoE(nn.Module):
             expert_z_list = z  # already expert-local
         residual, projected = self.dispatch(
             z, top, weights, mask, details, expert_z=expert_z_list)
-        score = (base + gate * residual).masked_fill(~mask, -torch.inf)
+        score = base + gate * residual
+        # Light graph prior: last-history → candidate POI transition count → Acc@1 bias.
+        tb = float(self.cfg.transition_score_bias or 0.0)
+        if (tb > 0 and count_ctx is not None and self.cfg.causal_counts
+                and "poi_transition" in count_ctx):
+            tr = count_ctx["poi_transition"][:, :rows.shape[1], :valid.shape[1]].to(score.device)
+            last = valid.long().sum(-1).clamp_min(1) - 1  # [B]
+            last_tr = tr.gather(2, last.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
+            score = score + tb * torch.log1p(last_tr.clamp_min(0))
+        score = score.masked_fill(~mask, -torch.inf)
         result = dict(score=score, log_pi=log_pi, top=top, weights=weights, gate_logits=gate_logits,
                       gate=gate, mass=mass, alpha=alpha, confidence=w, mask=mask,
                       router_mode=mode)
