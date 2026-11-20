@@ -762,7 +762,7 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
     defaults = {
         "lr": 0.001, "weight_decay": 0.01, "dropout": 0.1, "dim": 128,
         "layers": 2, "heads": 4, "top_k": 4, "batch_size": 32,
-        "checkpoint_metric": "ndcg10",
+        "checkpoint_metric": "ndcg10", "lambda_bpr": 0.0, "epochs": 20,
     }
     for key, flag in (
             ("lr", "--lr"), ("weight_decay", "--weight-decay"),
@@ -770,6 +770,7 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
             ("heads", "--heads"), ("top_k", "--top-k"),
             ("batch_size", "--batch-size"),
             ("checkpoint_metric", "--checkpoint-metric"),
+            ("lambda_bpr", "--lambda-bpr"), ("epochs", "--epochs"),
     ):
         if key not in args or args[key] is None:
             continue
@@ -1183,7 +1184,7 @@ def train(args):
     for epoch in epoch_bar:
         check_interrupt()
         model.train()
-        loss_sum, components = 0., torch.zeros(3, dtype=torch.float64)
+        loss_sum, components = 0., torch.zeros(4, dtype=torch.float64)
         counts = torch.zeros(15, dtype=torch.long, device=device)
         if cfg.causal_counts:
             online_tables.reset()
@@ -1210,7 +1211,9 @@ def train(args):
             prior, confidence = final(rows.masked_fill(~cand_mask, -1))
             result = model(h, valid, rows, prior, confidence, candidate_mask=cand_mask,
                            count_ctx=count_ctx)
-            loss, parts = objective(result, positive.to(device), args.lambda_surd, args.lambda_balance)
+            loss, parts = objective(
+                result, positive.to(device), args.lambda_surd, args.lambda_balance,
+                float(getattr(args, "lambda_bpr", 0.0) or 0.0))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)
@@ -1231,7 +1234,9 @@ def train(args):
         else:
             score = row["NDCG@10"]
         record = dict(epoch=epoch, loss=loss_sum / len(data["end"]),
-                      loss_terms=dict(zip(("rec", "surd", "balance"), (components / len(data["end"])).tolist())),
+                      loss_terms=dict(zip(
+                          ("rec", "surd", "balance", "bpr"),
+                          (components / len(data["end"])).tolist())),
                       dispatch_counts=dict(zip(EXPERT_ORDER, counts.cpu().tolist())), validation=metrics)
         results_epoch = dict(
             epoch=epoch,

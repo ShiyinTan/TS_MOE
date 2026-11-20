@@ -118,6 +118,10 @@ def main():
                         ("lr", .001), ("weight-decay", .01), ("grad-clip", 1.)]:
         t.add_argument("--" + name, type=float, default=value)
     t.add_argument(
+        "--lambda-bpr", type=float, default=0.,
+        help="weight on hard-negative BPR aux softplus(-(s_pos-max_neg)) "
+             "(default 0 = off). Acc@1 hillclimbs may try 0.1–1.0")
+    t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "
              "mass only (no sequence in router); surd_mlp = softmax(MLP(SURD)/T); "

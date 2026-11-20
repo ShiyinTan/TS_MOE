@@ -550,15 +550,32 @@ class TSMoE(nn.Module):
                           count_ctx=count_ctx, **kwargs)
 
 
-def objective(result, labels, lambda_surd=.05, lambda_balance=.001):
+def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0.):
+    """Ranking objective: CE (+ optional SURD aux/balance) + optional hard-negative BPR.
+
+    ``lambda_bpr > 0`` adds ``softplus(-(s_pos - max_neg))`` averaged over rows with
+    ≥1 valid negative — a direct Acc@1 push against the strongest competitor.
+    Default ``lambda_bpr=0`` keeps the historical loss.
+    """
     mask, w = result["mask"], result["confidence"]
     log_pi, mass, gate = result["log_pi"], result["mass"], result["gate"]
     if not mask.gather(1, labels[:, None]).all():
         raise ValueError("every positive must be in the valid candidate set")
-    rec = F.cross_entropy(result["score"], labels)
+    scores = result["score"]
+    rec = F.cross_entropy(scores, labels)
     weights = w * mask / mask.sum()
     bce = F.binary_cross_entropy_with_logits(result["gate_logits"], result["alpha"], reduction="none")
     aux = (weights * (bce - (mass * log_pi).sum(-1))).sum()
     difference = gate[..., None] * log_pi.exp() - mass
     balance = (weights[..., None] * difference).sum((0, 1)).square().sum()
-    return rec + lambda_surd * aux + lambda_balance * balance, (rec.detach(), aux.detach(), balance.detach())
+    bpr = scores.new_zeros(())
+    if float(lambda_bpr) > 0:
+        s_pos = scores.gather(1, labels[:, None]).squeeze(1)
+        neg_mask = mask.clone()
+        neg_mask.scatter_(1, labels[:, None], False)
+        s_neg = scores.masked_fill(~neg_mask, float("-inf")).max(dim=1).values
+        rows = neg_mask.any(dim=1) & torch.isfinite(s_neg)
+        if bool(rows.any()):
+            bpr = F.softplus(-(s_pos[rows] - s_neg[rows])).mean()
+    total = rec + lambda_surd * aux + lambda_balance * balance + float(lambda_bpr) * bpr
+    return total, (rec.detach(), aux.detach(), balance.detach(), bpr.detach())
