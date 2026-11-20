@@ -1,6 +1,6 @@
 #!/bin/bash
-# Ideas v6 #32: history-hit / revisit-recency beside locked revisit0.10 + geo0.15.
-# Soft-target / focal / BPR-max already Acc Discard — score-feature path.
+# Ideas v6 #32: history-hit / revisit-recency on NEW peak soft10r
+# (revisit0.10 + geo0.15 + soft-target β=0.10 revisit-only Acc 0.267650).
 set -euo pipefail
 cd /home/shiyintan/Code/TS_MOE
 source ~/miniconda3/etc/profile.d/conda.sh && conda activate tsmoe
@@ -19,6 +19,8 @@ PEAK=(
   --transition-attn gate
   --geo-score-bias 0.15
   --revisit-score-bias 0.10
+  --soft-target-beta 0.10
+  --soft-target-prior revisit
   --epochs 1 --checkpoint-metric acc1
 )
 
@@ -32,8 +34,8 @@ run_one() {
   echo $! > "logs/overnight/${name}.pid"
 }
 
-run_one 0 on_rev_hit05 --history-hit-bias 0.05 --history-hit-k 5
-run_one 1 on_rev_rec05 --revisit-recency-bias 0.05 --revisit-recency-tau 3
-run_one 2 on_rev_hitrec --history-hit-bias 0.05 --history-hit-k 5 --revisit-recency-bias 0.05 --revisit-recency-tau 3
-run_one 3 on_rev_hit10 --history-hit-bias 0.10 --history-hit-k 5
+run_one 0 on_s10r_hit05 --history-hit-bias 0.05 --history-hit-k 5
+run_one 1 on_s10r_rec05 --revisit-recency-bias 0.05 --revisit-recency-tau 3
+run_one 2 on_s10r_hitrec --history-hit-bias 0.05 --history-hit-k 5 --revisit-recency-bias 0.05 --revisit-recency-tau 3
+run_one 3 on_s10r_hit10 --history-hit-bias 0.10 --history-hit-k 5
 cat logs/overnight/wave13.launch.txt
