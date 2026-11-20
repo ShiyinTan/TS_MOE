@@ -101,6 +101,12 @@ class ModelConfig:
     geo_score_bias: float = 0.
     # Gravity-style distance exponent on geo prior: −λ·log1p(km^α). α=1 ≡ default log1p(km).
     geo_score_power: float = 1.
+    # Gaussian spatial kernel Acc@1 prior: λ·exp(−km²/(2σ²)); 0 = off. Prefer replace geo.
+    gauss_geo_bias: float = 0.
+    gauss_sigma_km: float = 0.5
+    # Modulate geo / gauss by last→cand transition mass: off | sparse (more spatial when tsb thin).
+    geo_adapt: str = "off"
+    geo_adapt_temp: float = 1.0
     # Acc@1 revisit prior: λ·log1p(user→cand visits) from cand_poi_feat[...,0] (0 = off).
     revisit_score_bias: float = 0.
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
@@ -151,6 +157,16 @@ class ModelConfig:
             raise ValueError("geo_score_bias > 0 requires --candidate-context on")
         if self.geo_score_power <= 0:
             raise ValueError("geo_score_power must be positive")
+        if self.gauss_geo_bias < 0:
+            raise ValueError("gauss_geo_bias must be nonnegative")
+        if self.gauss_geo_bias > 0 and self.gauss_sigma_km <= 0:
+            raise ValueError("gauss_sigma_km must be positive when gauss_geo_bias > 0")
+        if self.gauss_geo_bias > 0 and self.candidate_context == "off":
+            raise ValueError("gauss_geo_bias > 0 requires --candidate-context on")
+        if self.geo_adapt not in ("off", "sparse"):
+            raise ValueError("geo_adapt must be off|sparse")
+        if self.geo_adapt_temp < 0:
+            raise ValueError("geo_adapt_temp must be nonnegative")
         if self.revisit_score_bias < 0:
             raise ValueError("revisit_score_bias must be nonnegative")
         if self.tsb_decay_hours < 0:
@@ -692,6 +708,17 @@ class TSMoE(nn.Module):
                 and "cand_poi_feat" in count_ctx):
             pop = count_ctx["cand_poi_feat"][:, :rows.shape[1], 1].to(score.device)
             score = score + psb * pop.clamp_min(0)
+        # Spatial scale: 1 when geo_adapt=off; shrinks when last→cand transition is dense.
+        spatial_scale = None
+        if (getattr(self.cfg, "geo_adapt", "off") == "sparse"
+                and count_ctx is not None and self.cfg.causal_counts
+                and "poi_transition" in count_ctx):
+            tsb_mass = self._last_hop_log1p(
+                count_ctx["poi_transition"], rows, valid, score.device)  # already log1p
+            # Convert back to count-ish: expm1(log1p(c)) = c.
+            count_l1p = tsb_mass
+            at = float(getattr(self.cfg, "geo_adapt_temp", 1.0) or 1.0)
+            spatial_scale = 1.0 / (1.0 + at * count_l1p.clamp_min(0))
         # Proximity prior: closer candidates score higher (−λ · log1p(km^α)).
         # delta_geo[...,0] stores log1p(km); α=1 recovers −λ·log1p(km).
         gsb = float(getattr(self.cfg, "geo_score_bias", 0.0) or 0.0)
@@ -703,7 +730,19 @@ class TSMoE(nn.Module):
             else:
                 km = torch.expm1(hav).clamp_min(0)
                 geo_pen = torch.log1p(km.pow(geo_pow))
+            if spatial_scale is not None:
+                geo_pen = geo_pen * spatial_scale
             score = score - gsb * geo_pen
+        # Gaussian spatial kernel: λ·exp(−km²/(2σ²)); prefer replace flat geo.
+        ggb = float(getattr(self.cfg, "gauss_geo_bias", 0.0) or 0.0)
+        if ggb > 0 and count_ctx is not None and "delta_geo" in count_ctx:
+            hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+            km = torch.expm1(hav).clamp_min(0)
+            sigma = float(getattr(self.cfg, "gauss_sigma_km", 0.5) or 0.5)
+            gauss = torch.exp(-(km * km) / (2.0 * sigma * sigma))
+            if spatial_scale is not None:
+                gauss = gauss * spatial_scale
+            score = score + ggb * gauss
         # Revisit prior: user→cand causal visit mass (cand_poi_feat dim 0 = log1p(user)).
         rsb = float(getattr(self.cfg, "revisit_score_bias", 0.0) or 0.0)
         if (rsb > 0 and count_ctx is not None and self.cfg.causal_counts

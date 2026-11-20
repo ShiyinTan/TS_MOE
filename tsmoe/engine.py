@@ -46,6 +46,10 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("pop_score_bias", 0.0)
     cfg.setdefault("geo_score_bias", 0.0)
     cfg.setdefault("geo_score_power", 1.0)
+    cfg.setdefault("gauss_geo_bias", 0.0)
+    cfg.setdefault("gauss_sigma_km", 0.5)
+    cfg.setdefault("geo_adapt", "off")
+    cfg.setdefault("geo_adapt_temp", 1.0)
     cfg.setdefault("revisit_score_bias", 0.0)
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
@@ -1136,10 +1140,24 @@ def train(args):
     pop_score_bias = float(getattr(args, "pop_score_bias", 0.0) or 0.0)
     geo_score_bias = float(getattr(args, "geo_score_bias", 0.0) or 0.0)
     geo_score_power = float(getattr(args, "geo_score_power", 1.0) or 1.0)
+    gauss_geo_bias = float(getattr(args, "gauss_geo_bias", 0.0) or 0.0)
+    gauss_sigma_km = float(getattr(args, "gauss_sigma_km", 0.5) or 0.5)
+    geo_adapt = getattr(args, "geo_adapt", "off")
+    geo_adapt_temp = float(getattr(args, "geo_adapt_temp", 1.0) or 1.0)
     revisit_score_bias = float(getattr(args, "revisit_score_bias", 0.0) or 0.0)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
+    if gauss_geo_bias < 0:
+        raise ValueError("--gauss-geo-bias must be nonnegative")
+    if gauss_geo_bias > 0 and gauss_sigma_km <= 0:
+        raise ValueError("--gauss-sigma-km must be positive when --gauss-geo-bias > 0")
+    if gauss_geo_bias > 0 and candidate_context == "off":
+        raise ValueError("--gauss-geo-bias > 0 requires --candidate-context on")
+    if geo_adapt not in ("off", "sparse"):
+        raise ValueError("--geo-adapt must be off|sparse")
+    if geo_adapt_temp < 0:
+        raise ValueError("--geo-adapt-temp must be nonnegative")
     if revisit_score_bias < 0:
         raise ValueError("--revisit-score-bias must be nonnegative")
     if tsb_decay_hours < 0:
@@ -1186,6 +1204,10 @@ def train(args):
                       pop_score_bias=pop_score_bias,
                       geo_score_bias=geo_score_bias,
                       geo_score_power=geo_score_power,
+                      gauss_geo_bias=gauss_geo_bias,
+                      gauss_sigma_km=gauss_sigma_km,
+                      geo_adapt=geo_adapt,
+                      geo_adapt_temp=geo_adapt_temp,
                       revisit_score_bias=revisit_score_bias,
                       tsb_decay_hours=tsb_decay_hours,
                       visit_bins=visit_bins,
@@ -1213,6 +1235,8 @@ def train(args):
           f"category_score_bias={cfg.category_score_bias} "
           f"pop_score_bias={cfg.pop_score_bias} geo_score_bias={cfg.geo_score_bias} "
           f"geo_score_power={cfg.geo_score_power} "
+          f"gauss_geo_bias={cfg.gauss_geo_bias} gauss_sigma_km={cfg.gauss_sigma_km} "
+          f"geo_adapt={cfg.geo_adapt} geo_adapt_temp={cfg.geo_adapt_temp} "
           f"revisit_score_bias={cfg.revisit_score_bias} "
           f"tsb_decay_hours={cfg.tsb_decay_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
@@ -1245,6 +1269,10 @@ def train(args):
     settings["pop_score_bias"] = cfg.pop_score_bias
     settings["geo_score_bias"] = cfg.geo_score_bias
     settings["geo_score_power"] = cfg.geo_score_power
+    settings["gauss_geo_bias"] = cfg.gauss_geo_bias
+    settings["gauss_sigma_km"] = cfg.gauss_sigma_km
+    settings["geo_adapt"] = cfg.geo_adapt
+    settings["geo_adapt_temp"] = cfg.geo_adapt_temp
     settings["revisit_score_bias"] = cfg.revisit_score_bias
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate

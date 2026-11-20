@@ -184,6 +184,20 @@ def main():
         help="gravity exponent α on geo-score-bias: −λ·log1p(km^α) "
              "(default 1 = classic log1p km; try 0.5–2). No-op when geo-score-bias=0")
     t.add_argument(
+        "--gauss-geo-bias", type=float, default=0.0,
+        help="add λ·exp(−km²/(2σ²)) proximity kernel to scores (default 0 = off). "
+             "Prefer replacing --geo-score-bias. Needs --candidate-context on")
+    t.add_argument(
+        "--gauss-sigma-km", type=float, default=0.5,
+        help="σ in km for --gauss-geo-bias (default 0.5; sweep 0.25–2)")
+    t.add_argument(
+        "--geo-adapt", choices=("off", "sparse"), default="off",
+        help="modulate geo/gauss by last→cand transition mass: sparse = more "
+             "spatial when tsb is thin (default off)")
+    t.add_argument(
+        "--geo-adapt-temp", type=float, default=1.0,
+        help="strength α for --geo-adapt sparse: scale=1/(1+α·log1p(count))")
+    t.add_argument(
         "--revisit-score-bias", type=float, default=0.0,
         help="add λ·log1p(user→cand visits) to scores (default 0 = off). "
              "Needs causal counts; Acc@1 revisit prior")
