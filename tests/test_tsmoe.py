@@ -1115,6 +1115,7 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(legacy.revisit_score_bias, 0.0)
         self.assertEqual(legacy.radiation_score_bias, 0.0)
         self.assertEqual(legacy.jump_length_bias, 0.0)
+        self.assertEqual(legacy.return_gate, "off")
         self.assertEqual(legacy.tsb_decay_hours, 0.0)
         self.assertEqual(legacy.surd_bias_gate, "off")
         self.assertEqual(legacy.surd_score_bias, 0.0)
@@ -1264,6 +1265,49 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(soft.shape, (1, 3))
         self.assertTrue(torch.isfinite(hard).all())
         self.assertTrue(torch.isfinite(soft).all())
+
+    def test_return_gate_mixes_revisit_and_explore(self):
+        """Return-gate: π·revisit + (1−π)·gauss explore changes scores vs flat revisit."""
+        torch.manual_seed(11)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        ctx = dict(ctx)
+        m = cand.shape[1]
+        delta = torch.zeros(1, m, 3)
+        delta[0, 0, 0] = math.log1p(0.2)
+        delta[0, 1, 0] = math.log1p(3.0)
+        ctx["delta_geo"] = delta
+        feats = ctx["cand_poi_feat"].clone()
+        feats[0, 0, 0] = 3.0  # strong revisit on near cand
+        feats[0, 1, 0] = 0.0
+        ctx["cand_poi_feat"] = feats
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4,
+                    candidate_context="on", revisit_score_bias=1.0)
+        flat = TSMoE(n_pois, n_cats, 4, ModelConfig(**base)).eval()
+        gated = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, return_gate="on", explore_spatial_bias="gauss",
+            explore_score_bias=1.0, gauss_sigma_km=0.5)).eval()
+        gated.load_state_dict(flat.state_dict(), strict=False)
+        with torch.no_grad():
+            s_flat = flat(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_gate = gated(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        self.assertFalse(torch.allclose(s_flat[:2], s_gate[:2], atol=1e-4, rtol=1e-4))
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on", return_gate="on",
+                        revisit_score_bias=0.1)  # missing explore
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on", return_gate="on",
+                        explore_spatial_bias="gauss", explore_score_bias=0.2)  # missing revisit
 
     def test_surd_bias_gate_helpers_and_score_bias(self):
         """SURD/SMI gates: helpers + additive surd_score_bias lifts high-gate cands."""

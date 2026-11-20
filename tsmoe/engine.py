@@ -60,6 +60,9 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("jump_sigma", 1.0)
     cfg.setdefault("jump_beta", 1.5)
     cfg.setdefault("jump_d0", 0.1)
+    cfg.setdefault("return_gate", "off")
+    cfg.setdefault("explore_spatial_bias", "off")
+    cfg.setdefault("explore_score_bias", 0.0)
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
@@ -1188,6 +1191,9 @@ def train(args):
     jump_dist = getattr(args, "jump_dist", "lognormal")
     jump_beta = float(getattr(args, "jump_beta", 1.5) or 1.5)
     jump_d0 = float(getattr(args, "jump_d0", 0.1) or 0.0)
+    return_gate = getattr(args, "return_gate", "off")
+    explore_spatial_bias = getattr(args, "explore_spatial_bias", "off")
+    explore_score_bias = float(getattr(args, "explore_score_bias", 0.0) or 0.0)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
@@ -1215,6 +1221,19 @@ def train(args):
         raise ValueError("--jump-beta must be positive")
     if jump_d0 < 0:
         raise ValueError("--jump-d0 must be nonnegative")
+    if return_gate not in ("off", "on"):
+        raise ValueError("--return-gate must be off|on")
+    if explore_spatial_bias not in ("off", "gauss", "geo", "radiation"):
+        raise ValueError("--explore-spatial-bias must be off|gauss|geo|radiation")
+    if explore_score_bias < 0:
+        raise ValueError("--explore-score-bias must be nonnegative")
+    if return_gate == "on":
+        if revisit_score_bias <= 0:
+            raise ValueError("--return-gate on requires --revisit-score-bias > 0")
+        if explore_spatial_bias == "off" or explore_score_bias <= 0:
+            raise ValueError(
+                "--return-gate on requires --explore-spatial-bias ≠ off and "
+                "--explore-score-bias > 0")
     if tsb_decay_hours < 0:
         raise ValueError("--tsb-decay-hours must be nonnegative")
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
@@ -1298,6 +1317,9 @@ def train(args):
                       jump_sigma=jump_sigma,
                       jump_beta=jump_beta,
                       jump_d0=jump_d0,
+                      return_gate=return_gate,
+                      explore_spatial_bias=explore_spatial_bias,
+                      explore_score_bias=explore_score_bias,
                       tsb_decay_hours=tsb_decay_hours,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
@@ -1331,6 +1353,8 @@ def train(args):
           f"radiation_kernel={cfg.radiation_kernel} "
           f"jump_length_bias={cfg.jump_length_bias} jump_dist={cfg.jump_dist} "
           f"jump_mu={cfg.jump_mu} jump_sigma={cfg.jump_sigma} "
+          f"return_gate={cfg.return_gate} explore_spatial_bias={cfg.explore_spatial_bias} "
+          f"explore_score_bias={cfg.explore_score_bias} "
           f"tsb_decay_hours={cfg.tsb_decay_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
@@ -1376,6 +1400,9 @@ def train(args):
     settings["jump_sigma"] = cfg.jump_sigma
     settings["jump_beta"] = cfg.jump_beta
     settings["jump_d0"] = cfg.jump_d0
+    settings["return_gate"] = cfg.return_gate
+    settings["explore_spatial_bias"] = cfg.explore_spatial_bias
+    settings["explore_score_bias"] = cfg.explore_score_bias
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias

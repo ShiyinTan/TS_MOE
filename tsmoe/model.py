@@ -20,6 +20,9 @@ CANDIDATE_CONTEXT_MODES = ("off", "on")
 CANDIDATE_CONTEXT_TIME_MODES = ("off", "last_slot", "causal_slot")
 ON_OFF = ("off", "on")
 EXPERT_CROSS_ATTN_MODES = ("off", "hybrid", "full")
+# Return-vs-explore gate: mix revisit vs spatial explore by predicted P(return).
+RETURN_GATE_MODES = ("off", "on")
+EXPLORE_SPATIAL_MODES = ("off", "gauss", "geo", "radiation")
 # Per-candidate gate from SURD routing prior / Specific MI (see docs/causal-counts.md).
 SURD_BIAS_GATE_MODES = ("off", "unique_p", "smi_p", "smi_pc", "u_mass", "confidence")
 # How the gate modulates transition-score-bias / transition-attn λ.
@@ -123,6 +126,10 @@ class ModelConfig:
     jump_sigma: float = 1.0
     jump_beta: float = 1.5
     jump_d0: float = 0.1
+    # Return-vs-explore gate: π·(λ_ret·revisit) + (1−π)·(λ_exp·spatial). Default off.
+    return_gate: str = "off"
+    explore_spatial_bias: str = "off"  # off|gauss|geo|radiation
+    explore_score_bias: float = 0.0
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
     tsb_decay_hours: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
@@ -203,6 +210,24 @@ class ModelConfig:
             raise ValueError("jump_beta must be positive")
         if self.jump_d0 < 0:
             raise ValueError("jump_d0 must be nonnegative")
+        if self.return_gate not in RETURN_GATE_MODES:
+            raise ValueError("return_gate must be off|on")
+        if self.explore_spatial_bias not in EXPLORE_SPATIAL_MODES:
+            raise ValueError("explore_spatial_bias must be off|gauss|geo|radiation")
+        if self.explore_score_bias < 0:
+            raise ValueError("explore_score_bias must be nonnegative")
+        if self.return_gate == "on":
+            if self.revisit_score_bias <= 0:
+                raise ValueError("return_gate on requires --revisit-score-bias > 0")
+            if self.explore_spatial_bias == "off" or self.explore_score_bias <= 0:
+                raise ValueError(
+                    "return_gate on requires --explore-spatial-bias ≠ off and "
+                    "--explore-score-bias > 0")
+            if self.explore_spatial_bias in ("gauss", "geo", "radiation") and (
+                    self.candidate_context == "off"):
+                raise ValueError("return-gate explore spatial requires --candidate-context on")
+            if self.explore_spatial_bias == "radiation" and not self.causal_counts:
+                raise ValueError("explore radiation requires causal counts")
         if self.tsb_decay_hours < 0:
             raise ValueError("tsb_decay_hours must be nonnegative")
         if self.visit_bins < 1:
@@ -443,6 +468,9 @@ class TSMoE(nn.Module):
         self.expert_query_proj = nn.ModuleDict({
             s: nn.Linear(d, d) for s in SOURCE_ORDER
         })
+        # Return-vs-explore gate: π from last P emb + user-visit richness scalar.
+        # Always constructed for checkpoint stability; unused when return_gate=off.
+        self.return_gate_mlp = mlp(d + 1, max(d // 2, 8), 1, config.dropout)
 
     def _flag_on(self, name):
         return getattr(self.cfg, name) == "on"
@@ -861,11 +889,59 @@ class TSMoE(nn.Module):
                 jump = jump * spatial_scale
             score = score + jlb * jump
         # Revisit prior: user→cand causal visit mass (cand_poi_feat dim 0 = log1p(user)).
+        # When return_gate=on: mix π·(λ_ret·revisit) + (1−π)·(λ_exp·explore spatial).
         rsb = float(getattr(self.cfg, "revisit_score_bias", 0.0) or 0.0)
+        use_return_gate = getattr(self.cfg, "return_gate", "off") == "on"
         if (rsb > 0 and count_ctx is not None and self.cfg.causal_counts
                 and "cand_poi_feat" in count_ctx):
-            u_vis = count_ctx["cand_poi_feat"][:, :rows.shape[1], 0].to(score.device)
-            score = score + rsb * u_vis.clamp_min(0)
+            u_vis = count_ctx["cand_poi_feat"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+            if use_return_gate:
+                last = valid.long().sum(-1).clamp_min(1) - 1
+                last_emb = encoded["P"].gather(
+                    1, last.view(-1, 1, 1).expand(-1, 1, encoded["P"].shape[-1])
+                ).squeeze(1)
+                # User visit richness: mean log1p(user→hist) over valid tips.
+                if "hist_poi_feat" in count_ctx:
+                    hist_u = count_ctx["hist_poi_feat"][:, :valid.shape[1], 0].to(score.device)
+                    hist_u = hist_u.masked_fill(~valid, 0)
+                    denom = valid.float().sum(-1).clamp_min(1.0)
+                    richness = (hist_u.sum(-1) / denom).unsqueeze(-1)
+                else:
+                    richness = u_vis.mean(dim=1, keepdim=True)
+                pi = torch.sigmoid(self.return_gate_mlp(
+                    torch.cat([last_emb, richness], dim=-1))).squeeze(-1)  # [B]
+                ret_term = rsb * u_vis
+                exp_b = float(getattr(self.cfg, "explore_score_bias", 0.0) or 0.0)
+                exp_mode = getattr(self.cfg, "explore_spatial_bias", "off")
+                exp_term = score.new_zeros(score.shape)
+                if exp_b > 0 and exp_mode != "off" and "delta_geo" in count_ctx:
+                    hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+                    km = torch.expm1(hav).clamp_min(0)
+                    if exp_mode == "gauss":
+                        sigma = float(getattr(self.cfg, "gauss_sigma_km", 0.5) or 0.5)
+                        spatial = torch.exp(-(km * km) / (2.0 * sigma * sigma))
+                    elif exp_mode == "geo":
+                        spatial = -hav  # −log1p(km); closer → higher
+                    else:  # radiation
+                        m_j = torch.expm1(
+                            count_ctx["cand_poi_feat"][:, :rows.shape[1], 1]
+                            .to(score.device).clamp_min(0)).clamp_min(0)
+                        if "hist_poi_feat" in count_ctx:
+                            hist_g = count_ctx["hist_poi_feat"][:, :valid.shape[1], 1].to(score.device)
+                            m_i_log = hist_g.gather(1, last.view(-1, 1)).squeeze(1).clamp_min(0)
+                            m_i = torch.expm1(m_i_log).clamp_min(0)
+                        else:
+                            m_i = m_j.median(dim=1).values.clamp_min(0)
+                        spatial = self._radiation_log_score(
+                            km, m_j, m_i,
+                            kernel=getattr(self.cfg, "radiation_kernel", "hard"),
+                            soft_km=float(getattr(self.cfg, "radiation_soft_km", 0.25) or 0.25))
+                    if spatial_scale is not None:
+                        spatial = spatial * spatial_scale
+                    exp_term = exp_b * spatial
+                score = score + pi[:, None] * ret_term + (1.0 - pi)[:, None] * exp_term
+            else:
+                score = score + rsb * u_vis
         # Direct SURD/SMI score contribution (default λ=0).
         ssb = float(getattr(self.cfg, "surd_score_bias", 0.0) or 0.0)
         if ssb > 0 and cand_gate is not None:

@@ -233,6 +233,19 @@ def main():
         "--jump-d0", type=float, default=0.1,
         help="truncated power-law offset d0 (km) for --jump-dist trunc_power")
     t.add_argument(
+        "--return-gate", choices=("off", "on"), default="off",
+        help="mix revisit vs explore spatial by predicted P(return): "
+             "π·(λ_ret·revisit)+(1−π)·(λ_exp·explore). Keep --revisit-score-bias; "
+             "do not raise flat revisit λ")
+    t.add_argument(
+        "--explore-spatial-bias", choices=("off", "gauss", "geo", "radiation"),
+        default="off",
+        help="explore branch spatial form for --return-gate on (default off)")
+    t.add_argument(
+        "--explore-score-bias", type=float, default=0.0,
+        help="λ_exp for return-gate explore branch (default 0). "
+             "gauss uses --gauss-sigma-km; radiation uses --radiation-kernel")
+    t.add_argument(
         "--tsb-decay-hours", type=float, default=0.0,
         help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
              "hours from last history tip to target (Hawkes-lite; 0 = off)")
@@ -399,6 +412,15 @@ def main():
             and float(getattr(args, "jump_length_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):
         root.error("--jump-length-bias > 0 requires --candidate-context on")
+    if args.command == "train" and getattr(args, "return_gate", "off") == "on":
+        if float(getattr(args, "revisit_score_bias", 0.0) or 0.0) <= 0:
+            root.error("--return-gate on requires --revisit-score-bias > 0")
+        if (getattr(args, "explore_spatial_bias", "off") == "off"
+                or float(getattr(args, "explore_score_bias", 0.0) or 0.0) <= 0):
+            root.error("--return-gate on requires --explore-spatial-bias ≠ off "
+                       "and --explore-score-bias > 0")
+        if getattr(args, "candidate_context", "off") == "off":
+            root.error("--return-gate explore spatial requires --candidate-context on")
     if args.command == "train":
         gate = getattr(args, "surd_bias_gate", "off")
         needs_gate = (
