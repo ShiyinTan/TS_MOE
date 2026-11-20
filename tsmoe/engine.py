@@ -1274,12 +1274,17 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
              count_tables=None, score_temperature=1.0, tta_modes=(), tta_keep_last=True,
              tta_views=1, tta_fuse="mean", score_calib="off", calib_lambda=0.0,
              tta_seed=0, candidate_spatial_prior="off", candidate_prior_top_m=0,
-             candidate_prior_gravity_beta=1.0):
+             candidate_prior_gravity_beta=1.0, mc_dropout=0, mc_keep_train_dropout=False):
     """Rank samples; with ``count_tables``, walk chronologically (score then update).
 
     Optional eval-only Acc levers: TTA (#36), Gaussian+feature calib (#34),
-    coverage-safe spatial top-M pool shrink (#10).
+    coverage-safe spatial top-M pool shrink (#10), MC-dropout logit avg (#46).
     """
+    mc_n = int(mc_dropout or 0)
+    if mc_n < 0:
+        raise ValueError("--mc-dropout must be nonnegative")
+    if mc_n > 1 and tta_modes:
+        raise ValueError("combine MC-dropout with TTA is not supported")
     model.eval()
     ranks, grouped = [], defaultdict(list)
     counts = table.target_count.cpu()
@@ -1378,13 +1383,29 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
                 n_views=tta_views, seed=tta_seed + int(idx[0]) * 13)))
         score_list = []
         pool_rows = pool_mask = None
-        for h_view, v_view in views:
-            scores_i, pool_rows_i, pool_mask_i = _score_one(
-                h_view, v_view, count_ctx, batch_pools)
-            score_list.append(scores_i)
-            if pool_rows_i is not None:
-                pool_rows, pool_mask = pool_rows_i, pool_mask_i
-        scores = _fuse_score_list(score_list, pool_mask)
+        if mc_n > 1:
+            # #46: stochastic forwards with dropout on; mean logits (training-free).
+            was_training = model.training
+            model.train()  # enable dropout for MC samples (#46)
+            for _ in range(mc_n):
+                scores_i, pool_rows_i, pool_mask_i = _score_one(
+                    h, valid, count_ctx, batch_pools)
+                score_list.append(scores_i)
+                if pool_rows_i is not None:
+                    pool_rows, pool_mask = pool_rows_i, pool_mask_i
+            model.train(was_training)
+            _ = mc_keep_train_dropout  # CLI flag retained for docs; always train-mode drop
+            scores = torch.stack(score_list, 0).mean(0)
+            if pool_mask is not None:
+                scores = scores.masked_fill(~pool_mask, float("-inf"))
+        else:
+            for h_view, v_view in views:
+                scores_i, pool_rows_i, pool_mask_i = _score_one(
+                    h_view, v_view, count_ctx, batch_pools)
+                score_list.append(scores_i)
+                if pool_rows_i is not None:
+                    pool_rows, pool_mask = pool_rows_i, pool_mask_i
+            scores = _fuse_score_list(score_list, pool_mask)
         if cache.uses_full_catalog_pools():
             if str(score_calib or "off").lower() not in ("", "off", "none"):
                 # Full-catalog calib: build a dense mask of ones.
@@ -2317,6 +2338,10 @@ def evaluate_cli(args):
     cand_prior = str(getattr(args, "candidate_spatial_prior", "off") or "off")
     cand_top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
     cand_gbeta = float(getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0)
+    mc_dropout = int(getattr(args, "mc_dropout", 0) or 0)
+    mc_keep = bool(getattr(args, "mc_keep_train_dropout", False))
+    if mc_dropout > 1:
+        print(f"mc_dropout={mc_dropout} keep_train_dropout={mc_keep}", flush=True)
     metrics = evaluate(
         model, table, data, cache, args.eval_batch_size,
         args.chunk, category_frequency, desc=f"eval {args.split}",
@@ -2324,7 +2349,8 @@ def evaluate_cli(args):
         tta_modes=tta_modes, tta_keep_last=tta_keep_last, tta_views=tta_views,
         tta_fuse=tta_fuse, score_calib=score_calib, calib_lambda=calib_lambda,
         candidate_spatial_prior=cand_prior, candidate_prior_top_m=cand_top_m,
-        candidate_prior_gravity_beta=cand_gbeta)
+        candidate_prior_gravity_beta=cand_gbeta,
+        mc_dropout=mc_dropout, mc_keep_train_dropout=mc_keep)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
     payload["candidate_pool_stats"] = pool_stats.get(args.split)
@@ -2338,6 +2364,7 @@ def evaluate_cli(args):
     payload["calib_lambda"] = calib_lambda
     payload["candidate_spatial_prior"] = cand_prior
     payload["candidate_prior_top_m"] = cand_top_m
+    payload["mc_dropout"] = mc_dropout
     if metrics.get("candidate_spatial_prior"):
         payload["candidate_prior_stats"] = metrics["candidate_spatial_prior"]
     print_eval_tables(payload)

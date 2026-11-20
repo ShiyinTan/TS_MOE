@@ -478,6 +478,13 @@ def main():
     e.add_argument(
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
+    e.add_argument(
+        "--mc-dropout", type=int, default=0,
+        help="MC-dropout logit average at eval (#46): T stochastic forwards "
+             "with dropout on; 0 = off. Try 10–20 on soft10r")
+    e.add_argument(
+        "--mc-keep-train-dropout", action="store_true",
+        help="document flag for #46 (MC always enables train-mode dropout)")
     x = commands.add_parser("explain", help="audit one candidate's prior, router and score contributions")
     x.add_argument("--sample-index", type=int, default=0)
     x.add_argument("--poi-id", type=int, help="external venue_id; default is the true POI or top prediction for OOV")
