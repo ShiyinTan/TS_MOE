@@ -202,6 +202,37 @@ def main():
         help="add λ·log1p(user→cand visits) to scores (default 0 = off). "
              "Needs causal counts; Acc@1 revisit prior")
     t.add_argument(
+        "--radiation-score-bias", type=float, default=0.0,
+        help="add λ·Simini radiation log-score over the candidate pool "
+             "(default 0 = off). Prefer replacing --geo-score-bias. "
+             "Needs --candidate-context on + causal counts (visit mass)")
+    t.add_argument(
+        "--radiation-kernel", choices=("hard", "soft"), default="hard",
+        help="intervening mass: hard = strict closer disk among cands; "
+             "soft = sigmoid-smoothed (default hard)")
+    t.add_argument(
+        "--radiation-soft-km", type=float, default=0.25,
+        help="soft-kernel bandwidth in km for --radiation-kernel soft")
+    t.add_argument(
+        "--jump-length-bias", type=float, default=0.0,
+        help="add λ·log P(Δr) jump-length prior to scores (default 0 = off). "
+             "Prefer replacing --geo-score-bias. Needs --candidate-context on")
+    t.add_argument(
+        "--jump-dist", choices=("lognormal", "trunc_power"), default="lognormal",
+        help="parametric form for --jump-length-bias (default lognormal)")
+    t.add_argument(
+        "--jump-mu", type=float, default=None,
+        help="lognormal μ on log(km); default = fit from train hops when bias>0")
+    t.add_argument(
+        "--jump-sigma", type=float, default=None,
+        help="lognormal σ; default = fit from train hops when bias>0 (else 1.0)")
+    t.add_argument(
+        "--jump-beta", type=float, default=1.5,
+        help="truncated power-law exponent β for --jump-dist trunc_power")
+    t.add_argument(
+        "--jump-d0", type=float, default=0.1,
+        help="truncated power-law offset d0 (km) for --jump-dist trunc_power")
+    t.add_argument(
         "--tsb-decay-hours", type=float, default=0.0,
         help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
              "hours from last history tip to target (Hawkes-lite; 0 = off)")
@@ -343,13 +374,16 @@ def main():
                                     or getattr(args, "geo_score_bias", 0.0) < 0
                                     or getattr(args, "surd_score_bias", 0.0) < 0
                                     or getattr(args, "revisit_score_bias", 0.0) < 0
+                                    or getattr(args, "radiation_score_bias", 0.0) < 0
+                                    or getattr(args, "jump_length_bias", 0.0) < 0
                                     or getattr(args, "tsb_decay_hours", 0.0) < 0
                                     or getattr(args, "geo_score_power", 1.0) <= 0):
         root.error("use --negatives -1 or a positive count; --max-train-candidates -1 or >=1; "
                    "nonnegative strengths and positive lr/grad-clip; "
                    "transition-lambda / transition-score-bias / category-score-bias / "
                    "pop-score-bias / geo-score-bias / surd-score-bias / "
-                   "revisit-score-bias / tsb-decay-hours must be nonnegative; "
+                   "revisit-score-bias / radiation-score-bias / jump-length-bias / "
+                   "tsb-decay-hours must be nonnegative; "
                    "geo-score-power must be positive")
     if args.command == "evaluate" and float(getattr(args, "score_temperature", 1.0) or 1.0) <= 0:
         root.error("--score-temperature must be positive")
@@ -357,6 +391,14 @@ def main():
             and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):
         root.error("--geo-score-bias > 0 requires --candidate-context on")
+    if (args.command == "train"
+            and float(getattr(args, "radiation_score_bias", 0.0) or 0.0) > 0
+            and getattr(args, "candidate_context", "off") == "off"):
+        root.error("--radiation-score-bias > 0 requires --candidate-context on")
+    if (args.command == "train"
+            and float(getattr(args, "jump_length_bias", 0.0) or 0.0) > 0
+            and getattr(args, "candidate_context", "off") == "off"):
+        root.error("--jump-length-bias > 0 requires --candidate-context on")
     if args.command == "train":
         gate = getattr(args, "surd_bias_gate", "off")
         needs_gate = (

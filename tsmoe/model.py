@@ -109,6 +109,20 @@ class ModelConfig:
     geo_adapt_temp: float = 1.0
     # Acc@1 revisit prior: λ·log1p(user→cand visits) from cand_poi_feat[...,0] (0 = off).
     revisit_score_bias: float = 0.
+    # Simini radiation Acc@1 prior (replace flat geo): λ·log P_rad(j|i) over pool.
+    # log P ∝ log m_j − log(m_i+s_ij) − log(m_i+m_j+s_ij); s_ij = intervening visit mass.
+    radiation_score_bias: float = 0.
+    # hard = strict disk intervening among candidates; soft = sigmoid-smoothed mass.
+    radiation_kernel: str = "hard"
+    radiation_soft_km: float = 0.25
+    # Empirical jump-length Acc@1 prior: λ·log P(Δr) with Δr = haversine km (replace geo).
+    jump_length_bias: float = 0.
+    jump_dist: str = "lognormal"  # lognormal | trunc_power
+    # Lognormal params on log(km+eps); trunc_power uses jump_beta / jump_d0.
+    jump_mu: float = 0.0
+    jump_sigma: float = 1.0
+    jump_beta: float = 1.5
+    jump_d0: float = 0.1
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
     tsb_decay_hours: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
@@ -169,6 +183,26 @@ class ModelConfig:
             raise ValueError("geo_adapt_temp must be nonnegative")
         if self.revisit_score_bias < 0:
             raise ValueError("revisit_score_bias must be nonnegative")
+        if self.radiation_score_bias < 0:
+            raise ValueError("radiation_score_bias must be nonnegative")
+        if self.radiation_score_bias > 0 and self.candidate_context == "off":
+            raise ValueError("radiation_score_bias > 0 requires --candidate-context on")
+        if self.radiation_kernel not in ("hard", "soft"):
+            raise ValueError("radiation_kernel must be hard|soft")
+        if self.radiation_soft_km <= 0:
+            raise ValueError("radiation_soft_km must be positive")
+        if self.jump_length_bias < 0:
+            raise ValueError("jump_length_bias must be nonnegative")
+        if self.jump_length_bias > 0 and self.candidate_context == "off":
+            raise ValueError("jump_length_bias > 0 requires --candidate-context on")
+        if self.jump_dist not in ("lognormal", "trunc_power"):
+            raise ValueError("jump_dist must be lognormal|trunc_power")
+        if self.jump_sigma <= 0:
+            raise ValueError("jump_sigma must be positive")
+        if self.jump_beta <= 0:
+            raise ValueError("jump_beta must be positive")
+        if self.jump_d0 < 0:
+            raise ValueError("jump_d0 must be nonnegative")
         if self.tsb_decay_hours < 0:
             raise ValueError("tsb_decay_hours must be nonnegative")
         if self.visit_bins < 1:
@@ -591,6 +625,49 @@ class TSMoE(nn.Module):
         last_tr = tr.gather(2, last.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
         return torch.log1p(last_tr.clamp_min(0))
 
+    @staticmethod
+    def _radiation_log_score(km, mass_j, mass_i, kernel="hard", soft_km=0.25, eps=1e-6):
+        """Simini radiation log-score over a candidate pool (ranking-invariant constants ok).
+
+        ``km`` / ``mass_j``: [B, M]; ``mass_i``: [B] origin visit mass.
+        ``hard``: intervening = sum of masses strictly closer than j.
+        ``soft``: intervening = Σ_k m_k · σ((d_j − d_k) / soft_km).
+        """
+        m_j = mass_j.clamp_min(0)
+        m_i = mass_i.clamp_min(0)[:, None]
+        if kernel == "soft":
+            # [B,M,M]: contrib of k to j's intervening ball
+            diff = (km[:, :, None] - km[:, None, :]) / float(soft_km)
+            w = torch.sigmoid(diff)
+            # Exclude self (k==j) from intervening mass.
+            eye = torch.eye(km.shape[1], device=km.device, dtype=km.dtype)[None]
+            w = w * (1.0 - eye)
+            s_ij = (w * m_j[:, None, :]).sum(-1)
+        else:
+            order = km.argsort(dim=1)
+            m_sorted = m_j.gather(1, order)
+            cum = torch.cumsum(m_sorted, dim=1)
+            s_sorted = torch.zeros_like(cum)
+            s_sorted[:, 1:] = cum[:, :-1]
+            inv = order.argsort(dim=1)
+            s_ij = s_sorted.gather(1, inv)
+        return (
+            torch.log(m_j.clamp_min(eps))
+            - torch.log((m_i + s_ij).clamp_min(eps))
+            - torch.log((m_i + m_j + s_ij).clamp_min(eps))
+        )
+
+    @staticmethod
+    def _jump_log_density(km, dist="lognormal", mu=0.0, sigma=1.0, beta=1.5, d0=0.1, eps=1e-6):
+        """log P(Δr) for empirical jump-length priors (unnormalized ok for ranking)."""
+        d = km.clamp_min(0)
+        if dist == "trunc_power":
+            return -float(beta) * torch.log(d + float(d0) + eps)
+        # lognormal on (d + eps)
+        x = torch.log(d + eps)
+        inv_s = 1.0 / float(sigma)
+        return -math.log(float(sigma) * math.sqrt(2.0 * math.pi)) - x - 0.5 * ((x - float(mu)) * inv_s) ** 2
+
     def _sources_for_topk(self, top):
         """Source indices needed by the selected top-k experts (for E3 sparse)."""
         needed = set()
@@ -743,6 +820,46 @@ class TSMoE(nn.Module):
             if spatial_scale is not None:
                 gauss = gauss * spatial_scale
             score = score + ggb * gauss
+        # Radiation (intervening-opportunity) prior; prefer replace flat geo.
+        rad_b = float(getattr(self.cfg, "radiation_score_bias", 0.0) or 0.0)
+        if (rad_b > 0 and count_ctx is not None and "delta_geo" in count_ctx
+                and "cand_poi_feat" in count_ctx):
+            hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+            km = torch.expm1(hav).clamp_min(0)
+            # cand_poi_feat dim1 = log1p(global visits) → mass m_j
+            m_j = torch.expm1(
+                count_ctx["cand_poi_feat"][:, :rows.shape[1], 1].to(score.device).clamp_min(0)
+            ).clamp_min(0)
+            # Origin mass m_i from last history tip global visits (fallback: batch median).
+            if "hist_poi_feat" in count_ctx:
+                last = valid.long().sum(-1).clamp_min(1) - 1
+                hist_g = count_ctx["hist_poi_feat"][:, :valid.shape[1], 1].to(score.device)
+                m_i_log = hist_g.gather(1, last.view(-1, 1)).squeeze(1).clamp_min(0)
+                m_i = torch.expm1(m_i_log).clamp_min(0)
+            else:
+                m_i = m_j.median(dim=1).values.clamp_min(0)
+            rad = self._radiation_log_score(
+                km, m_j, m_i,
+                kernel=getattr(self.cfg, "radiation_kernel", "hard"),
+                soft_km=float(getattr(self.cfg, "radiation_soft_km", 0.25) or 0.25))
+            if spatial_scale is not None:
+                rad = rad * spatial_scale
+            score = score + rad_b * rad
+        # Jump-length prior: λ·log P(Δr); prefer replace flat geo.
+        jlb = float(getattr(self.cfg, "jump_length_bias", 0.0) or 0.0)
+        if jlb > 0 and count_ctx is not None and "delta_geo" in count_ctx:
+            hav = count_ctx["delta_geo"][:, :rows.shape[1], 0].to(score.device).clamp_min(0)
+            km = torch.expm1(hav).clamp_min(0)
+            jump = self._jump_log_density(
+                km,
+                dist=getattr(self.cfg, "jump_dist", "lognormal"),
+                mu=float(getattr(self.cfg, "jump_mu", 0.0) or 0.0),
+                sigma=float(getattr(self.cfg, "jump_sigma", 1.0) or 1.0),
+                beta=float(getattr(self.cfg, "jump_beta", 1.5) or 1.5),
+                d0=float(getattr(self.cfg, "jump_d0", 0.1) or 0.1))
+            if spatial_scale is not None:
+                jump = jump * spatial_scale
+            score = score + jlb * jump
         # Revisit prior: user→cand causal visit mass (cand_poi_feat dim 0 = log1p(user)).
         rsb = float(getattr(self.cfg, "revisit_score_bias", 0.0) or 0.0)
         if (rsb > 0 and count_ctx is not None and self.cfg.causal_counts

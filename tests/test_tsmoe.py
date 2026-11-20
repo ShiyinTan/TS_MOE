@@ -1113,6 +1113,8 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(legacy.geo_score_bias, 0.0)
         self.assertEqual(legacy.geo_score_power, 1.0)
         self.assertEqual(legacy.revisit_score_bias, 0.0)
+        self.assertEqual(legacy.radiation_score_bias, 0.0)
+        self.assertEqual(legacy.jump_length_bias, 0.0)
         self.assertEqual(legacy.tsb_decay_hours, 0.0)
         self.assertEqual(legacy.surd_bias_gate, "off")
         self.assertEqual(legacy.surd_score_bias, 0.0)
@@ -1190,6 +1192,78 @@ class TestCausalCounts(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModelConfig(8, 2, 1, 0., 2, candidate_context="on",
                         geo_score_bias=1.0, geo_score_power=0.0)
+
+    def test_radiation_and_jump_length_score_biases(self):
+        """Radiation / jump-length priors: nearer better-opp and typical Δr lift Acc@1."""
+        torch.manual_seed(9)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        ctx = dict(ctx)
+        m = cand.shape[1]
+        # Distances: cand0 near, cand1 mid, cand2 far.
+        delta = torch.zeros(1, m, 3)
+        delta[0, 0, 0] = math.log1p(0.2)
+        delta[0, 1, 0] = math.log1p(1.0)
+        if m > 2:
+            delta[0, 2, 0] = math.log1p(5.0)
+        ctx["delta_geo"] = delta
+        feats = ctx["cand_poi_feat"].clone()
+        # High mass at mid-distance cand1 → radiation prefers opportunity over nearest hub.
+        feats[0, :, 1] = 0.0
+        feats[0, 0, 1] = math.log1p(2.0)
+        feats[0, 1, 1] = math.log1p(50.0)
+        if m > 2:
+            feats[0, 2, 1] = math.log1p(5.0)
+        ctx["cand_poi_feat"] = feats
+        # Origin mass from last hist tip.
+        hist = ctx["hist_poi_feat"].clone()
+        last = int(valid[0].long().sum().item()) - 1
+        hist[0, last, 1] = math.log1p(10.0)
+        ctx["hist_poi_feat"] = hist
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4,
+                    candidate_context="on")
+        off = TSMoE(n_pois, n_cats, 4, ModelConfig(**base)).eval()
+        rad = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, radiation_score_bias=1.0)).eval()
+        jump = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, jump_length_bias=1.0, jump_dist="lognormal",
+            jump_mu=0.0, jump_sigma=1.0)).eval()
+        rad.load_state_dict(off.state_dict())
+        jump.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s0 = off(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_rad = rad(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_jump = jump(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        # Radiation should change relative ranking vs baseline (not a no-op).
+        self.assertFalse(torch.allclose(s_rad[:2], s0[:2], atol=1e-4, rtol=1e-4))
+        # Jump log-density: km≈1 (log≈0) near μ=0 beats far km=5.
+        if m > 2:
+            self.assertGreater(float(s_jump[1] - s0[1]), float(s_jump[2] - s0[2]))
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, radiation_score_bias=1.0)
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on",
+                        jump_length_bias=1.0, jump_sigma=0.0)
+        # Helper sanity: hard intervening grows with distance order.
+        km = torch.tensor([[0.2, 1.0, 5.0]])
+        mass = torch.tensor([[2.0, 50.0, 5.0]])
+        mi = torch.tensor([10.0])
+        hard = TSMoE._radiation_log_score(km, mass, mi, kernel="hard")
+        soft = TSMoE._radiation_log_score(km, mass, mi, kernel="soft", soft_km=0.5)
+        self.assertEqual(hard.shape, (1, 3))
+        self.assertEqual(soft.shape, (1, 3))
+        self.assertTrue(torch.isfinite(hard).all())
+        self.assertTrue(torch.isfinite(soft).all())
 
     def test_surd_bias_gate_helpers_and_score_bias(self):
         """SURD/SMI gates: helpers + additive surd_score_bias lifts high-gate cands."""

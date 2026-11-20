@@ -51,6 +51,15 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("geo_adapt", "off")
     cfg.setdefault("geo_adapt_temp", 1.0)
     cfg.setdefault("revisit_score_bias", 0.0)
+    cfg.setdefault("radiation_score_bias", 0.0)
+    cfg.setdefault("radiation_kernel", "hard")
+    cfg.setdefault("radiation_soft_km", 0.25)
+    cfg.setdefault("jump_length_bias", 0.0)
+    cfg.setdefault("jump_dist", "lognormal")
+    cfg.setdefault("jump_mu", 0.0)
+    cfg.setdefault("jump_sigma", 1.0)
+    cfg.setdefault("jump_beta", 1.5)
+    cfg.setdefault("jump_d0", 0.1)
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
@@ -1129,6 +1138,33 @@ def save_checkpoint(payload, path):
         staged.unlink(missing_ok=True)
 
 
+def fit_jump_lognormal(distances, eps=1e-6):
+    """Fit lognormal (μ, σ) on log(km+eps) from consecutive train hop distances."""
+    if not distances:
+        return 0.0, 1.0
+    logs = [math.log(max(float(d), 0.0) + eps) for d in distances]
+    n = len(logs)
+    mu = sum(logs) / n
+    var = sum((x - mu) ** 2 for x in logs) / max(n - 1, 1)
+    sigma = math.sqrt(max(var, 1e-8))
+    return float(mu), float(sigma)
+
+
+def jump_params_from_distance_stats(stats, eps=1e-6):
+    """Approximate lognormal (μ, σ) from prepare distance_stats (median/mean)."""
+    stats = stats or {}
+    median = stats.get("median_km") or stats.get("mean_km") or 1.0
+    mean = stats.get("mean_km") or median
+    median = max(float(median), eps)
+    mean = max(float(mean), eps)
+    mu = math.log(median)
+    if mean > median:
+        sigma = math.sqrt(max(2.0 * (math.log(mean) - mu), 1e-4))
+    else:
+        sigma = 1.0
+    return float(mu), float(sigma)
+
+
 def train(args):
     install_interrupt_handler()
     cache = Cache(args.cache)
@@ -1145,6 +1181,13 @@ def train(args):
     geo_adapt = getattr(args, "geo_adapt", "off")
     geo_adapt_temp = float(getattr(args, "geo_adapt_temp", 1.0) or 1.0)
     revisit_score_bias = float(getattr(args, "revisit_score_bias", 0.0) or 0.0)
+    radiation_score_bias = float(getattr(args, "radiation_score_bias", 0.0) or 0.0)
+    radiation_kernel = getattr(args, "radiation_kernel", "hard")
+    radiation_soft_km = float(getattr(args, "radiation_soft_km", 0.25) or 0.25)
+    jump_length_bias = float(getattr(args, "jump_length_bias", 0.0) or 0.0)
+    jump_dist = getattr(args, "jump_dist", "lognormal")
+    jump_beta = float(getattr(args, "jump_beta", 1.5) or 1.5)
+    jump_d0 = float(getattr(args, "jump_d0", 0.1) or 0.0)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
@@ -1158,6 +1201,20 @@ def train(args):
         raise ValueError("--geo-adapt-temp must be nonnegative")
     if revisit_score_bias < 0:
         raise ValueError("--revisit-score-bias must be nonnegative")
+    if radiation_score_bias < 0:
+        raise ValueError("--radiation-score-bias must be nonnegative")
+    if radiation_kernel not in ("hard", "soft"):
+        raise ValueError("--radiation-kernel must be hard|soft")
+    if radiation_soft_km <= 0:
+        raise ValueError("--radiation-soft-km must be positive")
+    if jump_length_bias < 0:
+        raise ValueError("--jump-length-bias must be nonnegative")
+    if jump_dist not in ("lognormal", "trunc_power"):
+        raise ValueError("--jump-dist must be lognormal|trunc_power")
+    if jump_beta <= 0:
+        raise ValueError("--jump-beta must be positive")
+    if jump_d0 < 0:
+        raise ValueError("--jump-d0 must be nonnegative")
     if tsb_decay_hours < 0:
         raise ValueError("--tsb-decay-hours must be nonnegative")
     visit_bins = int(getattr(args, "visit_bins", DEFAULT_VISIT_BINS))
@@ -1186,6 +1243,29 @@ def train(args):
         raise ValueError("--geo-score-bias > 0 requires --candidate-context on")
     if gauss_geo_bias > 0 and candidate_context == "off":
         raise ValueError("--gauss-geo-bias > 0 requires --candidate-context on")
+    if radiation_score_bias > 0 and candidate_context == "off":
+        raise ValueError("--radiation-score-bias > 0 requires --candidate-context on")
+    if radiation_score_bias > 0 and not causal_counts:
+        raise ValueError("--radiation-score-bias > 0 requires causal counts")
+    if jump_length_bias > 0 and candidate_context == "off":
+        raise ValueError("--jump-length-bias > 0 requires --candidate-context on")
+    # Jump lognormal: CLI override, else fit from cache distance_stats when bias>0.
+    jump_mu_arg = getattr(args, "jump_mu", None)
+    jump_sigma_arg = getattr(args, "jump_sigma", None)
+    if jump_length_bias > 0 and jump_dist == "lognormal" and (
+            jump_mu_arg is None or jump_sigma_arg is None):
+        stats = (cache.candidate_construction or {}).get("distance_stats") or {}
+        fit_mu, fit_sigma = jump_params_from_distance_stats(stats)
+        jump_mu = fit_mu if jump_mu_arg is None else float(jump_mu_arg)
+        jump_sigma = fit_sigma if jump_sigma_arg is None else float(jump_sigma_arg)
+        print(f"jump_length fit from distance_stats: mu={jump_mu:.4f} "
+              f"sigma={jump_sigma:.4f} (median_km={stats.get('median_km')} "
+              f"mean_km={stats.get('mean_km')})", flush=True)
+    else:
+        jump_mu = 0.0 if jump_mu_arg is None else float(jump_mu_arg)
+        jump_sigma = 1.0 if jump_sigma_arg is None else float(jump_sigma_arg)
+    if jump_sigma <= 0:
+        raise ValueError("--jump-sigma must be positive")
     surd_bias_gate = getattr(args, "surd_bias_gate", "off")
     surd_score_bias = float(getattr(args, "surd_score_bias", 0.0) or 0.0)
     tsb_gate_mode = getattr(args, "tsb_gate_mode", "off")
@@ -1209,6 +1289,15 @@ def train(args):
                       geo_adapt=geo_adapt,
                       geo_adapt_temp=geo_adapt_temp,
                       revisit_score_bias=revisit_score_bias,
+                      radiation_score_bias=radiation_score_bias,
+                      radiation_kernel=radiation_kernel,
+                      radiation_soft_km=radiation_soft_km,
+                      jump_length_bias=jump_length_bias,
+                      jump_dist=jump_dist,
+                      jump_mu=jump_mu,
+                      jump_sigma=jump_sigma,
+                      jump_beta=jump_beta,
+                      jump_d0=jump_d0,
                       tsb_decay_hours=tsb_decay_hours,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
@@ -1238,6 +1327,10 @@ def train(args):
           f"gauss_geo_bias={cfg.gauss_geo_bias} gauss_sigma_km={cfg.gauss_sigma_km} "
           f"geo_adapt={cfg.geo_adapt} geo_adapt_temp={cfg.geo_adapt_temp} "
           f"revisit_score_bias={cfg.revisit_score_bias} "
+          f"radiation_score_bias={cfg.radiation_score_bias} "
+          f"radiation_kernel={cfg.radiation_kernel} "
+          f"jump_length_bias={cfg.jump_length_bias} jump_dist={cfg.jump_dist} "
+          f"jump_mu={cfg.jump_mu} jump_sigma={cfg.jump_sigma} "
           f"tsb_decay_hours={cfg.tsb_decay_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
@@ -1274,6 +1367,15 @@ def train(args):
     settings["geo_adapt"] = cfg.geo_adapt
     settings["geo_adapt_temp"] = cfg.geo_adapt_temp
     settings["revisit_score_bias"] = cfg.revisit_score_bias
+    settings["radiation_score_bias"] = cfg.radiation_score_bias
+    settings["radiation_kernel"] = cfg.radiation_kernel
+    settings["radiation_soft_km"] = cfg.radiation_soft_km
+    settings["jump_length_bias"] = cfg.jump_length_bias
+    settings["jump_dist"] = cfg.jump_dist
+    settings["jump_mu"] = cfg.jump_mu
+    settings["jump_sigma"] = cfg.jump_sigma
+    settings["jump_beta"] = cfg.jump_beta
+    settings["jump_d0"] = cfg.jump_d0
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias
