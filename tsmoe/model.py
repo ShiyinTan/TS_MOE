@@ -1238,3 +1238,33 @@ def objective(result, labels, lambda_surd=.05, lambda_balance=.001, lambda_bpr=0
                     bpr = F.softplus(-(s_pos[finite] - s_neg[finite] - margin)).mean()
     total = rec + lambda_surd * aux + lambda_balance * balance + float(lambda_bpr) * bpr
     return total, (rec.detach(), aux.detach(), balance.detach(), bpr.detach())
+
+
+def top_k_kd_loss(student_scores, teacher_scores, mask, top_k=20, temp=2.0):
+    """KL on teacher top-K logits (EKD4Rec-style) with temperature scaling (#41)."""
+    top_k = int(top_k)
+    temp = float(temp)
+    if top_k < 1:
+        raise ValueError("kd-top-k must be >= 1")
+    if temp <= 0:
+        raise ValueError("kd-temp must be positive")
+    t_logits = teacher_scores.masked_fill(~mask, float("-inf"))
+    n_valid = mask.sum(dim=1)
+    k = min(top_k, int(n_valid.min().item()) if bool(n_valid.numel()) else top_k)
+    if k < 1:
+        return student_scores.new_zeros(())
+    topv, topi = t_logits.topk(k, dim=1)
+    s = student_scores.gather(1, topi) / temp
+    tt = topv / temp
+    teacher_p = torch.softmax(tt, dim=1)
+    student_log_p = F.log_softmax(s, dim=1)
+    return -(teacher_p * student_log_p).sum(dim=1).mean() * (temp * temp)
+
+
+def poi_geo_laplace_loss(poi_emb, edge_src, edge_dst, edge_w, lambda_laplace):
+    """Graph Laplacian smoothness on POI embeddings (#40): λ Σ w‖e_i−e_j‖²."""
+    lam = float(lambda_laplace or 0.0)
+    if lam <= 0 or edge_src.numel() == 0:
+        return poi_emb.new_zeros(())
+    diff = poi_emb[edge_src] - poi_emb[edge_dst]
+    return lam * (edge_w * diff.pow(2).sum(dim=-1)).mean()

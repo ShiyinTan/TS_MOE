@@ -149,6 +149,24 @@ def main():
         help="EMA teacher decay θ'←d·θ'+(1−d)·θ when soft-target-prior includes "
              "ema (default 0.999; try 0.99 for short ep1)")
     t.add_argument(
+        "--kd-teacher", type=str, default=None,
+        help="frozen teacher checkpoint for top-K KD (#41); requires --lambda-kd > 0")
+    t.add_argument(
+        "--lambda-kd", type=float, default=0.,
+        help="weight on top-K KD KL term vs teacher logits (default 0 = off)")
+    t.add_argument(
+        "--kd-top-k", type=int, default=20,
+        help="teacher top-K positions for KD soft labels (default 20)")
+    t.add_argument(
+        "--kd-temp", type=float, default=2.0,
+        help="KD softmax temperature (default 2); loss scaled by T²")
+    t.add_argument(
+        "--poi-geo-laplace", type=float, default=0.,
+        help="λ for geo kNN Laplacian POI-emb regularizer (#40); 0 = off")
+    t.add_argument(
+        "--geo-knn", type=int, default=8,
+        help="kNN neighbors per POI for --poi-geo-laplace (default 8)")
+    t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "
              "mass only (no sequence in router); surd_mlp = softmax(MLP(SURD)/T); "

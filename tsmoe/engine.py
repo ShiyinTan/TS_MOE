@@ -14,8 +14,9 @@ import torch
 from tqdm.auto import tqdm
 
 from .candidates import (
-    format_pool_size_line, mix_adaptive_negatives, pools_for_split,
-    sample_candidates, shrink_pools_spatial_prior, summarize_pool_sizes,
+    catalog_coordinates, format_pool_size_line, haversine_km,
+    mix_adaptive_negatives, pools_for_split, sample_candidates,
+    shrink_pools_spatial_prior, summarize_pool_sizes,
 )
 from .counts import (
     DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
@@ -26,8 +27,8 @@ from .features import (
     build_poi_cat_table, gather_side_features, merge_feature_context, slice_side_ctx,
 )
 from .model import (
-    ModelConfig, TSMoE, blend_soft_target_mixes, objective, soft_ema_targets,
-    soft_prior_targets,
+    ModelConfig, TSMoE, blend_soft_target_mixes, objective, poi_geo_laplace_loss,
+    soft_ema_targets, soft_prior_targets, top_k_kd_loss,
 )
 from .prepare import digest_json, dump_json, verify_files
 from .runtime import check_interrupt, install_interrupt_handler
@@ -503,6 +504,34 @@ GROUP_NOTES = (
 
 def load_file(path):
     return torch.load(path, map_location="cpu", weights_only=True)
+
+
+def build_geo_knn_edges(coords: torch.Tensor, knn: int):
+    """Undirected kNN edges on catalog coords with inverse-distance weights (#40)."""
+    n = int(coords.shape[0])
+    k = max(1, min(int(knn), max(1, n - 1)))
+    if n < 2:
+        empty = torch.zeros(0, dtype=torch.long)
+        return empty, empty, torch.zeros(0, dtype=torch.float32)
+    lat, lon = coords[:, 0], coords[:, 1]
+    # Pairwise haversine via broadcasting (catalog sizes are modest).
+    dist = haversine_km(lat[:, None], lon[:, None], lat[None, :], lon[None, :])
+    dist = dist.fill_diagonal_(float("inf"))
+    top = torch.topk(dist, k=k, largest=False)
+    src_list, dst_list, w_list = [], [], []
+    seen = set()
+    for i in range(n):
+        for j_idx, d in zip(top.indices[i].tolist(), top.values[i].tolist()):
+            a, b = (i, j_idx) if i < j_idx else (j_idx, i)
+            if a == b or (a, b) in seen:
+                continue
+            seen.add((a, b))
+            src_list.append(a)
+            dst_list.append(b)
+            w_list.append(1.0 / (1.0 + float(d)))
+    return (torch.tensor(src_list, dtype=torch.long),
+            torch.tensor(dst_list, dtype=torch.long),
+            torch.tensor(w_list, dtype=torch.float32))
 
 
 class Cache:
@@ -1568,6 +1597,26 @@ def train(args):
     ema_decay = float(getattr(args, "ema_decay", 0.999) or 0.999)
     if use_ema_soft and not (0.0 < ema_decay < 1.0):
         raise ValueError("--ema-decay must be in (0, 1) when soft-target-prior includes ema")
+    kd_teacher_path = getattr(args, "kd_teacher", None)
+    if kd_teacher_path in ("", "off", "none"):
+        kd_teacher_path = None
+    lambda_kd = float(getattr(args, "lambda_kd", 0.0) or 0.0)
+    kd_top_k = int(getattr(args, "kd_top_k", 20) or 20)
+    kd_temp = float(getattr(args, "kd_temp", 2.0) or 2.0)
+    if kd_teacher_path and lambda_kd <= 0:
+        raise ValueError("--kd-teacher requires --lambda-kd > 0")
+    if lambda_kd < 0:
+        raise ValueError("--lambda-kd must be nonnegative")
+    if kd_teacher_path and kd_top_k < 1:
+        raise ValueError("--kd-top-k must be >= 1")
+    if kd_teacher_path and kd_temp <= 0:
+        raise ValueError("--kd-temp must be positive")
+    poi_geo_laplace = float(getattr(args, "poi_geo_laplace", 0.0) or 0.0)
+    geo_knn = int(getattr(args, "geo_knn", 8) or 8)
+    if poi_geo_laplace < 0:
+        raise ValueError("--poi-geo-laplace must be nonnegative")
+    if poi_geo_laplace > 0 and geo_knn < 1:
+        raise ValueError("--geo-knn must be >= 1 when --poi-geo-laplace > 0")
     neg_sample = str(getattr(args, "neg_sample", "uniform") or "uniform").lower()
     if neg_sample not in ("uniform", "adaptive_mix"):
         raise ValueError("--neg-sample must be uniform|adaptive_mix")
@@ -1702,6 +1751,27 @@ def train(args):
             p.requires_grad_(False)
         print(f"ema_soft_teacher decay={ema_decay} beta={soft_target_beta} "
               f"priors={','.join(soft_priors)}", flush=True)
+    kd_teacher = None
+    if kd_teacher_path:
+        kd_ckpt = load_file(kd_teacher_path)
+        kd_cfg = model_config_from_checkpoint(kd_ckpt)
+        kd_teacher = cache.model(kd_cfg).to(device)
+        load_weights(kd_teacher, kd_ckpt["weights"])
+        kd_teacher.eval()
+        for p in kd_teacher.parameters():
+            p.requires_grad_(False)
+        print(f"kd_teacher={kd_teacher_path} lambda_kd={lambda_kd} "
+              f"top_k={kd_top_k} temp={kd_temp}", flush=True)
+    geo_edge_src = geo_edge_dst = geo_edge_w = None
+    if poi_geo_laplace > 0:
+        coords_list, _ = catalog_coordinates(cache.split("train"), cache.pois)
+        coords = torch.tensor(coords_list, dtype=torch.float64)
+        geo_edge_src, geo_edge_dst, geo_edge_w = build_geo_knn_edges(coords, geo_knn)
+        geo_edge_src = geo_edge_src.to(device)
+        geo_edge_dst = geo_edge_dst.to(device)
+        geo_edge_w = geo_edge_w.to(device)
+        print(f"poi_geo_laplace={poi_geo_laplace} geo_knn={geo_knn} "
+              f"edges={int(geo_edge_src.numel())}", flush=True)
     param_device = next(model.parameters()).device
     print(f"model_param_device={param_device} router_mode={cfg.router_mode} "
           f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior} "
@@ -1980,6 +2050,21 @@ def train(args):
                 float(getattr(args, "ce_focal_gamma", 0.0) or 0.0),
                 str(getattr(args, "bpr_mode", "max") or "max"),
                 soft_targets=soft_tgts)
+            if kd_teacher is not None and lambda_kd > 0:
+                with torch.no_grad():
+                    teach_out = kd_teacher(
+                        h, valid, rows, prior, confidence,
+                        candidate_mask=cand_mask, count_ctx=count_ctx,
+                        surd_specific=lookup_surd_specific(final, safe_rows, cfg))
+                kd = top_k_kd_loss(
+                    result["score"], teach_out["score"], cand_mask,
+                    top_k=kd_top_k, temp=kd_temp)
+                loss = loss + lambda_kd * kd
+            if poi_geo_laplace > 0 and geo_edge_src is not None:
+                # tokens["P"] rows 0/1 are pad/unk; catalog rows start at index 2.
+                poi_emb = model.tokens["P"].weight[2:2 + len(cache.pois)]
+                loss = loss + poi_geo_laplace_loss(
+                    poi_emb, geo_edge_src, geo_edge_dst, geo_edge_w, poi_geo_laplace)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)
