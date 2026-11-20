@@ -13,7 +13,8 @@ import torch
 from tqdm.auto import tqdm
 
 from .candidates import (
-    format_pool_size_line, pools_for_split, sample_candidates, summarize_pool_sizes,
+    format_pool_size_line, pools_for_split, sample_candidates,
+    shrink_pools_spatial_prior, summarize_pool_sizes,
 )
 from .counts import (
     DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
@@ -1235,16 +1236,41 @@ def save_eval_results(payload, out_dir, legacy_output=None):
 def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, desc="eval",
              count_tables=None, score_temperature=1.0, tta_modes=(), tta_keep_last=True,
              tta_views=1, tta_fuse="mean", score_calib="off", calib_lambda=0.0,
-             tta_seed=0):
+             tta_seed=0, candidate_spatial_prior="off", candidate_prior_top_m=0,
+             candidate_prior_gravity_beta=1.0):
     """Rank samples; with ``count_tables``, walk chronologically (score then update).
 
-    Optional eval-only Acc levers: TTA (#36) and Gaussian+feature calib (#34).
+    Optional eval-only Acc levers: TTA (#36), Gaussian+feature calib (#34),
+    coverage-safe spatial top-M pool shrink (#10).
     """
     model.eval()
     ranks, grouped = [], defaultdict(list)
     counts = table.target_count.cpu()
     device = table.routing_prior.device
     pools, _resolutions = cache.candidate_pools(data)
+    pool_shrink_stats = None
+    prior = str(candidate_spatial_prior or "off").lower()
+    top_m = int(candidate_prior_top_m or 0)
+    if prior not in ("", "off", "none") and top_m > 0:
+        if cache.uses_full_catalog_pools():
+            raise ValueError("--candidate-spatial-prior requires constructed pools "
+                             "(not full-catalog cache)")
+        pools, pool_shrink_stats = shrink_pools_spatial_prior(
+            data, pools, cache.poi_coords,
+            prior=prior, top_m=top_m,
+            popularity=cache.popularity,
+            gravity_beta=float(candidate_prior_gravity_beta or 1.0))
+        cov = pool_shrink_stats.get("natural_gt_coverage")
+        print(
+            f"candidate_spatial_prior={prior} top_m={top_m} "
+            f"natural_gt_coverage={cov} "
+            f"size_after_mean={pool_shrink_stats.get('size_after_mean')}",
+            flush=True)
+        if cov is not None and cov < 0.98:
+            print(
+                f"WARNING: natural GT coverage {cov:.4f} < 0.98 — Acc@1 may be "
+                "unfair if force-include rescues many targets",
+                flush=True)
     use_counts = count_tables is not None and model.cfg.causal_counts
     use_side = needs_side_features(model.cfg)
     chronological = use_counts or (use_side and model.cfg.user_pref == "on")
@@ -1368,8 +1394,11 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
                 cat_bin = "0" if not cat_count else "1_9" if cat_count < 10 else "10_plus"
                 for key in (f"poi/{popularity}", f"history/{length_bin}", f"last_category/{cat_bin}"):
                     grouped[key].append(rank)
-    return dict(all_targets=metric_row(ranks), known_only=metric_row([r for r in ranks if r]),
-                groups={key: metric_row(rs) for key, rs in sorted(grouped.items())})
+    out = dict(all_targets=metric_row(ranks), known_only=metric_row([r for r in ranks if r]),
+               groups={key: metric_row(rs) for key, rs in sorted(grouped.items())})
+    if pool_shrink_stats is not None:
+        out["candidate_spatial_prior"] = pool_shrink_stats
+    return out
 
 
 def save_checkpoint(payload, path):
@@ -2080,12 +2109,17 @@ def evaluate_cli(args):
               f"fuse={tta_fuse} keep_last={tta_keep_last}", flush=True)
     if score_calib not in ("", "off", "none"):
         print(f"score_calib={score_calib} lambda={calib_lambda}", flush=True)
+    cand_prior = str(getattr(args, "candidate_spatial_prior", "off") or "off")
+    cand_top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+    cand_gbeta = float(getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0)
     metrics = evaluate(
         model, table, data, cache, args.eval_batch_size,
         args.chunk, category_frequency, desc=f"eval {args.split}",
         count_tables=count_tables, score_temperature=score_temp,
         tta_modes=tta_modes, tta_keep_last=tta_keep_last, tta_views=tta_views,
-        tta_fuse=tta_fuse, score_calib=score_calib, calib_lambda=calib_lambda)
+        tta_fuse=tta_fuse, score_calib=score_calib, calib_lambda=calib_lambda,
+        candidate_spatial_prior=cand_prior, candidate_prior_top_m=cand_top_m,
+        candidate_prior_gravity_beta=cand_gbeta)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
     payload["candidate_pool_stats"] = pool_stats.get(args.split)
@@ -2097,6 +2131,10 @@ def evaluate_cli(args):
     payload["tta_views"] = tta_views if tta_modes else 0
     payload["score_calib"] = score_calib
     payload["calib_lambda"] = calib_lambda
+    payload["candidate_spatial_prior"] = cand_prior
+    payload["candidate_prior_top_m"] = cand_top_m
+    if metrics.get("candidate_spatial_prior"):
+        payload["candidate_prior_stats"] = metrics["candidate_spatial_prior"]
     print_eval_tables(payload)
     out_dir = resolve_eval_out(args)
     save_eval_results(payload, out_dir, legacy_output=args.output)

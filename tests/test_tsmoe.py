@@ -19,7 +19,7 @@ from tsmoe.candidates import (
     catalog_visit_counts, consecutive_visit_distances, format_pool_size_line,
     haversine_km, neighborhood_indices, pick_popular_radius_km, pick_radius_km,
     popular_indices, resolve_candidate_pool, sample_candidates,
-    summarize_distances, summarize_pool_sizes,
+    shrink_pools_spatial_prior, summarize_distances, summarize_pool_sizes,
 )
 from tsmoe.prepare import dump_json
 from tsmoe.counts import (
@@ -1522,6 +1522,27 @@ class TestCausalCounts(unittest.TestCase):
         ctx = {"cand_poi_feat": torch.tensor([[[0.0, 0.0], [5.0, 0.0], [0.0, 0.0]]])}
         out = apply_score_calib(scores, rows, mask, ctx, "gauss_rev", 1.0)
         self.assertEqual(int(out[0].argmax().item()), 1)
+
+    def test_shrink_pools_spatial_prior_keeps_gt_and_top_m(self):
+        """#10: geo top-M shrink always retains GT; reports natural coverage."""
+        # Catalog: 0 at origin, 1 near, 2 far, 3 farthest. Target=3 (far).
+        coords = torch.tensor([[0.0, 0.0], [0.01, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                              dtype=torch.float64)
+        data = {
+            "end": torch.tensor([1]),
+            "lat": torch.tensor([0.0, 0.0]),
+            "lon": torch.tensor([0.0, 0.0]),
+            "poi_token": torch.tensor([2, 5]),  # prev row0, target row3 → token 5
+            "trail": torch.tensor([0, 0]),
+            "trails": [["u", "t"]],
+        }
+        pools = [torch.tensor([0, 1, 2, 3])]
+        new_pools, stats = shrink_pools_spatial_prior(
+            data, pools, coords, prior="geo", top_m=2)
+        kept = set(new_pools[0].tolist())
+        self.assertEqual(len(kept), 3)  # top2 nearest {0,1} + forced GT 3
+        self.assertIn(3, kept)
+        self.assertAlmostEqual(stats["natural_gt_coverage"], 0.0)
 
     def test_soft_prior_targets_mixes_onehot_and_priors(self):
         from tsmoe.model import soft_prior_targets

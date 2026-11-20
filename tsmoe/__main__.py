@@ -419,6 +419,17 @@ def main():
     e.add_argument(
         "--calib-lambda", type=float, default=0.0,
         help="λ for --score-calib feature term (Acc-aware; default 0)")
+    e.add_argument(
+        "--candidate-spatial-prior", type=str, default="off",
+        choices=("off", "geo", "gravity", "radiation"),
+        help="eval-only Acc@1 pool shrink (#10): keep top-M by geo/gravity/"
+             "radiation prior (always force-include GT; log natural coverage)")
+    e.add_argument(
+        "--candidate-prior-top-m", type=int, default=0,
+        help="top-M kept by --candidate-spatial-prior (0 = off)")
+    e.add_argument(
+        "--candidate-prior-gravity-beta", type=float, default=1.0,
+        help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
     x = commands.add_parser("explain", help="audit one candidate's prior, router and score contributions")
     x.add_argument("--sample-index", type=int, default=0)
     x.add_argument("--poi-id", type=int, help="external venue_id; default is the true POI or top prediction for OOV")
@@ -491,6 +502,12 @@ def main():
             root.error("--revisit-score-bias override must be nonnegative")
         if int(getattr(args, "tta_views", 1) or 1) < 1:
             root.error("--tta-views must be >= 1")
+        cprior = str(getattr(args, "candidate_spatial_prior", "off") or "off")
+        ctop = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+        if cprior not in ("off", "none", "") and ctop < 1:
+            root.error("--candidate-spatial-prior requires --candidate-prior-top-m >= 1")
+        if ctop < 0:
+            root.error("--candidate-prior-top-m must be nonnegative")
     if (args.command == "train"
             and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):
