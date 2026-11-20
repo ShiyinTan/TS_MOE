@@ -61,6 +61,116 @@ def apply_eval_bias_overrides(model, args):
     return new_cfg
 
 
+def parse_tta_modes(raw):
+    """Parse ``--tta`` CSV into modes; empty / off → ()."""
+    text = str(raw or "").strip().lower()
+    if text in ("", "off", "none"):
+        return ()
+    modes = tuple(p.strip() for p in text.split(",") if p.strip())
+    allowed = {"mask", "substitute"}
+    unknown = set(modes) - allowed
+    if unknown:
+        raise ValueError(f"--tta modes must be mask|substitute; got {sorted(unknown)}")
+    return modes
+
+
+def make_tta_history_views(history, valid, modes, *, keep_last=True, n_views=1, seed=0):
+    """Build Mask / Substitute history views (last tip fixed). Yields (history, valid)."""
+    if not modes:
+        return
+    bsz, seq = valid.shape
+    device = valid.device
+    lengths = valid.long().sum(dim=1)
+    for view_i in range(max(1, int(n_views))):
+        for mode in modes:
+            g = torch.Generator(device=device)
+            g.manual_seed(int(seed) + 17 * view_i + (0 if mode == "mask" else 101))
+            h = {k: v.clone() for k, v in history.items()}
+            v = valid.clone()
+            for b in range(bsz):
+                L = int(lengths[b].item())
+                if L <= 1:
+                    continue
+                last = L - 1
+                editable = list(range(0 if not keep_last else 0, last))
+                if not editable:
+                    continue
+                if mode == "mask":
+                    # Drop ~40% of non-last tips (at least one when L>=3).
+                    n_drop = max(1, int(round(0.4 * len(editable)))) if L >= 3 else 1
+                    n_drop = min(n_drop, len(editable))
+                    pick = torch.randperm(len(editable), generator=g, device=device)[:n_drop]
+                    for j in pick.tolist():
+                        v[b, editable[j]] = False
+                elif mode == "substitute":
+                    # Replace ~40% non-last P tokens with another tip from same trail.
+                    n_sub = max(1, int(round(0.4 * len(editable)))) if L >= 3 else 1
+                    n_sub = min(n_sub, len(editable))
+                    pick = torch.randperm(len(editable), generator=g, device=device)[:n_sub]
+                    src = torch.randint(0, L, (n_sub,), generator=g, device=device)
+                    for k, j in enumerate(pick.tolist()):
+                        src_i = int(src[k].item())
+                        if src_i == editable[j]:
+                            src_i = last
+                        h["P"][b, editable[j]] = history["P"][b, src_i]
+            # Ensure last tip remains valid.
+            if keep_last:
+                for b in range(bsz):
+                    L = int(lengths[b].item())
+                    if L >= 1:
+                        v[b, L - 1] = True
+            yield h, v
+
+
+def apply_score_calib(scores, pool_rows, pool_mask, count_ctx, mode, calib_lambda):
+    """Acc-aware non-order-preserving score calib (#34).
+
+    ``gauss_pop``: Gaussian-CDF of centered scores minus λ·log1p(global pop).
+    ``gauss_rev``: same CDF plus λ·log1p(user revisit). Univariate CDF alone is
+    Acc-neutral; the feature term can change top-1.
+    """
+    mode = str(mode or "off").lower()
+    if mode in ("", "off", "none"):
+        return scores
+    if mode not in ("gauss_pop", "gauss_rev"):
+        raise ValueError("--score-calib must be off|gauss_pop|gauss_rev")
+    lam = float(calib_lambda or 0.0)
+    if abs(lam) < 1e-12:
+        return scores
+    if count_ctx is None or "cand_poi_feat" not in count_ctx:
+        raise ValueError(f"--score-calib {mode} requires causal cand_poi_feat")
+    feat_dim = 1 if mode == "gauss_pop" else 0
+    feat = count_ctx["cand_poi_feat"][..., feat_dim].to(scores.device).to(scores.dtype)
+    # Align feature width to padded pool scores.
+    bsz, width = scores.shape
+    mask = pool_mask.to(device=scores.device, dtype=torch.bool)
+    if feat.shape != scores.shape:
+        padded = torch.zeros(bsz, width, dtype=scores.dtype, device=scores.device)
+        n = min(feat.shape[1], width)
+        padded[:, :n] = feat[:, :n]
+        feat = padded
+    # Median over valid pool slots.
+    meds = []
+    for b in range(bsz):
+        vals = scores[b][mask[b]]
+        if vals.numel() == 0:
+            meds.append(scores.new_zeros(()))
+        else:
+            meds.append(vals.median())
+    med = torch.stack(meds).view(bsz, 1)
+    centered = (scores - med).masked_fill(~mask, 0.0)
+    denom = mask.to(scores.dtype).sum(dim=1, keepdim=True).clamp_min(1.0)
+    var = centered.pow(2).sum(dim=1, keepdim=True) / denom
+    scale = var.sqrt().clamp_min(1e-3)
+    # Φ approx via logistic; order-preserving alone, then ±λ·feat flips Acc.
+    cdf = torch.sigmoid(1.702 * centered / scale)
+    if mode == "gauss_pop":
+        out = cdf - lam * feat
+    else:
+        out = cdf + lam * feat
+    return out.masked_fill(~mask, float("-inf"))
+
+
 def model_config_from_checkpoint(raw):
     """Build ModelConfig from a checkpoint; legacy saves without router_mode → hybrid."""
     cfg = dict(raw)
@@ -1123,8 +1233,13 @@ def save_eval_results(payload, out_dir, legacy_output=None):
 
 @torch.inference_mode()
 def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, desc="eval",
-             count_tables=None, score_temperature=1.0):
-    """Rank samples; with ``count_tables``, walk chronologically (score then update)."""
+             count_tables=None, score_temperature=1.0, tta_modes=(), tta_keep_last=True,
+             tta_views=1, tta_fuse="mean", score_calib="off", calib_lambda=0.0,
+             tta_seed=0):
+    """Rank samples; with ``count_tables``, walk chronologically (score then update).
+
+    Optional eval-only Acc levers: TTA (#36) and Gaussian+feature calib (#34).
+    """
     model.eval()
     ranks, grouped = [], defaultdict(list)
     counts = table.target_count.cpu()
@@ -1134,6 +1249,10 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     use_side = needs_side_features(model.cfg)
     chronological = use_counts or (use_side and model.cfg.user_pref == "on")
     score_temp = float(score_temperature or 1.0)
+    tta_modes = tuple(tta_modes or ())
+    fuse = str(tta_fuse or "mean").lower()
+    if fuse not in ("mean", "rrf"):
+        raise ValueError("--tta-fuse must be mean|rrf")
     if chronological:
         order = chronological_indices(data)
         batches = list(order.split(batch_size))
@@ -1142,6 +1261,37 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     else:
         batches = list(torch.arange(len(data["end"])).split(batch_size))
         rank_by_index = None
+
+    def _score_one(h_view, valid_view, count_ctx, batch_pools):
+        encoded = model.encode(h_view, valid_view, count_ctx)
+        if cache.uses_full_catalog_pools():
+            return all_scores(
+                model, table, encoded, valid_view, len(cache.pois), chunk,
+                count_ctx=count_ctx, score_temperature=score_temp), None, None
+        pool_scores, pool_rows, pool_mask = score_pools(
+            model, table, encoded, valid_view, batch_pools, chunk,
+            count_ctx=count_ctx, score_temperature=score_temp)
+        return pool_scores, pool_rows, pool_mask
+
+    def _fuse_score_list(score_list, pool_mask):
+        if len(score_list) == 1:
+            return score_list[0]
+        if fuse == "mean":
+            stacked = torch.stack(score_list, 0)
+            return stacked.mean(0)
+        # Reciprocal rank fusion over views (k=60).
+        k = 60.0
+        acc = torch.zeros_like(score_list[0])
+        for s in score_list:
+            # Dense RRF: 1/(k+rank); mask pads stay -inf → large rank ignored via mask.
+            order = torch.argsort(s, dim=1, descending=True, stable=True)
+            ranks_v = torch.empty_like(order)
+            ranks_v.scatter_(1, order, torch.arange(1, s.shape[1] + 1, device=s.device).expand_as(s))
+            acc = acc + 1.0 / (k + ranks_v.float())
+        if pool_mask is not None:
+            acc = acc.masked_fill(~pool_mask, float("-inf"))
+        return acc
+
     for idx in tqdm(batches, desc=desc, leave=False, dynamic_ncols=True):
         check_interrupt()
         h, valid, target = device_batch(data, idx, device)
@@ -1157,18 +1307,33 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
                 model.cfg, cache, data, idx, cand_lists, seq_len, count_tables,
                 update=use_counts)
             count_ctx = count_ctx_to_device(count_ctx, device)
-        encoded = model.encode(h, valid, count_ctx)
+        batch_pools = None if cache.uses_full_catalog_pools() else [pools[i] for i in idx.tolist()]
+        views = [(h, valid)]
+        if tta_modes:
+            views.extend(list(make_tta_history_views(
+                h, valid, tta_modes, keep_last=tta_keep_last,
+                n_views=tta_views, seed=tta_seed + int(idx[0]) * 13)))
+        score_list = []
+        pool_rows = pool_mask = None
+        for h_view, v_view in views:
+            scores_i, pool_rows_i, pool_mask_i = _score_one(
+                h_view, v_view, count_ctx, batch_pools)
+            score_list.append(scores_i)
+            if pool_rows_i is not None:
+                pool_rows, pool_mask = pool_rows_i, pool_mask_i
+        scores = _fuse_score_list(score_list, pool_mask)
         if cache.uses_full_catalog_pools():
-            scores = all_scores(model, table, encoded, valid, len(cache.pois), chunk,
-                                count_ctx=count_ctx, score_temperature=score_temp)
+            if str(score_calib or "off").lower() not in ("", "off", "none"):
+                # Full-catalog calib: build a dense mask of ones.
+                full_mask = torch.ones_like(scores, dtype=torch.bool)
+                fake_rows = torch.arange(scores.shape[1]).expand(scores.shape[0], -1)
+                scores = apply_score_calib(
+                    scores, fake_rows, full_mask, count_ctx, score_calib, calib_lambda)
             batch_ranks = ranks_of(scores, target).tolist()
         else:
-            # Eval always ranks inside the full constructed multi-source pool.
-            batch_pools = [pools[i] for i in idx.tolist()]
-            pool_scores, pool_rows, pool_mask = score_pools(
-                model, table, encoded, valid, batch_pools, chunk, count_ctx=count_ctx,
-                score_temperature=score_temp)
-            batch_ranks = ranks_in_pools(pool_scores, pool_rows, pool_mask, target.cpu())
+            scores = apply_score_calib(
+                scores, pool_rows, pool_mask, count_ctx, score_calib, calib_lambda)
+            batch_ranks = ranks_in_pools(scores, pool_rows, pool_mask, target.cpu())
         if rank_by_index is not None:
             for i, rank in zip(idx.tolist(), batch_ranks):
                 rank_by_index[i] = rank
@@ -1902,15 +2067,36 @@ def evaluate_cli(args):
     score_temp = float(getattr(args, "score_temperature", 1.0) or 1.0)
     if score_temp <= 0:
         raise ValueError("--score-temperature must be positive")
-    metrics = evaluate(model, table, data, cache, args.eval_batch_size,
-                       args.chunk, category_frequency, desc=f"eval {args.split}",
-                       count_tables=count_tables, score_temperature=score_temp)
+    tta_modes = parse_tta_modes(getattr(args, "tta", "off"))
+    tta_keep_last = not bool(getattr(args, "tta_no_keep_last", False))
+    tta_views = int(getattr(args, "tta_views", 1) or 1)
+    tta_fuse = str(getattr(args, "tta_fuse", "mean") or "mean")
+    score_calib = str(getattr(args, "score_calib", "off") or "off")
+    calib_lambda = float(getattr(args, "calib_lambda", 0.0) or 0.0)
+    if tta_views < 1:
+        raise ValueError("--tta-views must be >= 1")
+    if tta_modes:
+        print(f"tta modes={','.join(tta_modes)} views={tta_views} "
+              f"fuse={tta_fuse} keep_last={tta_keep_last}", flush=True)
+    if score_calib not in ("", "off", "none"):
+        print(f"score_calib={score_calib} lambda={calib_lambda}", flush=True)
+    metrics = evaluate(
+        model, table, data, cache, args.eval_batch_size,
+        args.chunk, category_frequency, desc=f"eval {args.split}",
+        count_tables=count_tables, score_temperature=score_temp,
+        tta_modes=tta_modes, tta_keep_last=tta_keep_last, tta_views=tta_views,
+        tta_fuse=tta_fuse, score_calib=score_calib, calib_lambda=calib_lambda)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
     payload["candidate_pool_stats"] = pool_stats.get(args.split)
     payload["score_temperature"] = score_temp
     payload["eval_geo_score_bias"] = float(cfg.geo_score_bias)
     payload["eval_revisit_score_bias"] = float(cfg.revisit_score_bias)
+    payload["tta"] = ",".join(tta_modes) if tta_modes else "off"
+    payload["tta_fuse"] = tta_fuse if tta_modes else "off"
+    payload["tta_views"] = tta_views if tta_modes else 0
+    payload["score_calib"] = score_calib
+    payload["calib_lambda"] = calib_lambda
     print_eval_tables(payload)
     out_dir = resolve_eval_out(args)
     save_eval_results(payload, out_dir, legacy_output=args.output)

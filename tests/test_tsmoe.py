@@ -38,8 +38,9 @@ from tsmoe.ablation_summary import (
 )
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, ablation_row_from_eval, append_ablation_log,
-    apply_eval_bias_overrides, candidates, format_ablation_key_flags,
-    format_eval_report, metric_row, model_config_from_checkpoint, ranks_of,
+    apply_eval_bias_overrides, apply_score_calib, candidates,
+    format_ablation_key_flags, format_eval_report, make_tta_history_views,
+    metric_row, model_config_from_checkpoint, parse_tta_modes, ranks_of,
     results_root_dir, results_run_dir, run_name_for_results,
 )
 from tsmoe.features import (
@@ -1502,6 +1503,25 @@ class TestCausalCounts(unittest.TestCase):
             model2, SimpleNamespace(geo_score_bias=None, revisit_score_bias=None))
         self.assertAlmostEqual(cfg2.geo_score_bias, 0.15)
         self.assertAlmostEqual(cfg2.revisit_score_bias, 0.10)
+
+    def test_tta_mask_keeps_last_and_calib_can_flip_top1(self):
+        """#36 keep-last mask; #34 gauss_rev can change argmax via feature mix."""
+        self.assertEqual(parse_tta_modes("mask,substitute"), ("mask", "substitute"))
+        h = {"P": torch.tensor([[2, 3, 4, 5]])}
+        valid = torch.tensor([[True, True, True, True]])
+        views = list(make_tta_history_views(
+            h, valid, ("mask",), keep_last=True, n_views=1, seed=0))
+        self.assertEqual(len(views), 1)
+        _, v2 = views[0]
+        self.assertTrue(bool(v2[0, -1].item()))
+        self.assertLess(int(v2[0].sum().item()), 4)
+        scores = torch.tensor([[1.0, 0.9, 0.5]])
+        mask = torch.ones_like(scores, dtype=torch.bool)
+        rows = torch.arange(3).expand(1, -1)
+        # High revisit on cand1 → can beat cand0 after calib.
+        ctx = {"cand_poi_feat": torch.tensor([[[0.0, 0.0], [5.0, 0.0], [0.0, 0.0]]])}
+        out = apply_score_calib(scores, rows, mask, ctx, "gauss_rev", 1.0)
+        self.assertEqual(int(out[0].argmax().item()), 1)
 
     def test_soft_prior_targets_mixes_onehot_and_priors(self):
         from tsmoe.model import soft_prior_targets

@@ -398,6 +398,27 @@ def main():
         "--revisit-score-bias", type=float, default=None,
         help="evaluate-time override of revisit λ (None = keep checkpoint). "
              "Use with soft10r for locked-bias ε-mix (#38)")
+    e.add_argument(
+        "--tta", type=str, default="off",
+        help="eval-only TTA (#36): off or comma list mask,substitute "
+             "(keep last tip; fuse across views)")
+    e.add_argument(
+        "--tta-views", type=int, default=1,
+        help="number of random Mask/Substitute draws per mode (default 1)")
+    e.add_argument(
+        "--tta-fuse", type=str, default="mean", choices=("mean", "rrf"),
+        help="how to fuse TTA view scores (mean or reciprocal-rank fusion)")
+    e.add_argument(
+        "--tta-no-keep-last", action="store_true",
+        help="allow masking/substituting the last history tip (default: keep last)")
+    e.add_argument(
+        "--score-calib", type=str, default="off",
+        choices=("off", "gauss_pop", "gauss_rev"),
+        help="Acc-aware Gaussian CDF + feature mix (#34): gauss_pop subtracts "
+             "λ·log1p(global visits); gauss_rev adds λ·user revisit")
+    e.add_argument(
+        "--calib-lambda", type=float, default=0.0,
+        help="λ for --score-calib feature term (Acc-aware; default 0)")
     x = commands.add_parser("explain", help="audit one candidate's prior, router and score contributions")
     x.add_argument("--sample-index", type=int, default=0)
     x.add_argument("--poi-id", type=int, help="external venue_id; default is the true POI or top prediction for OOV")
@@ -468,6 +489,8 @@ def main():
             root.error("--geo-score-bias override must be nonnegative")
         if rev_ov is not None and float(rev_ov) < 0:
             root.error("--revisit-score-bias override must be nonnegative")
+        if int(getattr(args, "tta_views", 1) or 1) < 1:
+            root.error("--tta-views must be >= 1")
     if (args.command == "train"
             and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):
