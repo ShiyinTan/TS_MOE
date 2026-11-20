@@ -1116,6 +1116,7 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(legacy.radiation_score_bias, 0.0)
         self.assertEqual(legacy.jump_length_bias, 0.0)
         self.assertEqual(legacy.return_gate, "off")
+        self.assertEqual(legacy.tsb_history_k, 1)
         self.assertEqual(legacy.tsb_decay_hours, 0.0)
         self.assertEqual(legacy.surd_bias_gate, "off")
         self.assertEqual(legacy.surd_score_bias, 0.0)
@@ -1265,6 +1266,44 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(soft.shape, (1, 3))
         self.assertTrue(torch.isfinite(hard).all())
         self.assertTrue(torch.isfinite(soft).all())
+
+    def test_multi_hop_tsb_blends_history(self):
+        """K>1 multi-hop tsb changes scores vs last-only when older hops have mass."""
+        torch.manual_seed(13)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        ctx = dict(ctx)
+        # Inject mass on older hop → cand0; last hop → cand1 only.
+        last = int(valid[0].long().sum().item()) - 1
+        tr = ctx["poi_transition"].clone()
+        tr.zero_()
+        if last >= 1:
+            tr[0, 0, last - 1] = 40.0
+        tr[0, 1, last] = 5.0
+        ctx["poi_transition"] = tr
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4,
+                    transition_score_bias=1.0)
+        k1 = TSMoE(n_pois, n_cats, 4, ModelConfig(**base, tsb_history_k=1)).eval()
+        k2 = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, tsb_history_k=2, tsb_history_decay=0.5)).eval()
+        k2.load_state_dict(k1.state_dict())
+        with torch.no_grad():
+            s1 = k1(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s2 = k2(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        if last >= 1:
+            self.assertGreater(float(s2[0] - s1[0]), 0.5)
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, tsb_history_k=0)
 
     def test_return_gate_mixes_revisit_and_explore(self):
         """Return-gate: π·revisit + (1−π)·gauss explore changes scores vs flat revisit."""

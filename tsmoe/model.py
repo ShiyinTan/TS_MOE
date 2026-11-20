@@ -130,6 +130,9 @@ class ModelConfig:
     return_gate: str = "off"
     explore_spatial_bias: str = "off"  # off|gauss|geo|radiation
     explore_score_bias: float = 0.0
+    # Multi-hop tsb: blend last K history→cand transitions (1 = last-only default).
+    tsb_history_k: int = 1
+    tsb_history_decay: float = 0.5  # w_o ∝ exp(−o/κ); o=0 is last tip
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
     tsb_decay_hours: float = 0.
     visit_bins: int = DEFAULT_VISIT_BINS
@@ -216,6 +219,10 @@ class ModelConfig:
             raise ValueError("explore_spatial_bias must be off|gauss|geo|radiation")
         if self.explore_score_bias < 0:
             raise ValueError("explore_score_bias must be nonnegative")
+        if self.tsb_history_k < 1:
+            raise ValueError("tsb_history_k must be >= 1")
+        if self.tsb_history_decay <= 0:
+            raise ValueError("tsb_history_decay must be positive")
         if self.return_gate == "on":
             if self.revisit_score_bias <= 0:
                 raise ValueError("return_gate on requires --revisit-score-bias > 0")
@@ -648,10 +655,26 @@ class TSMoE(nn.Module):
     @staticmethod
     def _last_hop_log1p(transition, rows, valid, device):
         """Gather last-history column of [B,M,L] transition tensor → λ·log1p scale input."""
+        return TSMoE._multi_hop_log1p(transition, rows, valid, device, k=1, decay=0.5)
+
+    @staticmethod
+    def _multi_hop_log1p(transition, rows, valid, device, k=1, decay=0.5):
+        """Blend last-K history→cand log1p counts with w_o∝exp(−o/κ) (o=0 = last tip)."""
         tr = transition[:, :rows.shape[1], :valid.shape[1]].to(device)
-        last = valid.long().sum(-1).clamp_min(1) - 1  # [B]
-        last_tr = tr.gather(2, last.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
-        return torch.log1p(last_tr.clamp_min(0))
+        lengths = valid.long().sum(-1).clamp_min(1)  # [B]
+        k = max(1, int(k))
+        decay = max(float(decay), 1e-6)
+        acc = None
+        w_sum = 0.0
+        for o in range(k):
+            w = math.exp(-o / decay)
+            w_sum += w
+            idx = (lengths - 1 - o).clamp_min(0)
+            hop_ok = (lengths > o).to(tr.dtype)[:, None]
+            col = tr.gather(2, idx.view(-1, 1, 1).expand(-1, tr.shape[1], 1)).squeeze(-1)
+            term = torch.log1p(col.clamp_min(0)) * hop_ok
+            acc = term * w if acc is None else acc + term * w
+        return acc / w_sum
 
     @staticmethod
     def _radiation_log_score(km, mass_j, mass_i, kernel="hard", soft_km=0.25, eps=1e-6):
@@ -786,12 +809,14 @@ class TSMoE(nn.Module):
             z, top, weights, mask, details, expert_z=expert_z_list)
         score = base + gate * residual
         gate_mode = getattr(self.cfg, "tsb_gate_mode", "off")
-        # Light graph prior: last-history → candidate POI transition count → Acc@1 bias.
+        # Light graph prior: last-K history → candidate POI transition (default K=1).
         tb = float(self.cfg.transition_score_bias or 0.0)
         if (tb > 0 and count_ctx is not None and self.cfg.causal_counts
                 and "poi_transition" in count_ctx):
-            tsb_term = tb * self._last_hop_log1p(
-                count_ctx["poi_transition"], rows, valid, score.device)
+            tsb_term = tb * self._multi_hop_log1p(
+                count_ctx["poi_transition"], rows, valid, score.device,
+                k=int(getattr(self.cfg, "tsb_history_k", 1) or 1),
+                decay=float(getattr(self.cfg, "tsb_history_decay", 0.5) or 0.5))
             # Hawkes-lite: down-weight transition prior when last→target gap is large.
             tau = float(getattr(self.cfg, "tsb_decay_hours", 0.0) or 0.0)
             if tau > 0 and "target_gap_hours" in count_ctx:

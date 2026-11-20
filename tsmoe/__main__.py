@@ -246,6 +246,13 @@ def main():
         help="λ_exp for return-gate explore branch (default 0). "
              "gauss uses --gauss-sigma-km; radiation uses --radiation-kernel")
     t.add_argument(
+        "--tsb-history-k", type=int, default=1,
+        help="blend last K history→cand transitions into --transition-score-bias "
+             "(default 1 = last-only; try 2–3)")
+    t.add_argument(
+        "--tsb-history-decay", type=float, default=0.5,
+        help="κ for multi-hop tsb weights w_o∝exp(−o/κ); o=0 is last tip (default 0.5)")
+    t.add_argument(
         "--tsb-decay-hours", type=float, default=0.0,
         help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
              "hours from last history tip to target (Hawkes-lite; 0 = off)")

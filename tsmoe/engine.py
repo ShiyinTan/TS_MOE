@@ -63,6 +63,8 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("return_gate", "off")
     cfg.setdefault("explore_spatial_bias", "off")
     cfg.setdefault("explore_score_bias", 0.0)
+    cfg.setdefault("tsb_history_k", 1)
+    cfg.setdefault("tsb_history_decay", 0.5)
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
     # New overlays default off for legacy checkpoints.
@@ -1194,6 +1196,8 @@ def train(args):
     return_gate = getattr(args, "return_gate", "off")
     explore_spatial_bias = getattr(args, "explore_spatial_bias", "off")
     explore_score_bias = float(getattr(args, "explore_score_bias", 0.0) or 0.0)
+    tsb_history_k = int(getattr(args, "tsb_history_k", 1) or 1)
+    tsb_history_decay = float(getattr(args, "tsb_history_decay", 0.5) or 0.5)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
@@ -1227,6 +1231,10 @@ def train(args):
         raise ValueError("--explore-spatial-bias must be off|gauss|geo|radiation")
     if explore_score_bias < 0:
         raise ValueError("--explore-score-bias must be nonnegative")
+    if tsb_history_k < 1:
+        raise ValueError("--tsb-history-k must be >= 1")
+    if tsb_history_decay <= 0:
+        raise ValueError("--tsb-history-decay must be positive")
     if return_gate == "on":
         if revisit_score_bias <= 0:
             raise ValueError("--return-gate on requires --revisit-score-bias > 0")
@@ -1320,6 +1328,8 @@ def train(args):
                       return_gate=return_gate,
                       explore_spatial_bias=explore_spatial_bias,
                       explore_score_bias=explore_score_bias,
+                      tsb_history_k=tsb_history_k,
+                      tsb_history_decay=tsb_history_decay,
                       tsb_decay_hours=tsb_decay_hours,
                       visit_bins=visit_bins,
                       candidate_context=candidate_context,
@@ -1355,6 +1365,7 @@ def train(args):
           f"jump_mu={cfg.jump_mu} jump_sigma={cfg.jump_sigma} "
           f"return_gate={cfg.return_gate} explore_spatial_bias={cfg.explore_spatial_bias} "
           f"explore_score_bias={cfg.explore_score_bias} "
+          f"tsb_history_k={cfg.tsb_history_k} tsb_history_decay={cfg.tsb_history_decay} "
           f"tsb_decay_hours={cfg.tsb_decay_hours} "
           f"surd_bias_gate={cfg.surd_bias_gate} surd_score_bias={cfg.surd_score_bias} "
           f"tsb_gate_mode={cfg.tsb_gate_mode} surd_attn_gate={cfg.surd_attn_gate} "
@@ -1403,6 +1414,8 @@ def train(args):
     settings["return_gate"] = cfg.return_gate
     settings["explore_spatial_bias"] = cfg.explore_spatial_bias
     settings["explore_score_bias"] = cfg.explore_score_bias
+    settings["tsb_history_k"] = cfg.tsb_history_k
+    settings["tsb_history_decay"] = cfg.tsb_history_decay
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
     settings["surd_score_bias"] = cfg.surd_score_bias
