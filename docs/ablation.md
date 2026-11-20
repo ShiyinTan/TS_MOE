@@ -465,7 +465,7 @@ for p in sorted(Path('results/tokyo').glob('abl_*/eval_test/metrics.json')):
 "
 ```
 
-Checkpoint 选型仍按验证 **NDCG@10**；报告头条以 **Acc@1** 为准（见 [`results.md`](results.md)）。
+Checkpoint 选型默认验证 **NDCG@10**（`--checkpoint-metric ndcg10`）；可用 `acc1` 按验证 Acc@1 选 `best.pt`。报告头条以 **Acc@1** 为准（见 [`results.md`](results.md)）。
 
 ### 6.1 `known_only`（know only）是什么？
 

@@ -737,6 +737,23 @@ def format_ablation_key_flags(cache, training_args=None, model_config=None):
         parts.append(f"--negatives {args['negatives']}")
     if args.get("max_train_candidates") is not None:
         parts.append(f"--max-train-candidates {args['max_train_candidates']}")
+    # Record non-default train hyperparams / selection (hillclimb knobs).
+    defaults = {
+        "lr": 0.001, "weight_decay": 0.01, "dropout": 0.1, "dim": 128,
+        "layers": 2, "heads": 4, "top_k": 4, "batch_size": 32,
+        "checkpoint_metric": "ndcg10",
+    }
+    for key, flag in (
+            ("lr", "--lr"), ("weight_decay", "--weight-decay"),
+            ("dropout", "--dropout"), ("dim", "--dim"), ("layers", "--layers"),
+            ("heads", "--heads"), ("top_k", "--top-k"),
+            ("batch_size", "--batch-size"),
+            ("checkpoint_metric", "--checkpoint-metric"),
+    ):
+        if key not in args or args[key] is None:
+            continue
+        if args[key] != defaults.get(key):
+            parts.append(f"{flag} {args[key]}")
     return " ".join(parts)
 
 
@@ -1083,11 +1100,19 @@ def train(args):
               f"visit_bins={cfg.visit_bins} bin_edges={visit_bin_edges.tolist()} "
               f"(train chronological, no shuffle; val/test start from train-end tables)",
               flush=True)
+    checkpoint_metric = str(getattr(args, "checkpoint_metric", "ndcg10") or "ndcg10")
+    if checkpoint_metric not in ("ndcg10", "acc1"):
+        raise ValueError(f"unsupported --checkpoint-metric {checkpoint_metric!r}")
+    settings["checkpoint_metric"] = checkpoint_metric
+    selection_tag = (
+        "best_checkpoint_by_Acc@1" if checkpoint_metric == "acc1"
+        else "best_checkpoint_by_NDCG@10")
     if eval_test_every_epoch:
         print("eval_test_every_epoch=on (per-epoch test → results/.../eval_test/epoch_*.json; "
-              "checkpoint still selected by val NDCG@10)", flush=True)
+              f"checkpoint selected by val {checkpoint_metric})", flush=True)
     else:
         print("eval_test_every_epoch=off (final best-ckpt test only)", flush=True)
+    print(f"checkpoint_metric={checkpoint_metric} → {selection_tag}", flush=True)
     # Persist pool-size audit under results/ (not beside checkpoints).
     stats_dir = results_run_dir(out)
     stats_dir.mkdir(parents=True, exist_ok=True)
@@ -1174,7 +1199,11 @@ def train(args):
         # Pass category_frequency so val (and saved best) always include groups + Acc@1.
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
                            category_frequency, desc=f"val ep{epoch}", count_tables=val_tables)
-        score = metrics["all_targets"]["NDCG@10"]
+        row = metrics["all_targets"]
+        if checkpoint_metric == "acc1":
+            score = row["Acc@1"]
+        else:
+            score = row["NDCG@10"]
         record = dict(epoch=epoch, loss=loss_sum / len(data["end"]),
                       loss_terms=dict(zip(("rec", "surd", "balance"), (components / len(data["end"])).tolist())),
                       dispatch_counts=dict(zip(EXPERT_ORDER, counts.cpu().tolist())), validation=metrics)
@@ -1217,7 +1246,11 @@ def train(args):
             best = score
             best_metrics = metrics
             payload = dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
-                           epoch=epoch, validation_ndcg10=score, training_args=settings)
+                           epoch=epoch, validation_ndcg10=row["NDCG@10"],
+                           validation_acc1=row["Acc@1"],
+                           checkpoint_metric=checkpoint_metric,
+                           checkpoint_score=score,
+                           training_args=settings)
             if train_end_state is not None:
                 payload["count_tables"] = train_end_state
                 payload["visit_bin_edges"] = visit_bin_edges.tolist()
@@ -1227,22 +1260,23 @@ def train(args):
         # Compact per-epoch val (+ optional test) history under results/.
         dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
                    "eval_test_every_epoch": eval_test_every_epoch,
+                   "checkpoint_metric": checkpoint_metric,
                    "epochs": results_history}, stats_dir / "history.json")
-        row = metrics["all_targets"]
         postfix = dict(loss=f"{record['loss']:.5f}", acc1=f"{row['Acc@1']:.4f}",
-                       ndcg10=f"{score:.6f}")
+                       ndcg10=f"{row['NDCG@10']:.6f}", ckpt=f"{score:.6f}")
         if eval_test_every_epoch and "test" in results_epoch:
             postfix["test_acc1"] = f"{results_epoch['test']['Acc@1']:.4f}"
         epoch_bar.set_postfix(**postfix)
         print(f"epoch={epoch} loss={record['loss']:.5f}  "
               f"val Acc@1={row['Acc@1']:.4f} NDCG@1={row['NDCG@1']:.4f} MRR={row['MRR']:.4f}  "
-              f"Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f}", flush=True)
+              f"Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f}  "
+              f"ckpt_score({checkpoint_metric})={score:.6f}", flush=True)
     if best_metrics is not None:
         best_path = out / "best.pt"
         val_payload = build_eval_payload(args, cache, best_metrics, device,
                                          checkpoint_path=best_path)
         val_payload["split"] = "validation"
-        val_payload["selection"] = "best_checkpoint_by_NDCG@10"
+        val_payload["selection"] = selection_tag
         val_payload["candidate_pool_stats"] = pool_stats.get("validation")
         print_eval_tables(val_payload)
         save_eval_results(val_payload, resolve_train_eval_dir(out, "validation"))
@@ -1268,7 +1302,7 @@ def train(args):
         test_payload = build_eval_payload(args, cache, test_metrics, device,
                                           checkpoint_path=best_path, checkpoint=checkpoint)
         test_payload["split"] = "test"
-        test_payload["selection"] = "best_checkpoint_by_NDCG@10"
+        test_payload["selection"] = selection_tag
         test_payload["candidate_pool_stats"] = pool_stats.get("test")
         print_eval_tables(test_payload)
         save_eval_results(test_payload, resolve_train_eval_dir(out, "test"))
@@ -1279,7 +1313,7 @@ def train(args):
             f"NDCG@1={_metric_cell(best_val, 'NDCG@1')} "
             f"MRR={_metric_cell(best_val, 'MRR')}; "
             f"ckpt_epoch={checkpoint.get('epoch')}; "
-            f"selection=best_checkpoint_by_NDCG@10"
+            f"selection={selection_tag}"
         )
         append_ablation_log(
             ablation_row_from_eval(

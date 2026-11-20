@@ -107,7 +107,8 @@ def main():
 
     t = commands.add_parser(
         "train",
-        help="train with the shared train-all SURD table and select by validation NDCG@10")
+        help="train with the shared train-all SURD table; checkpoint by "
+             "validation NDCG@10 (default) or Acc@1 via --checkpoint-metric")
     t.add_argument("--out", required=True)
     for name, value in [("epochs", 20), ("batch-size", 32), ("dim", 128), ("heads", 4),
                         ("layers", 2), ("top-k", 4)]:
@@ -190,13 +191,18 @@ def main():
              "in router top-k experts (E3; default on)")
     t.add_argument("--seed", type=int, default=42)
     t.add_argument(
+        "--checkpoint-metric", choices=("ndcg10", "acc1"), default="ndcg10",
+        help="validation metric used to select best.pt: ndcg10 (default, "
+             "all_targets NDCG@10) or acc1 (all_targets Acc@1). Experimental "
+             "Acc@1 hillclimbs may use acc1; default keeps historical protocol.")
+    t.add_argument(
         "--eval-test-every-epoch",
         action=argparse.BooleanOptionalAction, default=True,
         help="after each training epoch, also evaluate on the test split and write "
              "results/<run>/eval_test/epoch_*.json + results/<run>/history.json "
-             "(default: on). Checkpoint selection still uses validation NDCG@10; "
-             "final best-ckpt test still runs. Use --no-eval-test-every-epoch to "
-             "skip per-epoch test for speed.")
+             "(default: on). Checkpoint selection uses --checkpoint-metric "
+             "(default validation NDCG@10); final best-ckpt test still runs. "
+             "Use --no-eval-test-every-epoch to skip per-epoch test for speed.")
     t.set_defaults(func=train)
 
     e = commands.add_parser(
