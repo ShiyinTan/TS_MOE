@@ -48,8 +48,13 @@ Extra = only the lever under test on the peak stack.
 | #4 `on_s10r_2hop03/05` | transition-2hop 0.3/0.5 | **0.2540 / 0.2466** | **Discard** |
 | #9 `on_s10r_cstage01/02` | cat-stage-bias 0.1/0.2 | **0.2508 / 0.2413** | **Discard** |
 | #11 | bilinear transition | — | not coded → skipped |
-| #5 `on_s10r_T0.7` | eval `--score-temperature 0.7` | **0.267650** (=peak) | **Discard** (flat) |
-| #5 T∈{0.85,1.15,1.3} | eval T on frozen soft10r | — | **running** |
+| #5 T=0.7 / 0.85 | eval `--score-temperature` | **0.267650** (=peak) | **Discard** (Acc@1-invariant: scores÷T) |
+| #5 T=1.15 / 1.3 | same | — | **aborted** (noop for Acc@1) |
+
+### Leftovers exhausted
+
+Ordered leftover queue (#45→#47→#4/#6/#8/#9→#5; #11 skipped) all **Discard** or noop.  
+**Locked peak unchanged:** `on_rev_soft10r` Acc@1 **0.267650**.
 
 Earlier Discard (radiation / jump / return-gate / Δt-bins / cat-stage soft / focal / BPR-max / tsb-decay / …): Acc ≪ peak — do not restack as-is.
 

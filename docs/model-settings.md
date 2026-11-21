@@ -72,4 +72,4 @@ Tried on soft10r (= Base+WIN+peak) unless noted. Defaults are **off / 0**.
 
 Feature / overlay vocabulary (A/B/C/D/E, causal counts, routers): see [`candidate-context.md`](candidate-context.md), [`causal-counts.md`](causal-counts.md), [`router-modes.md`](router-modes.md).
 
-**Queued leftover flags still to score:** `--cat-stage-bias` (#9, training); eval `--score-temperature` (#5). Bilinear transition (#11) is **not implemented** — skip.
+**Leftover flags scored:** `#9 --cat-stage-bias` Discard; `#5 --score-temperature` Discard (÷T is Acc@1-invariant). `#11` bilinear not implemented — skipped. Queue exhausted at peak `on_rev_soft10r`.

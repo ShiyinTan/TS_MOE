@@ -33,7 +33,7 @@ Intent only. Flags → [`model-settings.md`](model-settings.md). Numbers → [`e
 | ep>1 (#47) | Longer Acc1-selected training | ep1 still best |
 | radiation / jump / return-gate | Mobility models beyond flat geo | Acc≤ or − vs peak |
 | spatial candidate filter (#10) | Shrink pool by gravity/coverage | Inflates Acc only when coverage unfair |
-| T / Platt / TTA / MC-dropout (#5/#34/#36/#46) | Free fusion on frozen logits | Flat or − Acc |
+| T / Platt / TTA / MC-dropout (#5/#34/#36/#46) | Free fusion on frozen logits | Flat or − Acc; plain `--score-temperature` ÷T **cannot** change Acc@1 (order-preserving) |
 | seed soup (#42) | Variance reduction without new bias | Only seed42 held peak |
 | KD / laplace (#41/#40) | Distill peak / geo-smooth embeddings | No Acc lift |
 | hist-hit / recency / session-gap | Finer revisit / tsb timing | Redundant with locked stack |
