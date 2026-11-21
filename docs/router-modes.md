@@ -57,4 +57,4 @@ Defaults `λ_prior=0.1`, `hybrid_lambda=0.1`. For a SURD-primary hybrid with a s
 
 Metrics (including **Acc@1**) go under `results/<run>/eval_*` as usual; checkpoints stay in `runs/`. Use a distinct `--out` per mode so result paths do not collide.
 
-See README §3.5 for copy-paste demo and Tokyo commands.
+Copy-paste Tokyo Acc recipes: [`runbook.md`](runbook.md). Install / CLI catalog: [`../README.md`](../README.md).

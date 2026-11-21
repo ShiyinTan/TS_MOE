@@ -70,6 +70,14 @@ Tried on soft10r (= Base+WIN+peak) unless noted. Defaults are **off / 0**.
 | Eval-only | `--score-temperature` · Platt / gamma calib · `--mc-dropout` · TTA |
 | Protocol | `--epochs` >1 · seed soup · fam-area-blend · adaptive neg |
 
-Feature / overlay vocabulary (A/B/C/D/E, causal counts, routers): see [`candidate-context.md`](candidate-context.md), [`causal-counts.md`](causal-counts.md), [`router-modes.md`](router-modes.md).
+Feature deep-dives (do not duplicate recipes here):
 
-**Leftover flags scored:** `#9 --cat-stage-bias` Discard; `#5 --score-temperature` Discard (÷T is Acc@1-invariant). `#11` bilinear not implemented — skipped. Queue exhausted at peak `on_rev_soft10r`.
+| Topic | Doc |
+| --- | --- |
+| Overlays A–E | [`candidate-context.md`](candidate-context.md) |
+| Causal counts / tsb / SURD gates | [`causal-counts.md`](causal-counts.md) |
+| Router modes | [`router-modes.md`](router-modes.md) |
+| Candidate pools | [`candidates.md`](candidates.md) |
+| T/L STHGCN features | [`sthgcn-tl-features.md`](sthgcn-tl-features.md) |
+
+**Leftover Acc queue exhausted** at peak `on_rev_soft10r` — outcomes in [`experiments.md`](experiments.md). `#5 --score-temperature` is Acc@1-invariant (scores÷T). `#11` bilinear not implemented.

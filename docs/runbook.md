@@ -70,19 +70,13 @@ python -m tsmoe train \
 
 ---
 
-## One leftover on soft10r (example)
+## One-factor ablations on soft10r
 
-Same flags as peak, change `--out` and add **one** Extra, e.g.:
+Same flags as peak; change `--out` and add **one** Extra flag. Leftover Acc queue is **exhausted** (see [`experiments.md`](experiments.md)); keep this pattern for future one-factor runs only.
 
 ```bash
-# #4 2-hop (0.3 or 0.5)
-... soft10r flags ... --out runs/tokyo/on_s10r_2hop03 --transition-2hop-bias 0.3
-
-# #8 hour-pop
-... --out runs/tokyo/on_s10r_hpop10 --hour-pop-score-bias 0.10
-
-# #45 cat MTL
-... --out runs/tokyo/on_s10r_cat01 --lambda-cat-aux 0.1
+# example Extra only — do not expect Acc lift from already-Discarded leftovers
+... soft10r flags ... --out runs/tokyo/my_abl --geo-score-power 1.5
 ```
 
 Pack free GPU memory; do not kill foreign jobs.

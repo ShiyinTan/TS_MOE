@@ -58,11 +58,11 @@ Optional **Acc@1** prior (default **0 = off**), independent of `--transition-att
 \text{score}_c \mathrel{+}= \lambda \cdot \log(1 + \text{count}(\text{last history POI} \to c))
 \]
 
-Needs causal counts on. Tokyo hillclimb WIN used `--transition-score-bias 2.0` with `dim 256`, `--lambda-bpr 0.25`, `--epochs 1`, `--checkpoint-metric acc1` on a last/last multi-source cache.
+Needs causal counts on. Locked Tokyo WIN / peak recipes (tsb=2.0, λ_bpr=**0.29**, …): [`runbook.md`](runbook.md) · [`model-settings.md`](model-settings.md).
 
 ## Extra score-level graph / feature priors (default **0 = off**)
 
-All are Acc@1 score additives on top of the model; **no re-prepare**. Defaults keep the TM-34 WIN path unchanged.
+All are Acc@1 score additives on top of the model; **no re-prepare**. Defaults are **0** (off) so Basic / untuned trains stay unchanged.
 
 | Flag | Formula (added to score) | Needs |
 | --- | --- | --- |
@@ -124,21 +124,7 @@ python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_gate \
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_rel \
   --transition-attn rel_key --epochs 1 --dim 16 --heads 2 --layers 1
 
-# Score-level last→cand transition prior (Acc@1 hillclimb)
-python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_last \
-  --out runs/tokyo/hc_str_tsb20 --dim 256 --heads 8 \
-  --lambda-bpr 0.25 --transition-score-bias 2.0 \
-  --epochs 1 --checkpoint-metric acc1 --device cuda
-
-# LOCKED WIN (TM-34): beats STHGCN Acc@1 + R@1/5/10/20 on known_only
-# Acc 0.260274 · R@5 0.441517 · R@10 0.519494 · R@20 0.586934
-python -m tsmoe train --cache runs/tokyo/cache_abl_tgt_last \
-  --out runs/tokyo/hc_sg_Atime_bpr029_ssb026 --seed 42 --device cuda \
-  --router-mode hard_prior --dim 256 --heads 8 \
-  --lambda-bpr 0.29 --transition-score-bias 2.0 \
-  --surd-bias-gate unique_p --tsb-gate-mode residual --surd-score-bias 0.26 \
-  --candidate-context on --candidate-context-time last_slot \
-  --epochs 1 --checkpoint-metric acc1
+# Locked WIN / Acc peak recipes: see docs/runbook.md (do not duplicate here).
 
 # Ablate the whole module (shuffled minibatches restored)
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_nocounts \

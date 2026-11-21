@@ -17,9 +17,8 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 | [`docs/runbook.md`](docs/runbook.md) | **Runnable commands** only (`python -m tsmoe …`) |
 | *This README* | Install, data, CLI catalog, layout |
 
-**Feature deep-dives** (unchanged): [`docs/candidates.md`](docs/candidates.md) · [`docs/router-modes.md`](docs/router-modes.md) · [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md) · [`docs/causal-counts.md`](docs/causal-counts.md) · [`docs/candidate-context.md`](docs/candidate-context.md).
-
-Stubs redirecting old paths: `docs/ablation.md` · `docs/results.md` · `docs/climb-delta-*.md` → topic docs above.
+**Feature deep-dives** (one file each): [`docs/candidates.md`](docs/candidates.md) · [`docs/router-modes.md`](docs/router-modes.md) · [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md) · [`docs/causal-counts.md`](docs/causal-counts.md) · [`docs/candidate-context.md`](docs/candidate-context.md).  
+Log templates: [`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`.csv`](docs/ablation_log.template.csv).
 
 ---
 

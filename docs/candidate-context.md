@@ -2,7 +2,7 @@
 
 Runtime overlays on top of the default Acc@1 path. **All default `off`** — leaving them unset (or `off`) keeps today’s behavior. New signals enter **base / shared query / expert attn**, never `hard_prior` router logits.
 
-See also: [`ablation.md`](ablation.md) (overlay command table) · [`causal-counts.md`](causal-counts.md) · plan: Agent Store `docs/candidate-context-plan.md`.
+See also: [`causal-counts.md`](causal-counts.md) · Acc recipes [`runbook.md`](runbook.md) · results [`experiments.md`](experiments.md).
 
 ## Defaults matrix
 
@@ -71,4 +71,14 @@ Default train (unchanged Acc@1 path):
 python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_off --device cuda
 ```
 
-Add one factor at a time — see the overlay table in [`ablation.md`](ablation.md) §3 / §5.7.
+Add **one** overlay flag at a time (same `--cache` / seed). Locked Acc recipes: [`runbook.md`](runbook.md).
+
+| setting | add flags |
+| --- | --- |
+| A cat+geo | `--candidate-context on` |
+| A + time | `--candidate-context on --candidate-context-time last_slot` |
+| B session | `--session-summary on` |
+| C user-pref | `--user-pref on` |
+| D PMI | `--transition-pmi on` |
+| E1 hybrid | `--expert-cross-attn hybrid` |
+| user id emb | `--user-id-emb on` |
