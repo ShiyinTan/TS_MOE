@@ -151,6 +151,10 @@ class ModelConfig:
     tsb_dt_edges: tuple = ()
     # Category-stage Acc@1 prior: λ·log1p(last_cat→cand_cat); soft (no hard filter).
     cat_stage_bias: float = 0.
+    # 2-hop transition Acc@1 prior (#4): λ·log1p((A^2)_{last,cand}); 0 = off.
+    transition_2hop_bias: float = 0.
+    # Hour×POI popularity Acc@1 prior (#8): λ·log1p(global_poi_hour[cand, hour]); 0 = off.
+    hour_pop_score_bias: float = 0.
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
     tsb_decay_hours: float = 0.
     # PRME-style session-gap gate: keep full tsb only when Δt(last→now) ≤ τ hours; else 0.
@@ -259,6 +263,10 @@ class ModelConfig:
             raise ValueError("tsb_dt_edges must be sorted ascending")
         if self.cat_stage_bias < 0:
             raise ValueError("cat_stage_bias must be nonnegative")
+        if self.transition_2hop_bias < 0:
+            raise ValueError("transition_2hop_bias must be nonnegative")
+        if self.hour_pop_score_bias < 0:
+            raise ValueError("hour_pop_score_bias must be nonnegative")
         if self.return_gate == "on":
             if self.revisit_score_bias <= 0:
                 raise ValueError("return_gate on requires --revisit-score-bias > 0")
@@ -897,6 +905,17 @@ class TSMoE(nn.Module):
                 tsb_term = tsb_term * (gap <= gap_tau).to(score.dtype)[:, None]
             tsb_term = apply_surd_gate(tsb_term, cand_gate, gate_mode)
             score = score + tsb_term
+        # 2-hop transition prior (#4): λ·log1p((A²)_{last,cand}) from train table.
+        th2 = float(getattr(self.cfg, "transition_2hop_bias", 0.0) or 0.0)
+        if th2 > 0 and count_ctx is not None and "transition_2hop_log1p" in count_ctx:
+            hop2 = count_ctx["transition_2hop_log1p"][:, :rows.shape[1]].to(score.device)
+            hop2 = apply_surd_gate(hop2, cand_gate, gate_mode)
+            score = score + th2 * hop2.clamp_min(0)
+        # Hour×POI popularity (#8): λ·log1p(global visits of cand at tip hour).
+        hpb = float(getattr(self.cfg, "hour_pop_score_bias", 0.0) or 0.0)
+        if hpb > 0 and count_ctx is not None and "hour_pop_log1p" in count_ctx:
+            hp = count_ctx["hour_pop_log1p"][:, :rows.shape[1]].to(score.device)
+            score = score + hpb * hp.clamp_min(0)
         # Hypergraph prior: last category → candidate POI (cat_transition).
         csb = float(getattr(self.cfg, "category_score_bias", 0.0) or 0.0)
         if (csb > 0 and count_ctx is not None and self.cfg.causal_counts

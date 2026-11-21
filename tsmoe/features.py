@@ -272,7 +272,8 @@ def slice_side_ctx(ctx, start, end):
             continue
         if key in ("cand_cat_rows", "delta_geo", "cand_slot_feat",
                    "cand_poi_feat", "poi_transition", "cat_transition",
-                   "poi_transition_dt", "cat_stage_count"):
+                   "poi_transition_dt", "cat_stage_count",
+                   "transition_2hop_log1p", "hour_pop_log1p"):
             out[key] = value[:, start:end]
         else:
             out[key] = value

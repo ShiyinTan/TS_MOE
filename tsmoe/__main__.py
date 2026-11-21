@@ -346,6 +346,14 @@ def main():
              "(default 0 = off). Needs --candidate-context on + causal counts. "
              "Soft only (no hard top-C filter)")
     t.add_argument(
+        "--transition-2hop-bias", type=float, default=0.0,
+        help="add λ·log1p((A²)_{last,cand}) 2-hop transition prior (#4); "
+             "A from train consecutive hops (default 0 = off). Try 0.3–0.5")
+    t.add_argument(
+        "--hour-pop-score-bias", type=float, default=0.0,
+        help="add λ·log1p(global_poi_hour[cand, tip_hour]) (#8); "
+             "needs causal counts (default 0 = off). Try 0.1–0.2")
+    t.add_argument(
         "--tsb-decay-hours", type=float, default=0.0,
         help="if >0, multiply --transition-score-bias by exp(−Δt/τ) with Δt = "
              "hours from last history tip to target (Hawkes-lite; 0 = off)")

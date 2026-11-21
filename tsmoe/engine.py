@@ -224,6 +224,8 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("tsb_history_decay", 0.5)
     cfg.setdefault("tsb_dt_edges", ())
     cfg.setdefault("cat_stage_bias", 0.0)
+    cfg.setdefault("transition_2hop_bias", 0.0)
+    cfg.setdefault("hour_pop_score_bias", 0.0)
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("tsb_session_gap_hours", 0.0)
     cfg.setdefault("visit_bins", DEFAULT_VISIT_BINS)
@@ -332,6 +334,83 @@ def attach_cat_stage_counts(ctx, tables, data, indices):
                 out[bi, j] = tables.cat_cat_count(last_c, cc)
     merged = dict(ctx)
     merged["cat_stage_count"] = out
+    return merged
+
+
+def build_transition_a2_log1p(train_data, n_pois):
+    """Train-only dense ``log1p(A²)`` for 2-hop transition bias (#4)."""
+    n = int(n_pois)
+    A = torch.zeros(n, n, dtype=torch.float32)
+    trail = train_data["trail"]
+    poi = train_data["poi_token"]
+    for i in range(len(poi) - 1):
+        if int(trail[i]) != int(trail[i + 1]):
+            continue
+        a = int(poi[i]) - 2
+        b = int(poi[i + 1]) - 2
+        if 0 <= a < n and 0 <= b < n:
+            A[a, b] += 1.0
+    # A² via matmul; log1p for score-scale stability.
+    return torch.log1p(A @ A)
+
+
+def attach_transition_2hop(ctx, a2_log1p, data, indices, candidate_rows_list):
+    """Gather ``log1p(A²)[last, cand]`` → [B,M] (#4)."""
+    from .counts import history_catalog_rows
+    if a2_log1p is None:
+        return ctx
+    idxs = indices.tolist() if torch.is_tensor(indices) else list(indices)
+    width = max((len(r) for r in candidate_rows_list), default=0)
+    out = torch.zeros(len(idxs), width, dtype=torch.float32)
+    n = a2_log1p.shape[0]
+    for bi, sample_index in enumerate(idxs):
+        hp, _hc = history_catalog_rows(data, sample_index)
+        if not hp:
+            continue
+        last = int(hp[-1])
+        if not (0 <= last < n):
+            continue
+        rows = candidate_rows_list[bi]
+        if not isinstance(rows, list):
+            rows = list(rows) if not torch.is_tensor(rows) else rows.tolist()
+        for j, r in enumerate(rows):
+            rr = int(r)
+            if 0 <= rr < n:
+                out[bi, j] = float(a2_log1p[last, rr])
+    merged = {} if ctx is None else dict(ctx)
+    merged["transition_2hop_log1p"] = out
+    return merged
+
+
+def attach_hour_pop(ctx, tables, data, indices, candidate_rows_list):
+    """Gather ``log1p(global_poi_hour[cand, tip_hour])`` → [B,M] (#8)."""
+    from .features import us_to_hour_weekday
+    if tables is None:
+        return ctx
+    idxs = indices.tolist() if torch.is_tensor(indices) else list(indices)
+    width = max((len(r) for r in candidate_rows_list), default=0)
+    out = torch.zeros(len(idxs), width, dtype=torch.float32)
+    gph = tables.global_poi_hour  # [n_pois, 24]
+    n = int(gph.shape[0])
+    for bi, sample_index in enumerate(idxs):
+        tip = None
+        start = int(data["start"][sample_index])
+        end = int(data["end"][sample_index])
+        if end > start:
+            tip = end - 1
+        if tip is None:
+            continue
+        hour, _wd = us_to_hour_weekday(int(data["us"][tip]))
+        h = int(hour) % 24
+        rows = candidate_rows_list[bi]
+        if not isinstance(rows, list):
+            rows = list(rows) if not torch.is_tensor(rows) else rows.tolist()
+        for j, r in enumerate(rows):
+            rr = int(r)
+            if 0 <= rr < n:
+                out[bi, j] = float(torch.log1p(gph[rr, h].clamp_min(0)))
+    merged = {} if ctx is None else dict(ctx)
+    merged["hour_pop_log1p"] = out
     return merged
 
 
@@ -446,6 +525,12 @@ def gather_features_causal(
         ctx = attach_target_gap_hours(ctx, data, indices)
     if float(getattr(cfg, "cat_stage_bias", 0.0) or 0.0) > 0:
         ctx = attach_cat_stage_counts(ctx, count_tables, data, indices)
+    a2 = getattr(cfg, "_transition_a2_log1p", None)
+    if float(getattr(cfg, "transition_2hop_bias", 0.0) or 0.0) > 0 and a2 is not None:
+        ctx = attach_transition_2hop(ctx, a2, data, indices, candidate_rows_list)
+    if (float(getattr(cfg, "hour_pop_score_bias", 0.0) or 0.0) > 0
+            and count_tables is not None):
+        ctx = attach_hour_pop(ctx, count_tables, data, indices, candidate_rows_list)
     if update and cfg.causal_counts and count_tables is not None:
         for sample_index in indices.tolist():
             count_tables.update_sample(data, sample_index)
@@ -1535,8 +1620,14 @@ def train(args):
     tsb_history_decay = float(getattr(args, "tsb_history_decay", 0.5) or 0.5)
     tsb_dt_edges = tuple(parse_dt_bin_edges(getattr(args, "transition_dt_bins", "off")))
     cat_stage_bias = float(getattr(args, "cat_stage_bias", 0.0) or 0.0)
+    transition_2hop_bias = float(getattr(args, "transition_2hop_bias", 0.0) or 0.0)
+    hour_pop_score_bias = float(getattr(args, "hour_pop_score_bias", 0.0) or 0.0)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     tsb_session_gap_hours = float(getattr(args, "tsb_session_gap_hours", 0.0) or 0.0)
+    if transition_2hop_bias < 0:
+        raise ValueError("--transition-2hop-bias must be nonnegative")
+    if hour_pop_score_bias < 0:
+        raise ValueError("--hour-pop-score-bias must be nonnegative")
     if geo_score_power <= 0:
         raise ValueError("--geo-score-power must be positive")
     if gauss_geo_bias < 0:
@@ -1772,6 +1863,8 @@ def train(args):
                       tsb_history_decay=tsb_history_decay,
                       tsb_dt_edges=tsb_dt_edges,
                       cat_stage_bias=cat_stage_bias,
+                      transition_2hop_bias=transition_2hop_bias,
+                      hour_pop_score_bias=hour_pop_score_bias,
                       tsb_decay_hours=tsb_decay_hours,
                       tsb_session_gap_hours=tsb_session_gap_hours,
                       visit_bins=visit_bins,
@@ -1791,6 +1884,12 @@ def train(args):
     rng = random.Random(args.seed)
     batches = torch.Generator().manual_seed(args.seed)
     model = cache.model(cfg).to(device)
+    if transition_2hop_bias > 0:
+        print(f"building transition A² log1p (n_pois={len(cache.pois)}) …", flush=True)
+        cfg._transition_a2_log1p = build_transition_a2_log1p(data, len(cache.pois))
+        print(f"transition_2hop_bias={transition_2hop_bias}", flush=True)
+    if hour_pop_score_bias > 0:
+        print(f"hour_pop_score_bias={hour_pop_score_bias}", flush=True)
     ema_teacher = None
     if use_ema_soft:
         ema_teacher = copy.deepcopy(model)
@@ -1906,6 +2005,8 @@ def train(args):
     settings["tsb_history_decay"] = cfg.tsb_history_decay
     settings["tsb_dt_edges"] = list(cfg.tsb_dt_edges)
     settings["cat_stage_bias"] = cfg.cat_stage_bias
+    settings["transition_2hop_bias"] = cfg.transition_2hop_bias
+    settings["hour_pop_score_bias"] = cfg.hour_pop_score_bias
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["tsb_session_gap_hours"] = cfg.tsb_session_gap_hours
     settings["surd_bias_gate"] = cfg.surd_bias_gate
