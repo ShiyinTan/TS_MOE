@@ -11,13 +11,14 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 | Doc | Topic |
 | --- | --- |
 | [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md) | **Model baseline** — Basic design & §19 starters |
-| [`docs/model-settings.md`](docs/model-settings.md) | **Added settings** vs Basic (WIN + Acc climb knobs) |
+| [`docs/model-settings.md`](docs/model-settings.md) | **Added settings** vs Basic (router · WIN · Acc climb) |
 | [`docs/experiments.md`](docs/experiments.md) | **Experiment settings + Acc/R** · Keep/Discard |
 | [`docs/design-notes.md`](docs/design-notes.md) | **Why** — design intent of climb levers |
 | [`docs/runbook.md`](docs/runbook.md) | **Runnable commands** only (`python -m tsmoe …`) |
 | *This README* | Install, data, CLI catalog, layout |
 
-**Feature deep-dives** (one file each): [`docs/candidates.md`](docs/candidates.md) · [`docs/router-modes.md`](docs/router-modes.md) · [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md) · [`docs/causal-counts.md`](docs/causal-counts.md) · [`docs/candidate-context.md`](docs/candidate-context.md).  
+**Feature deep-dives:** [`docs/candidates.md`](docs/candidates.md) (pools + overlays A–E) · [`docs/causal-counts.md`](docs/causal-counts.md).  
+Router modes → [`docs/model-settings.md`](docs/model-settings.md). T/L STHGCN → Basic §4.3.  
 Log templates: [`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`.csv`](docs/ablation_log.template.csv).
 
 ---
@@ -340,7 +341,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 
 ### 3.6 Router 模式（`--router-mode`）
 
-三种专家路由；**默认 `hard_prior`**。模式写入 checkpoint 的 `config`，`evaluate` / `explain` / `recommend` 自动与训练一致（无需再传 flag）。详见 [`docs/router-modes.md`](docs/router-modes.md)。
+三种专家路由；**默认 `hard_prior`**。模式写入 checkpoint 的 `config`，`evaluate` / `explain` / `recommend` 自动与训练一致（无需再传 flag）。公式与 Alternate 说明：[`docs/model-settings.md`](docs/model-settings.md) §Router。
 
 | 模式 | 路由 π | 序列是否进 Router |
 | --- | --- | --- |
@@ -400,7 +401,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache \
 
 ### 3.7 STHGCN T/L 特征（须重 prepare）
 
-当前 `main` 的 T/L **输入特征**已与 Massive-STEPS 基线 **STHGCN** 对齐（T=48、L=18；`feature_method=sthgcn_tl_features_v1`）。旧 `basic_fixed_features_v1` 缓存**不兼容**——须 **重新 prepare**（同一 `--out` 默认覆盖；无需先 `rm -rf`），再 train。详见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)。
+当前 `main` 的 T/L **输入特征**已与 Massive-STEPS 基线 **STHGCN** 对齐（T=48、L=18；`feature_method=sthgcn_tl_features_v1`）。旧 `basic_fixed_features_v1` 缓存**不兼容**——须 **重新 prepare**（同一 `--out` 默认覆盖；无需先 `rm -rf`），再 train。设计与维数布局：Basic [`§4.3`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。
 
 ```bash
 conda activate tsmoe
@@ -475,7 +476,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_nocounts \
 
 ### 3.8a 候选上下文 / 会话 / 偏好 / 专家内交叉注意力（默认 off）
 
-运行时 overlays（**无需 re-prepare**；**默认全部 off**，不改今日 Acc@1 路径）。新信号进 base / 共享 query / 专家 attn，**不进** `hard_prior`。说明与 defaults 矩阵：[`docs/candidate-context.md`](docs/candidate-context.md)；WIN/peak 配方见 [`docs/runbook.md`](docs/runbook.md)。
+运行时 overlays（**无需 re-prepare**；**默认全部 off**，不改今日 Acc@1 路径）。新信号进 base / 共享 query / 专家 attn，**不进** `hard_prior`。说明与 defaults 矩阵：[`docs/candidates.md`](docs/candidates.md) §Overlays；WIN/peak 配方见 [`docs/runbook.md`](docs/runbook.md)。
 
 | Flag | 默认 | 含义 |
 | --- | --- | --- |
@@ -571,7 +572,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 | `train --no-surd` | 关闭统计先验 / 偏置与两项 SURD 监督 |
 | `train --causal-counts` / `--no-causal-counts` | 因果在线计数 + transition 交叉注意力（**默认 on**；见 §3.8） |
 | `train --transition-attn` | `bias`（默认）/ `gate` / `rel_key` |
-| `train --candidate-context` 等 overlays | **默认 off**；见 §3.8a / [`docs/candidate-context.md`](docs/candidate-context.md) |
+| `train --candidate-context` 等 overlays | **默认 off**；见 §3.8a / [`docs/candidates.md`](docs/candidates.md) §Overlays |
 | `train --transition-lambda` | bias 项尺度，默认 `1.0` |
 | `train --visit-bins` | T/L 用户累计访问等频分箱数，默认 `10` |
 | `train --eval-test-every-epoch` / `--no-eval-test-every-epoch` | 每 epoch 跑 test 并写 `results/.../eval_test/epoch_*.json`（**默认 on**） |
@@ -620,15 +621,12 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 TS_MOE/
   environment.yml
   requirements.txt
-  docs/model-settings.md      # Added settings vs Basic
+  docs/model-settings.md      # Added settings vs Basic (+ router modes)
   docs/experiments.md         # Acc/R · Keep/Discard · results layout
   docs/design-notes.md        # why / design intent
   docs/runbook.md             # runnable python -m tsmoe commands
-  docs/candidates.md          # 多源候选、抽样、回退、train/eval 一致
-  docs/router-modes.md        # --router-mode hard_prior / surd_mlp / hybrid
-  docs/sthgcn-tl-features.md  # T/L ↔ STHGCN Φ(Δt)/Φ(Δs) 对齐
+  docs/candidates.md          # pools + overlays A–E
   docs/causal-counts.md       # 因果在线计数 + --transition-attn
-  docs/candidate-context.md   # overlays A/B/C/D/E（默认 off）
   docs/ablation_log.template.md  # 结果表模板（可复制到 results/）
   docs/ablation_log.template.csv
   tsmoe/                      # 包；入口 python -m tsmoe
@@ -645,16 +643,14 @@ TS_MOE/
 | --- | --- |
 | `environment.yml` | Conda 骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124） |
 | `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
-| `docs/model-settings.md` | Added knobs vs Basic_Updated |
+| `docs/model-settings.md` | Added knobs vs Basic_Updated · router modes |
 | `docs/experiments.md` | Acc/R tables · Keep/Discard · results layout |
 | `docs/design-notes.md` | Design intent of climb levers |
 | `docs/runbook.md` | Runnable train/eval commands |
-| `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去 + 随机负例；GT 必入池） |
-| `docs/router-modes.md` | `--router-mode`：hard_prior / surd_mlp / hybrid |
-| `docs/sthgcn-tl-features.md` | T/L 与 STHGCN 对齐；换 schema 须重 prepare |
+| `docs/candidates.md` | 多源候选池 + overlays A–E（默认 off） |
 | `docs/causal-counts.md` | 因果在线计数、等频分箱、`--transition-attn` |
-| `docs/candidate-context.md` | 候选上下文 / 会话 / 用户偏好 / PMI / 专家内交叉注意力 |
 | `docs/ablation_log.template.md` / `.csv` | 结果登记模板（运行时自动写 `results/ablation_log.*`） |
+| Basic §4.3 | T/L STHGCN 特征 schema（须重 prepare） |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
 | `scripts/verify_city_checkins.py` | 核对 prepare 所需文件名与列 |
@@ -709,7 +705,7 @@ python -m tsmoe explain --cache runs/tokyo/cache --checkpoint runs/tokyo/model/b
 4. 在线：四源 Transformer 编码历史（T/L MLP→`dim`）；**Router 默认 `hard_prior`**（仅候选 U/S SURD → π，无序列）；可选 `surd_mlp` / `hybrid`；Top-K 稀疏专家；`base + 门控 MoE 残差`。
 5. 候选：prepare 写入的多源池（邻域 + 热门 + 用户常去 + 随机负例，或 `full`）；目录内 GT 必入池；train 可抽样，evaluate 用完整池。
 6. **因果在线计数**（默认 on）：按时间戳训练；用户/全局访问与转移表先读后写；POI/C 嵌入加计数 MLP；T/L 加等频访问分箱；P/C 交叉注意力默认 `bias` 注入转移（可选 `gate` / `rel_key`）。见 [`docs/causal-counts.md`](docs/causal-counts.md) 与 §3.8。
-7. **Overlays（默认 off）**：候选上下文（cat+Δgeo±时段）、会话摘要、用户偏好、转移 PMI、专家内交叉注意力（E1 hybrid / E2 full / E3 sparse）；均不进 `hard_prior`。见 [`docs/candidate-context.md`](docs/candidate-context.md) 与 §3.8a。
+7. **Overlays（默认 off）**：候选上下文（cat+Δgeo±时段）、会话摘要、用户偏好、转移 PMI、专家内交叉注意力（E1 hybrid / E2 full / E3 sparse）；均不进 `hard_prior`。见 [`docs/candidates.md`](docs/candidates.md) §Overlays 与 §3.8a。
 
 缓存 `manifest.json` 记录字段约定、`feature_method=sthgcn_tl_features_v1`、目录、SURD `final` 表、候选构造与文件摘要。旧 `basic_fixed_features_v1` 或含 fold SURD 的缓存不兼容，须重新 prepare（默认覆盖同路径旧缓存）。
 
