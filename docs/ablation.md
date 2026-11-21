@@ -154,16 +154,20 @@ python -m tsmoe train \
 
 Judge **`known_only`** Acc@1 / Recall@k (not `all_targets`). Flags default-off; see [`causal-counts.md`](causal-counts.md).
 
-### 3.3 Acc climb peak — deltas vs WIN (not a full flag dump)
+### 3.3 Acc climb peak — deltas vs Basic_Updated (not a full flag dump)
 
-**Peak:** `on_rev_soft10r` · known_only Acc@1 **0.267650** (+0.007376 vs WIN).
+**Authoritative Base:** repo-root [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](../TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md) (§19 starters: dim128 / heads4 / Top-K4 / λ_prior0.1 / λ_SURD0.05 / λ_balance0.001 / AdamW / N_max50 / hash64 / clusters4).  
+WIN (§3.2) is an **Added** layer on that Base, not the Base itself.
 
-| | |
+**Peak:** `on_rev_soft10r` · known_only Acc@1 **0.267650**.
+
+| Layer | Contents |
 | --- | --- |
-| **Base** | LOCKED WIN §3.2 (`hc_sg_Atime_bpr029_ssb026`) |
-| **Added** | `--transition-attn gate` · `--geo-score-bias 0.15` · `--revisit-score-bias 0.10` · `--soft-target-beta 0.10 --soft-target-prior revisit` |
+| **Base** | Basic_Updated §19 (+ code defaults that implement it) |
+| **Added (WIN)** | dim256/heads8 · λ_bpr0.29 · tsb2.0 · unique_p residual ssb0.26 · cand-context last_slot · ep1/acc1 |
+| **Added (peak)** | `transition_attn gate` · geo0.15 · revisit0.10 · soft β0.10 prior=revisit |
 
-Full Keep/Discard delta table: [`climb-delta-from-win.md`](climb-delta-from-win.md) (also mirrored under `results/tokyo/` on the GPU box).
+Full Base / Added / Keep–Discard table (all climb settings tried, not only the peak stack): [`climb-delta-from-basic.md`](climb-delta-from-basic.md) (mirrored on the GPU box as `results/tokyo/climb_delta_from_basic.md`).
 
 ---
 

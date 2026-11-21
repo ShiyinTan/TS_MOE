@@ -1884,12 +1884,6 @@ def train(args):
     rng = random.Random(args.seed)
     batches = torch.Generator().manual_seed(args.seed)
     model = cache.model(cfg).to(device)
-    if transition_2hop_bias > 0:
-        print(f"building transition A² log1p (n_pois={len(cache.pois)}) …", flush=True)
-        cfg._transition_a2_log1p = build_transition_a2_log1p(data, len(cache.pois))
-        print(f"transition_2hop_bias={transition_2hop_bias}", flush=True)
-    if hour_pop_score_bias > 0:
-        print(f"hour_pop_score_bias={hour_pop_score_bias}", flush=True)
     ema_teacher = None
     if use_ema_soft:
         ema_teacher = copy.deepcopy(model)
@@ -1961,6 +1955,12 @@ def train(args):
         raise RuntimeError(f"model landed on {param_device}, expected {device}")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     data, val = cache.split("train"), cache.split("validation")
+    if transition_2hop_bias > 0:
+        print(f"building transition A² log1p (n_pois={len(cache.pois)}) …", flush=True)
+        cfg._transition_a2_log1p = build_transition_a2_log1p(data, len(cache.pois))
+        print(f"transition_2hop_bias={transition_2hop_bias}", flush=True)
+    if hour_pop_score_bias > 0:
+        print(f"hour_pop_score_bias={hour_pop_score_bias}", flush=True)
     # Shared train-all SURD table for train / val / test (no fold-specific priors).
     final = cache.table("final", device)
     out = Path(args.out)
