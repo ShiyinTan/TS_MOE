@@ -265,6 +265,7 @@ _COUNT_WEIGHT_PREFIXES = (
     "user_cat_proj.", "user_hour_proj.", "user_pref_mlp.", "user_pref_to_full.",
     "user_emb.", "user_id_to_full.",
     "expert_attn.", "expert_query_proj.",
+    "return_gate_mlp.", "cat_aux_head.",
 )
 
 
@@ -1655,6 +1656,9 @@ def train(args):
         raise ValueError("--poi-geo-laplace must be nonnegative")
     if poi_geo_laplace > 0 and geo_knn < 1:
         raise ValueError("--geo-knn must be >= 1 when --poi-geo-laplace > 0")
+    lambda_cat_aux = float(getattr(args, "lambda_cat_aux", 0.0) or 0.0)
+    if lambda_cat_aux < 0:
+        raise ValueError("--lambda-cat-aux must be nonnegative")
     neg_sample = str(getattr(args, "neg_sample", "uniform") or "uniform").lower()
     if neg_sample not in ("uniform", "adaptive_mix"):
         raise ValueError("--neg-sample must be uniform|adaptive_mix")
@@ -1820,6 +1824,8 @@ def train(args):
         geo_edge_w = geo_edge_w.to(device)
         print(f"poi_geo_laplace={poi_geo_laplace} geo_knn={geo_knn} "
               f"edges={int(geo_edge_src.numel())}", flush=True)
+    if lambda_cat_aux > 0:
+        print(f"lambda_cat_aux={lambda_cat_aux} (next-cat MTL #45)", flush=True)
     param_device = next(model.parameters()).device
     print(f"model_param_device={param_device} router_mode={cfg.router_mode} "
           f"hybrid_lambda={cfg.hybrid_lambda} lambda_prior={cfg.lambda_prior} "
@@ -2113,6 +2119,17 @@ def train(args):
                 poi_emb = model.projections["P"].weight[2:2 + len(cache.pois)]
                 loss = loss + poi_geo_laplace_loss(
                     poi_emb, geo_edge_src, geo_edge_dst, geo_edge_w, poi_geo_laplace)
+            lambda_cat_aux = float(getattr(args, "lambda_cat_aux", 0.0) or 0.0)
+            if lambda_cat_aux > 0 and "cat_aux_logits" in result:
+                # Next-event category catalog row (token−2); skip pad/unk.
+                cat_labels = (data["cat_token"][data["end"][idx]] - 2).to(device)
+                valid_cat = cat_labels >= 0
+                if bool(valid_cat.any()):
+                    n_cat = int(model.n_categories)
+                    cat_y = cat_labels[valid_cat].clamp(0, n_cat - 1)
+                    cat_loss = torch.nn.functional.cross_entropy(
+                        result["cat_aux_logits"][valid_cat], cat_y)
+                    loss = loss + lambda_cat_aux * cat_loss
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip, error_if_nonfinite=True)

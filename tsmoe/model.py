@@ -527,6 +527,8 @@ class TSMoE(nn.Module):
         # Return-vs-explore gate: π from last P emb + user-visit richness scalar.
         # Always constructed for checkpoint stability; unused when return_gate=off.
         self.return_gate_mlp = mlp(d + 1, max(d // 2, 8), 1, config.dropout)
+        # Next-category MTL aux head (#45): CE on tip P/C encoding → cat; inference unused.
+        self.cat_aux_head = nn.Linear(d, n_categories)
 
     def _flag_on(self, name):
         return getattr(self.cfg, name) == "on"
@@ -1121,6 +1123,15 @@ class TSMoE(nn.Module):
                           moe_bias=gate * self.moe_head.bias)
         return result
 
+    def cat_aux_logits(self, encoded, valid):
+        """Next-category logits from last-tip mean of P/C encodings (#45)."""
+        lengths = valid.long().sum(-1).clamp_min(1)
+        tip = (lengths - 1).view(-1, 1, 1)
+        d = encoded["P"].size(-1)
+        zp = encoded["P"].gather(1, tip.expand(-1, 1, d)).squeeze(1)
+        zc = encoded["C"].gather(1, tip.expand(-1, 1, d)).squeeze(1)
+        return self.cat_aux_head(0.5 * (zp + zc))
+
     def forward(self, history, valid, rows, prior, confidence, **kwargs):
         count_ctx = kwargs.pop("count_ctx", None)
         surd_specific = kwargs.pop("surd_specific", None)
@@ -1128,8 +1139,11 @@ class TSMoE(nn.Module):
         if count_ctx is not None and "P" in history:
             count_ctx = dict(count_ctx)
             count_ctx["hist_poi_rows"] = history["P"].to(valid.device) - 2
-        return self.score(self.encode(history, valid, count_ctx), valid, rows, prior, confidence,
-                          count_ctx=count_ctx, surd_specific=surd_specific, **kwargs)
+        encoded = self.encode(history, valid, count_ctx)
+        result = self.score(encoded, valid, rows, prior, confidence,
+                            count_ctx=count_ctx, surd_specific=surd_specific, **kwargs)
+        result["cat_aux_logits"] = self.cat_aux_logits(encoded, valid)
+        return result
 
 
 def soft_ema_targets(labels, mask, teacher_scores, beta):

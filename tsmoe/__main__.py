@@ -167,6 +167,10 @@ def main():
         "--geo-knn", type=int, default=8,
         help="kNN neighbors per POI for --poi-geo-laplace (default 8)")
     t.add_argument(
+        "--lambda-cat-aux", type=float, default=0.,
+        help="η for next-category MTL aux CE on shared tip encoding (#45); "
+             "0 = off. Try 0.1–0.3 on soft10r; inference still POI-only")
+    t.add_argument(
         "--router-mode", choices=("hard_prior", "surd_mlp", "hybrid"), default="hard_prior",
         help="expert routing: hard_prior (default) = π from candidate U/S SURD "
              "mass only (no sequence in router); surd_mlp = softmax(MLP(SURD)/T); "
