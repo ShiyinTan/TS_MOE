@@ -45,10 +45,10 @@ Extra = only the lever under test on the peak stack.
 | #47 ep2/ep3 | epochs=2/3 | ep1=peak; later↓ | Discard |
 | #6 `on_s10r_gp15/20` | geo-power 1.5/2.0 | 0.2634 / 0.2561 | Discard |
 | #8 `on_s10r_hpop10/15` | hour-pop 0.10/0.15 | **0.2518 / 0.2624** | **Discard** |
-| #4 `on_s10r_2hop03/05` | transition-2hop 0.3/0.5 | — | **running** (A2 frozen-cfg fix) |
-| #9 | mild cat-stage-bias | — | queued |
-| #11 | bilinear transition | — | queued |
-| #5 | eval T / Platt on frozen peak | — | queued |
+| #4 `on_s10r_2hop03/05` | transition-2hop 0.3/0.5 | **0.2540 / 0.2466** | **Discard** |
+| #9 `on_s10r_cstage01/02` | cat-stage-bias 0.1/0.2 | — | **training** |
+| #11 | bilinear transition | — | not coded yet → skip to #5 |
+| #5 | eval T / Platt on frozen peak | — | queued after #9 |
 
 Earlier Discard (radiation / jump / return-gate / Δt-bins / cat-stage soft / focal / BPR-max / tsb-decay / …): Acc ≪ peak — do not restack as-is.
 

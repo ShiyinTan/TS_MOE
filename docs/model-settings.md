@@ -71,3 +71,5 @@ Tried on soft10r (= Base+WIN+peak) unless noted. Defaults are **off / 0**.
 | Protocol | `--epochs` >1 · seed soup · fam-area-blend · adaptive neg |
 
 Feature / overlay vocabulary (A/B/C/D/E, causal counts, routers): see [`candidate-context.md`](candidate-context.md), [`causal-counts.md`](causal-counts.md), [`router-modes.md`](router-modes.md).
+
+**Queued leftover flags still to score:** `--cat-stage-bias` (#9, training); eval `--score-temperature` (#5). Bilinear transition (#11) is **not implemented** — skip.
