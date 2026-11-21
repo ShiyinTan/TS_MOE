@@ -154,6 +154,17 @@ python -m tsmoe train \
 
 Judge **`known_only`** Acc@1 / Recall@k (not `all_targets`). Flags default-off; see [`causal-counts.md`](causal-counts.md).
 
+### 3.3 Acc climb peak — deltas vs WIN (not a full flag dump)
+
+**Peak:** `on_rev_soft10r` · known_only Acc@1 **0.267650** (+0.007376 vs WIN).
+
+| | |
+| --- | --- |
+| **Base** | LOCKED WIN §3.2 (`hc_sg_Atime_bpr029_ssb026`) |
+| **Added** | `--transition-attn gate` · `--geo-score-bias 0.15` · `--revisit-score-bias 0.10` · `--soft-target-beta 0.10 --soft-target-prior revisit` |
+
+Full Keep/Discard delta table: [`results/tokyo/climb_delta_from_win.md`](../results/tokyo/climb_delta_from_win.md).
+
 ---
 
 ## 4. 推荐顺序（便宜 → 贵）
