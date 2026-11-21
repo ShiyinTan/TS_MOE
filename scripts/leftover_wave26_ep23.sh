@@ -24,8 +24,23 @@ PEAK=(
   --checkpoint-metric acc1
 )
 
+# Prefer GPUs with <2GiB used; skip indices already running our trains.
+busy_gpus() {
+  ps -ef | grep -E 'tsmoe train' | grep -v grep \
+    | sed -n 's/.*CUDA_VISIBLE_DEVICES=\([0-9]*\).*/\1/p' \
+    | sort -u
+}
+# Fallback: parse nohup env via /proc
+mapfile -t BUSY < <(
+  for p in $(pgrep -f 'python -m tsmoe train' || true); do
+    tr '\0' '\n' < /proc/$p/environ 2>/dev/null | sed -n 's/^CUDA_VISIBLE_DEVICES=//p'
+  done | sort -u
+)
 mapfile -t FREE < <(nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits \
-  | awk -F',' '{gsub(/ /,"",$1); gsub(/ /,"",$2); if ($2+0 < 2048) print $1}')
+  | awk -F',' -v busy="$(IFS=,; echo "${BUSY[*]}")" '
+      BEGIN{n=split(busy,b,","); for(i=1;i<=n;i++) if(b[i]!="") skip[b[i]]=1}
+      {gsub(/ /,"",$1); gsub(/ /,"",$2);
+       if ($2+0 < 2048 && !( $1 in skip)) print $1}')
 if ((${#FREE[@]} < 1)); then
   echo "No free GPUs. Abort." | tee -a logs/overnight/wave26.launch.txt
   exit 1
