@@ -100,6 +100,8 @@ Optional Acc@1 ranking auxiliaries (see also [`causal-counts.md`](causal-counts.
 
 **LOCKED WIN (Tokyo known_only vs STHGCN):** `hc_sg_Atime_bpr029_ssb026` — Acc@1 **0.260274**, R@5 **0.441517**, R@10 **0.519494**, R@20 **0.586934**. Full flags in [`ablation.md`](ablation.md) §3.2 / [`causal-counts.md`](causal-counts.md).
 
+**Acc climb peak:** `on_rev_soft10r` Acc@1 **0.267650** = WIN **Base** + gate/geo/revisit/soft **Added** — see [`climb-delta-from-win.md`](climb-delta-from-win.md) / ablation §3.3.
+
 ## Relation to `runs/`
 
 - **Do not** look under `runs/.../model/eval_*` for metrics — those paths are no longer used.

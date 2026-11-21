@@ -163,7 +163,7 @@ Judge **`known_only`** Acc@1 / Recall@k (not `all_targets`). Flags default-off; 
 | **Base** | LOCKED WIN §3.2 (`hc_sg_Atime_bpr029_ssb026`) |
 | **Added** | `--transition-attn gate` · `--geo-score-bias 0.15` · `--revisit-score-bias 0.10` · `--soft-target-beta 0.10 --soft-target-prior revisit` |
 
-Full Keep/Discard delta table: [`results/tokyo/climb_delta_from_win.md`](../results/tokyo/climb_delta_from_win.md).
+Full Keep/Discard delta table: [`climb-delta-from-win.md`](climb-delta-from-win.md) (also mirrored under `results/tokyo/` on the GPU box).
 
 ---
 
