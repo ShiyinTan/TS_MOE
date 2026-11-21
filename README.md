@@ -2,13 +2,23 @@
 
 Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现：从 Massive-STEPS 城市签到 CSV 构造同一 trail 内的下一跳预测样本，用训练数据估计逐 POI 的 26 维 SURD，再训练候选感知的 15 专家 Transformer。**默认候选集**是上一签到位置空间邻域、更大半径热门 POI、用户训练常去地点与随机负例的并集（去重；**目录内真目标必入池**，含 val/test；半径可选 `p70`/`p80`/`p90`/`mean`/`max`，或 `full` 退回全目录，或 `random` 仅随机池）。训练可从该池负采样 / 封顶；**评估对完整构造池排名**。另支持新轨迹推荐，以及从联合计数到单个候选得分的追踪。
 
-算法设计见 [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md)。本 README 只描述**当前代码**如何安装与运行。
+**依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。面向 **NVIDIA GPU 服务器**（conda + pip cu124）；`--device` 默认 `auto`。
 
-**依赖：** Python 标准库 + NumPy + tqdm + PyTorch（`numpy>=1.26,<3`，`tqdm>=4.66,<5`，`torch>=2.4,<3`）。没有 `setup.py` / `pyproject.toml`：在仓库根目录执行 `python -m tsmoe ...`，不要 `pip install` 本包。
+---
 
-**路径约定：** 缓存 / checkpoint → `runs/`；评估 metrics / report → `results/`（**Acc@1** 为主指标；见 [`docs/results.md`](docs/results.md)）。多源候选见 [`docs/candidates.md`](docs/candidates.md)；Router 见 [`docs/router-modes.md`](docs/router-modes.md)；T/L ↔ STHGCN 见 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)（换特征 schema 须 **重新 prepare**）。因果在线计数 + `--transition-attn` 见 [`docs/causal-counts.md`](docs/causal-counts.md)（§3.8；**默认 on**）。候选上下文 / 会话 / 用户偏好 / 专家内交叉注意力 overlays（**默认均 off**）：[`docs/candidate-context.md`](docs/candidate-context.md)。系统对照实验（因子表、overlay 命令表、结果登记）：[`docs/ablation.md`](docs/ablation.md)。
+## Documentation index（one doc · one topic）
 
-面向 **NVIDIA GPU 服务器**：conda 建环境 + pip 装 NumPy / tqdm / **CUDA 12.4** PyTorch。`train` / `evaluate` / `explain` / `recommend` 的 `--device` 默认为 `auto`（有 CUDA 用 GPU）。进度条默认开启（`tqdm`）。
+| Doc | Topic |
+| --- | --- |
+| [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md) | **Model baseline** — Basic design & §19 starters |
+| [`docs/model-settings.md`](docs/model-settings.md) | **Added settings** vs Basic (WIN + Acc climb knobs) |
+| [`docs/experiments.md`](docs/experiments.md) | **Experiment settings + Acc/R** · Keep/Discard |
+| [`docs/design-notes.md`](docs/design-notes.md) | **Why** — design intent of climb levers |
+| [`docs/runbook.md`](docs/runbook.md) | **Runnable commands** only (`python -m tsmoe …`) |
+| *This README* | Install, data, CLI catalog, layout |
+
+**Feature deep-dives** (one file each): [`docs/candidates.md`](docs/candidates.md) · [`docs/router-modes.md`](docs/router-modes.md) · [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md) · [`docs/causal-counts.md`](docs/causal-counts.md) · [`docs/candidate-context.md`](docs/candidate-context.md).  
+Log templates: [`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`.csv`](docs/ablation_log.template.csv).
 
 ---
 
@@ -36,7 +46,7 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 8. [算法要点（简要）](#8-算法要点简要)
 9. [测试与东京烟雾参考](#9-测试与东京烟雾参考)
 10. [当前局限](#10-当前局限)
-11. [Ablation 实验手册](#11-ablation-实验手册)
+11. [实验与 Acc climb 文档](#11-实验与-acc-climb-文档)
 
 ---
 
@@ -300,7 +310,7 @@ python -m tsmoe prepare --data-root data --city tokyo --out runs/tokyo/cache_abl
 | `p80` / `p70` | 80 / 70 分位 |
 | `mean` / `max` | 均值 / 最大值 |
 | `full` | 关闭多源过滤；候选 = 整个训练 POI 目录 |
-| `random` | 仅随机池（GT + `--random-negatives`）；见 [`docs/ablation.md`](docs/ablation.md) §5a |
+| `random` | 仅随机池（GT + `--random-negatives`）；见 [`docs/candidates.md`](docs/candidates.md) |
 
 | `--popular-radius` | 大半径热门 |
 | --- | --- |
@@ -465,7 +475,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model_nocounts \
 
 ### 3.8a 候选上下文 / 会话 / 偏好 / 专家内交叉注意力（默认 off）
 
-运行时 overlays（**无需 re-prepare**；**默认全部 off**，不改今日 Acc@1 路径）。新信号进 base / 共享 query / 专家 attn，**不进** `hard_prior`。说明与 defaults 矩阵：[`docs/candidate-context.md`](docs/candidate-context.md)；叠在默认 train 上的对照命令表：[`docs/ablation.md`](docs/ablation.md) §3.1。
+运行时 overlays（**无需 re-prepare**；**默认全部 off**，不改今日 Acc@1 路径）。新信号进 base / 共享 query / 专家 attn，**不进** `hard_prior`。说明与 defaults 矩阵：[`docs/candidate-context.md`](docs/candidate-context.md)；WIN/peak 配方见 [`docs/runbook.md`](docs/runbook.md)。
 
 | Flag | 默认 | 含义 |
 | --- | --- | --- |
@@ -496,7 +506,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/abl_ctx_e1 \
 | `results/ablation_summary.md` / `.csv` | `python -m tsmoe ablation-summary` 总表（含 known_only） |
 | `results/<run>/candidate_pool_stats.json` | 各 split 候选池大小统计 |
 
-报告头条主指标为 **Acc@1**（另报 NDCG@1、MRR）；checkpoint 仍按验证 **NDCG@10** 选取。默认 **每个 epoch 也跑 test**（`--eval-test-every-epoch`；`--no-eval-test-every-epoch` 关闭）。完整约定见 [`docs/results.md`](docs/results.md)。
+报告头条主指标为 **Acc@1**（另报 NDCG@1、MRR）；checkpoint 仍按验证 **NDCG@10** 选取。默认 **每个 epoch 也跑 test**（`--eval-test-every-epoch`；`--no-eval-test-every-epoch` 关闭）。约定见 [`docs/experiments.md`](docs/experiments.md) · [`docs/runbook.md`](docs/runbook.md)。
 
 ```bash
 # 读 Acc@1（示例：§3.2 默认 Tokyo 跑完后）
@@ -587,7 +597,7 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 
 ## 5. 结果目录
 
-与 §3.9 相同，摘要如下。完整说明：[`docs/results.md`](docs/results.md)。候选池与 Acc@1：[`docs/candidates.md`](docs/candidates.md)。
+与 §3.9 相同，摘要如下。完整说明：[`docs/experiments.md`](docs/experiments.md)。候选池与 Acc@1：[`docs/candidates.md`](docs/candidates.md)。
 
 | 位置 | 内容 |
 | --- | --- |
@@ -610,13 +620,15 @@ python -m tsmoe evaluate --cache runs/tokyo/cache --checkpoint runs/tokyo/model/
 TS_MOE/
   environment.yml
   requirements.txt
-  docs/results.md             # results/ 与 runs/ 分工、Acc@1
+  docs/model-settings.md      # Added settings vs Basic
+  docs/experiments.md         # Acc/R · Keep/Discard · results layout
+  docs/design-notes.md        # why / design intent
+  docs/runbook.md             # runnable python -m tsmoe commands
   docs/candidates.md          # 多源候选、抽样、回退、train/eval 一致
   docs/router-modes.md        # --router-mode hard_prior / surd_mlp / hybrid
   docs/sthgcn-tl-features.md  # T/L ↔ STHGCN Φ(Δt)/Φ(Δs) 对齐
   docs/causal-counts.md       # 因果在线计数 + --transition-attn
   docs/candidate-context.md   # overlays A/B/C/D/E（默认 off）
-  docs/ablation.md            # 消融协议、因子表、可复制命令、结果登记
   docs/ablation_log.template.md  # 结果表模板（可复制到 results/）
   docs/ablation_log.template.csv
   tsmoe/                      # 包；入口 python -m tsmoe
@@ -633,13 +645,15 @@ TS_MOE/
 | --- | --- |
 | `environment.yml` | Conda 骨架（Python 3.12 + pip + NumPy + tqdm；torch 用 pip cu124） |
 | `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
-| `docs/results.md` | 评估结果目录约定 |
+| `docs/model-settings.md` | Added knobs vs Basic_Updated |
+| `docs/experiments.md` | Acc/R tables · Keep/Discard · results layout |
+| `docs/design-notes.md` | Design intent of climb levers |
+| `docs/runbook.md` | Runnable train/eval commands |
 | `docs/candidates.md` | 多源候选（邻域 + 热门 + 用户常去 + 随机负例；GT 必入池） |
 | `docs/router-modes.md` | `--router-mode`：hard_prior / surd_mlp / hybrid |
 | `docs/sthgcn-tl-features.md` | T/L 与 STHGCN 对齐；换 schema 须重 prepare |
 | `docs/causal-counts.md` | 因果在线计数、等频分箱、`--transition-attn` |
 | `docs/candidate-context.md` | 候选上下文 / 会话 / 用户偏好 / PMI / 专家内交叉注意力 |
-| `docs/ablation.md` | 消融实验手册（开关总表、顺序、命令、结果登记） |
 | `docs/ablation_log.template.md` / `.csv` | 结果登记模板（运行时自动写 `results/ablation_log.*`） |
 | `examples/download_city.py` | 从 Hugging Face 拉某城市三个 CSV |
 | `examples/make_demo.py` | 合成 demo CSV |
@@ -728,24 +742,24 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 - **默认 pip 索引为 cu124**：更旧驱动需改用 cu121 / cu118；不自动探测本机 CUDA。
 - **无多进程 / 多卡数据并行开关**：可选单卡 `--device cuda:0`；无 `--gpus` / DDP CLI。
 - **大数据内存**：大型城市 prepare 峰值随训练前缀增长；无分片 / 外存统计路径。
-- **换候选构造或目标协议须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives，也不能覆盖 `--train-targets` / `--eval-targets` / `--filter-unknown`（见 §3.3、§3.4；[`docs/ablation.md`](docs/ablation.md)）。
+- **换候选构造或目标协议须重 prepare**：train / evaluate 不能单独改 `--candidate-radius` / popular / user-frequent / random-negatives，也不能覆盖 `--train-targets` / `--eval-targets` / `--filter-unknown`（见 §3.3、§3.4；[`docs/runbook.md`](docs/runbook.md)）。
 - **换 T/L 特征 schema 须重 prepare**：旧 `basic_fixed_features_v1` 与当前 `sthgcn_tl_features_v1` 不兼容（见 §3.7）。
 
 ---
 
-## 11. Ablation 实验手册
+## 11. 实验与 Acc climb 文档
 
-近期改动多，应用对照实验分清贡献：固定同一 prepare 指纹（能复用则复用）、以 **Acc@1** 为主、结果写入 `results/<run>/`。
+固定同一 prepare 指纹、以 **known_only Acc@1** 为主、结果写入 `results/<run>/`。Topic split:
 
-`train` / `evaluate` 结束后会**自动 append** 到 `results/ablation_log.md` 与 `.csv`（无则创建）。扫已有结果生成总表：
+| Need | Open |
+| --- | --- |
+| Added knobs vs Basic | [`docs/model-settings.md`](docs/model-settings.md) |
+| Acc/R tables · Keep/Discard | [`docs/experiments.md`](docs/experiments.md) |
+| Design intent | [`docs/design-notes.md`](docs/design-notes.md) |
+| Copy-paste train/eval | [`docs/runbook.md`](docs/runbook.md) |
 
 ```bash
 python -m tsmoe ablation-summary --results results
 ```
 
-**`known_only`：** 不是「候选池里有没有 target」，而是只统计真实下一站在训练 catalog 内的样本（见 [`docs/ablation.md`](docs/ablation.md) §6.1）。
-
-完整内容（因子/开关总表、推荐顺序、Tokyo 可复制命令、结果登记空表、如何读 `metrics.json`、命名校验）：
-
-- [`docs/ablation.md`](docs/ablation.md)
-- 结果模板（可选 `cp` 到 `results/` 作空表 / 重置）：[`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`docs/ablation_log.template.csv`](docs/ablation_log.template.csv)
+Templates: [`docs/ablation_log.template.md`](docs/ablation_log.template.md) · [`docs/ablation_log.template.csv`](docs/ablation_log.template.csv).

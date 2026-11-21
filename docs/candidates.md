@@ -21,7 +21,7 @@ For each sample, with anchor = lat/lon of the check-in immediately before the ta
 
 `--candidate-radius full` disables spatial / popular / user-frequent / random sources and uses the full training catalog for every sample.
 
-`--candidate-radius random` builds a **random-only** pool: in-catalog ground truth plus up to `--random-negatives` uniform catalog rows (same seeded sampler as multi-source extras). Neighborhood / popular / user-frequent are unused; there is **no** empty-union → full-catalog fallback. Requires `--random-negatives >= 1`. Default remains multi-source (`p90`); `random` is opt-in for ablations (see [`ablation.md`](ablation.md) §5a).
+`--candidate-radius random` builds a **random-only** pool: in-catalog ground truth plus up to `--random-negatives` uniform catalog rows (same seeded sampler as multi-source extras). Neighborhood / popular / user-frequent are unused; there is **no** empty-union → full-catalog fallback. Requires `--random-negatives >= 1`. Default remains multi-source (`p90`); `random` is opt-in for ablations (see [`runbook.md`](runbook.md) / [`experiments.md`](experiments.md)).
 
 ## Prepare knobs (fingerprint)
 

@@ -578,6 +578,133 @@ def pools_for_split(data, catalog_coords, radius_km: float | None, catalog_size:
     return pools, resolutions
 
 
+def shrink_pools_spatial_prior(
+        data, pools: Sequence[torch.Tensor], catalog_coords: torch.Tensor,
+        *,
+        prior: str = "geo",
+        top_m: int = 64,
+        popularity: torch.Tensor | None = None,
+        gravity_beta: float = 1.0,
+        radiation_soft_km: float = 0.25):
+    """Coverage-safe Acc@1 shortlist (#10): keep top-M by spatial prior + always GT.
+
+    ``prior``:
+      - ``geo``: nearest by haversine (−km)
+      - ``gravity``: ``log1p(pop) − β·log1p(km)`` (visit mass from ``popularity``)
+      - ``radiation``: Simini hard intervening-opportunity over the pool
+
+    Returns ``(new_pools, stats)`` where ``stats['natural_gt_coverage']`` is the
+    fraction of in-catalog GT that already sat in the natural top-M (before the
+    force-include). Ranking coverage stays 100% for known GT because we always
+    append the target when missing.
+    """
+    prior = str(prior or "geo").lower()
+    if prior not in ("geo", "gravity", "radiation"):
+        raise ValueError("candidate spatial prior must be geo|gravity|radiation")
+    top_m = int(top_m)
+    if top_m < 1:
+        raise ValueError("candidate-prior-top-m must be >= 1")
+    coords = torch.as_tensor(catalog_coords, dtype=torch.float64)
+    if coords.ndim != 2 or coords.shape[1] != 2:
+        raise ValueError("catalog_coords must be [V, 2]")
+    pop = None
+    if popularity is not None:
+        pop = torch.as_tensor(popularity, dtype=torch.float64).reshape(-1)
+        if pop.numel() != coords.shape[0]:
+            raise ValueError("popularity must align with catalog_coords")
+    if prior in ("gravity", "radiation") and pop is None:
+        raise ValueError(f"prior={prior} requires catalog popularity/visit mass")
+
+    ends = data["end"]
+    lats, lons = data["lat"], data["lon"]
+    n_events = len(data["poi_token"])
+    new_pools = []
+    known = 0
+    natural_hits = 0
+    sizes_before, sizes_after = [], []
+    for i, pool in enumerate(pools):
+        end = int(ends[i])
+        prev = end - 1
+        if not 0 <= prev < n_events:
+            raise IndexError(f"sample {i}: missing previous check-in for spatial prior")
+        if end < n_events:
+            target_row = int(data["poi_token"][end]) - 2
+        else:
+            target_row = -1
+        rows = pool.long().tolist()
+        sizes_before.append(len(rows))
+        if len(rows) <= top_m:
+            new_pools.append(pool.long().clone())
+            sizes_after.append(len(rows))
+            if target_row >= 0:
+                known += 1
+                natural_hits += 1
+            continue
+        alat, alon = float(lats[prev]), float(lons[prev])
+        if not (math.isfinite(alat) and math.isfinite(alon)):
+            # No anchor → keep original pool (cannot justify spatial shrink).
+            new_pools.append(pool.long().clone())
+            sizes_after.append(len(rows))
+            if target_row >= 0:
+                known += 1
+                natural_hits += 1
+            continue
+        idx = torch.tensor(rows, dtype=torch.long)
+        cand = coords[idx]
+        km = haversine_km(alat, alon, cand[:, 0], cand[:, 1])
+        if prior == "geo":
+            score = -km
+        elif prior == "gravity":
+            mass = pop[idx].clamp_min(0)
+            score = torch.log1p(mass) - float(gravity_beta) * torch.log1p(km.clamp_min(0))
+        else:
+            # Hard radiation over this pool (origin mass = median cand mass).
+            mass = pop[idx].clamp_min(0)
+            m_i = float(mass.median().item()) if mass.numel() else 0.0
+            order = km.argsort()
+            m_sorted = mass[order]
+            cum = torch.cumsum(m_sorted, dim=0)
+            s_sorted = torch.zeros_like(cum)
+            s_sorted[1:] = cum[:-1]
+            s_ij = torch.zeros_like(km)
+            s_ij[order] = s_sorted
+            eps = 1e-6
+            score = (
+                torch.log(mass.clamp_min(eps))
+                - torch.log((m_i + s_ij).clamp_min(eps))
+                - torch.log((m_i + mass + s_ij).clamp_min(eps))
+            )
+        # Stable top-M: higher score first.
+        keep_n = min(top_m, len(rows))
+        top_idx = torch.argsort(score, descending=True, stable=True)[:keep_n].tolist()
+        kept = [rows[j] for j in top_idx]
+        natural_set = set(kept)
+        if target_row >= 0:
+            known += 1
+            if target_row in natural_set:
+                natural_hits += 1
+            elif target_row not in natural_set:
+                kept.append(int(target_row))
+        new_pools.append(torch.tensor(kept, dtype=torch.long))
+        sizes_after.append(len(kept))
+    ensure_targets_in_pools(data, new_pools)
+    coverage = (natural_hits / known) if known else None
+    stats = dict(
+        prior=prior,
+        top_m=top_m,
+        gravity_beta=float(gravity_beta),
+        n=len(new_pools),
+        known_targets=known,
+        natural_gt_hits=natural_hits,
+        natural_gt_coverage=coverage,
+        size_before_mean=(sum(sizes_before) / len(sizes_before)) if sizes_before else None,
+        size_after_mean=(sum(sizes_after) / len(sizes_after)) if sizes_after else None,
+        size_after_max=max(sizes_after) if sizes_after else None,
+        size_after_min=min(sizes_after) if sizes_after else None,
+    )
+    return new_pools, stats
+
+
 def summarize_pool_sizes(pools: Sequence[torch.Tensor],
                          resolutions: Sequence[str] | None = None) -> dict:
     """Per-sample candidate-pool size stats after resolve (union + target + fallback).
@@ -627,6 +754,81 @@ def format_pool_size_line(split: str, stats: dict) -> str:
         parts = " ".join(f"{key}={value}" for key, value in sorted(resolutions.items()))
         line = f"{line}  ({parts})"
     return line
+
+
+def mix_adaptive_negatives(probe_rows: torch.Tensor, probe_mask: torch.Tensor,
+                           probe_scores: torch.Tensor, targets: torch.Tensor,
+                           n_negatives: int, hard_frac: float, rng: random.Random):
+    """Build train rows from a scored probe: hard top-k + random fill (#37).
+
+    ``probe_rows`` / ``probe_scores`` are [B, P] with positive typically at col 0
+    (as from ``sample_candidates``). Returns ``(rows, labels, mask)`` with
+    positive at column 0 and ``n_negatives`` mixed negatives (or fewer if pool thin).
+    """
+    if not 0.0 <= float(hard_frac) <= 1.0:
+        raise ValueError("neg-hard-frac must be in [0, 1]")
+    if int(n_negatives) < 1:
+        raise ValueError("adaptive_mix requires a positive --negatives count")
+    bsz = int(probe_rows.shape[0])
+    row_lists = []
+    for b in range(bsz):
+        tgt = int(targets[b].item())
+        valid = probe_mask[b].tolist()
+        members = [int(probe_rows[b, j].item()) for j, ok in enumerate(valid) if ok]
+        # Ensure target present; others are probe negatives / extras.
+        others = [r for r in dict.fromkeys(members) if r != tgt]
+        if not others:
+            row_lists.append([tgt])
+            continue
+        want = min(int(n_negatives), len(others))
+        n_hard = int(round(want * float(hard_frac)))
+        n_hard = max(0, min(n_hard, want))
+        n_rand = want - n_hard
+        # Score only probe columns that are true negatives.
+        scored = []
+        for j, ok in enumerate(valid):
+            if not ok:
+                continue
+            row = int(probe_rows[b, j].item())
+            if row == tgt:
+                continue
+            scored.append((float(probe_scores[b, j].item()), row))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        hard = []
+        seen = set()
+        for _, row in scored:
+            if row in seen:
+                continue
+            hard.append(row)
+            seen.add(row)
+            if len(hard) >= n_hard:
+                break
+        remain = [r for r in others if r not in seen]
+        if n_rand > 0:
+            if n_rand >= len(remain):
+                rand = remain
+            else:
+                rand = rng.sample(remain, n_rand)
+        else:
+            rand = []
+        # If hard short (flat scores / tiny probe), backfill from remain.
+        chosen = hard + rand
+        if len(chosen) < want:
+            extra_pool = [r for r in others if r not in set(chosen)]
+            need = want - len(chosen)
+            if need >= len(extra_pool):
+                chosen.extend(extra_pool)
+            elif need > 0:
+                chosen.extend(rng.sample(extra_pool, need))
+        row_lists.append([tgt, *chosen[:want]])
+    width = max(len(row) for row in row_lists)
+    padded = torch.full((len(row_lists), width), -1, dtype=torch.long)
+    mask = torch.zeros(len(row_lists), width, dtype=torch.bool)
+    for i, row in enumerate(row_lists):
+        padded[i, :len(row)] = torch.tensor(row, dtype=torch.long)
+        mask[i, :len(row)] = True
+    labels = torch.zeros(len(row_lists), dtype=torch.long)
+    return padded, labels, mask
 
 
 def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,

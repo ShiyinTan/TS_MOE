@@ -7,7 +7,7 @@ cp docs/ablation_log.template.md results/ablation_log.md
 ```
 
 Source of numbers: latest test `all_targets.Acc@1` / `NDCG@1` / `MRR` (train also notes best-val).
-Protocol: see [`ablation.md`](ablation.md).
+Protocol / Acc tables: [`experiments.md`](experiments.md). Commands: [`runbook.md`](runbook.md).
 
 | date | run_name | cache | key flags | Acc@1 | NDCG@1 | MRR | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |

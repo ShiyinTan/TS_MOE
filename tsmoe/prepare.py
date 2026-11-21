@@ -1,6 +1,7 @@
 """Reproducible, versioned cache construction (samples + one train-all SURD table)."""
 import hashlib
 import json
+import math
 import tempfile
 from pathlib import Path
 
@@ -31,8 +32,22 @@ def digest_json(value):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def json_sanitize(value):
+    """Replace NaN/Inf with null so allow_nan=False dumps never crash (#47)."""
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    if isinstance(value, dict):
+        return {k: json_sanitize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_sanitize(v) for v in value]
+    return value
+
+
 def dump_json(value, path):
-    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    Path(path).write_text(
+        json.dumps(json_sanitize(value), ensure_ascii=False, indent=2, allow_nan=False) + "\n")
 
 
 def empty_stats(pois, meta):

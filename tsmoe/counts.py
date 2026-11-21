@@ -132,6 +132,39 @@ def visit_bin_id(count, edges):
                                edges.to(dtype=torch.float64)))
 
 
+def parse_dt_bin_edges(spec):
+    """Parse ``1h,6h,24h`` / ``1,6,24`` / ``off`` → sorted positive hour edges (or empty)."""
+    if spec is None:
+        return []
+    if isinstance(spec, (list, tuple)):
+        edges = [float(x) for x in spec]
+    else:
+        text = str(spec).strip().lower()
+        if text in ("", "off", "none"):
+            return []
+        edges = []
+        for part in text.split(","):
+            part = part.strip().lower()
+            if not part:
+                continue
+            if part.endswith("h"):
+                part = part[:-1]
+            edges.append(float(part))
+    edges = sorted(e for e in edges if e > 0)
+    if any(e <= 0 for e in edges):
+        raise ValueError("dt-bin edges must be positive hours")
+    return edges
+
+
+def dt_bin_id(gap_hours, edges):
+    """Bucketize gap into ``0 .. len(edges)`` (``torch.bucketize`` semantics)."""
+    if not edges:
+        return 0
+    return int(torch.bucketize(
+        torch.as_tensor(float(gap_hours), dtype=torch.float64),
+        torch.as_tensor(edges, dtype=torch.float64)))
+
+
 class CausalCountTables:
     """Online causal visit and transition counters.
 
@@ -140,7 +173,7 @@ class CausalCountTables:
     """
 
     def __init__(self, n_pois, n_categories, *, visit_bins=DEFAULT_VISIT_BINS,
-                 visit_bin_edges=None):
+                 visit_bin_edges=None, dt_bin_edges=None):
         if n_pois < 1 or n_categories < 1:
             raise ValueError("n_pois and n_categories must be positive")
         if visit_bins < 1:
@@ -150,7 +183,12 @@ class CausalCountTables:
         self.visit_bins = int(visit_bins)
         self.visit_bin_edges = (None if visit_bin_edges is None
                                 else torch.as_tensor(visit_bin_edges, dtype=torch.float64))
+        self.dt_bin_edges = list(parse_dt_bin_edges(dt_bin_edges))
         self.reset()
+
+    @property
+    def n_dt_bins(self):
+        return len(self.dt_bin_edges) + 1 if self.dt_bin_edges else 0
 
     def reset(self):
         """Clear all counts (bin edges unchanged)."""
@@ -167,6 +205,8 @@ class CausalCountTables:
         self.poi_poi = defaultdict(Counter)
         self.cat_cat = defaultdict(Counter)
         self.cat_poi = defaultdict(Counter)
+        # Δt-binned POI→POI (empty when dt_bin_edges unset).
+        self.poi_poi_dt = [defaultdict(Counter) for _ in range(self.n_dt_bins)]
         # Marginal transition totals for PMI (src out-count, dst in-count).
         self.poi_out = torch.zeros(self.n_pois, dtype=torch.float64)
         self.poi_in = torch.zeros(self.n_pois, dtype=torch.float64)
@@ -180,7 +220,8 @@ class CausalCountTables:
         other = CausalCountTables(
             self.n_pois, self.n_categories, visit_bins=self.visit_bins,
             visit_bin_edges=None if self.visit_bin_edges is None
-            else self.visit_bin_edges.clone())
+            else self.visit_bin_edges.clone(),
+            dt_bin_edges=list(self.dt_bin_edges))
         other.user_poi = deepcopy(self.user_poi)
         other.user_cat = deepcopy(self.user_cat)
         other.user_hour = deepcopy(self.user_hour)
@@ -193,6 +234,7 @@ class CausalCountTables:
         other.poi_poi = deepcopy(self.poi_poi)
         other.cat_cat = deepcopy(self.cat_cat)
         other.cat_poi = deepcopy(self.cat_poi)
+        other.poi_poi_dt = deepcopy(self.poi_poi_dt)
         other.poi_out = self.poi_out.clone()
         other.poi_in = self.poi_in.clone()
         other.cat_out = self.cat_out.clone()
@@ -222,6 +264,11 @@ class CausalCountTables:
             poi_poi={str(a): dict(b) for a, b in self.poi_poi.items()},
             cat_cat={str(a): dict(b) for a, b in self.cat_cat.items()},
             cat_poi={str(a): dict(b) for a, b in self.cat_poi.items()},
+            dt_bin_edges=list(self.dt_bin_edges),
+            poi_poi_dt=[
+                {str(a): dict(b) for a, b in bin_map.items()}
+                for bin_map in self.poi_poi_dt
+            ],
             poi_out=self.poi_out.tolist(),
             poi_in=self.poi_in.tolist(),
             cat_out=self.cat_out.tolist(),
@@ -236,6 +283,7 @@ class CausalCountTables:
         edges = state.get("visit_bin_edges")
         self.visit_bin_edges = (None if edges is None
                                 else torch.as_tensor(edges, dtype=torch.float64))
+        self.dt_bin_edges = list(parse_dt_bin_edges(state.get("dt_bin_edges")))
         self.reset()
         for u, c in state["user_poi"].items():
             self.user_poi[u] = Counter({int(k): int(v) for k, v in c.items()})
@@ -261,6 +309,12 @@ class CausalCountTables:
             self.cat_cat[int(a)] = Counter({int(k): int(v) for k, v in b.items()})
         for a, b in state["cat_poi"].items():
             self.cat_poi[int(a)] = Counter({int(k): int(v) for k, v in b.items()})
+        for bi, bin_map in enumerate(state.get("poi_poi_dt") or []):
+            if bi >= len(self.poi_poi_dt):
+                break
+            for a, b in bin_map.items():
+                self.poi_poi_dt[bi][int(a)] = Counter(
+                    {int(k): int(v) for k, v in b.items()})
         if "poi_out" in state:
             self.poi_out = torch.as_tensor(state["poi_out"], dtype=torch.float64)
             self.poi_in = torch.as_tensor(state["poi_in"], dtype=torch.float64)
@@ -286,7 +340,8 @@ class CausalCountTables:
     def _cat_ok(self, row):
         return 0 <= row < self.n_categories
 
-    def update(self, user, prev_poi, prev_cat, next_poi, next_cat, *, hour=None):
+    def update(self, user, prev_poi, prev_cat, next_poi, next_cat, *, hour=None,
+               gap_hours=None):
         """Apply one ground-truth next hop (after scoring)."""
         user = str(user)
         if self._poi_ok(next_poi):
@@ -304,6 +359,10 @@ class CausalCountTables:
                 self.poi_out[prev_poi] += 1
                 self.poi_in[next_poi] += 1
                 self.poi_poi_total += 1
+                if self.dt_bin_edges and gap_hours is not None:
+                    bid = dt_bin_id(gap_hours, self.dt_bin_edges)
+                    bid = min(max(bid, 0), self.n_dt_bins - 1)
+                    self.poi_poi_dt[bid][prev_poi][next_poi] += 1
             if self._cat_ok(prev_cat):
                 self.cat_poi[prev_cat][next_poi] += 1
                 self.cat_out[prev_cat] += 1
@@ -317,8 +376,22 @@ class CausalCountTables:
     def update_sample(self, data, sample_index):
         user, prev_poi, prev_cat, next_poi, next_cat = sample_hop(data, sample_index)
         end = int(data["end"][sample_index])
+        start = int(data["start"][sample_index])
         hour, _weekday = us_to_hour_weekday(int(data["us"][end]))
-        self.update(user, prev_poi, prev_cat, next_poi, next_cat, hour=hour)
+        gap_hours = None
+        if self.dt_bin_edges and end > start:
+            tip_us = float(data["us"][end - 1])
+            tgt_us = float(data["us"][end])
+            gap_hours = max(0.0, (tgt_us - tip_us) / 3_600_000_000.0)
+        self.update(user, prev_poi, prev_cat, next_poi, next_cat, hour=hour,
+                    gap_hours=gap_hours)
+
+    def poi_poi_dt_count(self, src, dst, bin_id):
+        if not (self._poi_ok(src) and self._poi_ok(dst)):
+            return 0.0
+        if not self.poi_poi_dt or bin_id < 0 or bin_id >= len(self.poi_poi_dt):
+            return 0.0
+        return float(self.poi_poi_dt[bin_id][src][dst])
 
     def replay(self, data, *, order=None):
         """Chronological score-less updates (rebuild train-end tables)."""
@@ -364,6 +437,11 @@ class CausalCountTables:
         if not (self._poi_ok(src) and self._poi_ok(dst)):
             return 0.0
         return float(self.poi_poi[src][dst])
+
+    def cat_cat_count(self, src_cat, dst_cat):
+        if not (self._cat_ok(src_cat) and self._cat_ok(dst_cat)):
+            return 0.0
+        return float(self.cat_cat[src_cat][dst_cat])
 
     def cat_poi_count(self, src_cat, dst_poi):
         if not (self._cat_ok(src_cat) and self._poi_ok(dst_poi)):
@@ -462,7 +540,7 @@ class CausalCountTables:
                 else:
                     poi_trans[c, j] = self.poi_poi_count(hp, dst)
                     cat_trans[c, j] = self.cat_poi_count(hc, dst)
-        return dict(
+        out = dict(
             hist_poi_feat=torch.tensor(hist_poi[:max_length], dtype=torch.float32),
             hist_cat_feat=torch.tensor(hist_cat[:max_length], dtype=torch.float32),
             cand_poi_feat=torch.tensor(cand, dtype=torch.float32),
@@ -470,6 +548,16 @@ class CausalCountTables:
             poi_transition=poi_trans,
             cat_transition=cat_trans,
         )
+        # Last-hop Δt-binned transitions [n_cand, n_dt_bins] (raw counts).
+        if self.n_dt_bins > 0 and length > 0:
+            last_hp = int(history_poi_rows[length - 1])
+            dt = torch.zeros(n_cand, self.n_dt_bins, dtype=torch.float32)
+            for c, row in enumerate(candidate_rows):
+                dst = int(row)
+                for b in range(self.n_dt_bins):
+                    dt[c, b] = self.poi_poi_dt_count(last_hp, dst, b)
+            out["poi_transition_dt"] = dt
+        return out
 
 
 def history_catalog_rows(data, sample_index):
@@ -493,9 +581,10 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
     **after** its features are read (strict causal online protocol).
     """
     hist_poi, hist_cat, cand_feat = [], [], []
-    visit_bins, poi_tr, cat_tr = [], [], []
+    visit_bins, poi_tr, cat_tr, poi_dt = [], [], [], []
     widths = [len(c) for c in candidate_rows_list]
     width = max(widths) if widths else 0
+    n_dt = int(getattr(tables, "n_dt_bins", 0) or 0)
     for local, sample_index in enumerate(indices.tolist()):
         hp, hc = history_catalog_rows(data, sample_index)
         rows = candidate_rows_list[local]
@@ -512,6 +601,14 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
         visit_bins.append(feat["visit_bin"])
         poi_tr.append(feat["poi_transition"])
         cat_tr.append(feat["cat_transition"])
+        if n_dt > 0:
+            dt = feat.get("poi_transition_dt")
+            if dt is None:
+                dt = torch.zeros(width, n_dt, dtype=torch.float32)
+            elif dt.shape[0] < width:
+                pad = torch.zeros(width - dt.shape[0], n_dt, dtype=torch.float32)
+                dt = torch.cat([dt, pad], 0)
+            poi_dt.append(dt)
         if update:
             tables.update_sample(data, sample_index)
     if not hist_poi:
@@ -523,8 +620,10 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
             poi_transition=torch.zeros(0, width, max_length),
             cat_transition=torch.zeros(0, width, max_length),
         )
+        if n_dt > 0:
+            empty["poi_transition_dt"] = torch.zeros(0, width, n_dt)
         return empty
-    return dict(
+    out = dict(
         hist_poi_feat=torch.stack(hist_poi, 0),
         hist_cat_feat=torch.stack(hist_cat, 0),
         cand_poi_feat=torch.stack(cand_feat, 0),
@@ -532,3 +631,6 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
         poi_transition=torch.stack(poi_tr, 0),
         cat_transition=torch.stack(cat_tr, 0),
     )
+    if poi_dt:
+        out["poi_transition_dt"] = torch.stack(poi_dt, 0)
+    return out

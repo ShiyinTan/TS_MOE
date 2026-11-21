@@ -17,8 +17,9 @@ from tsmoe.__main__ import main
 from tsmoe.candidates import (
     build_user_frequent, candidate_construction_record, catalog_coordinates,
     catalog_visit_counts, consecutive_visit_distances, format_pool_size_line,
-    haversine_km, neighborhood_indices, pick_popular_radius_km, pick_radius_km,
-    popular_indices, resolve_candidate_pool, sample_candidates,
+    haversine_km, mix_adaptive_negatives, neighborhood_indices,
+    pick_popular_radius_km, pick_radius_km, popular_indices,
+    resolve_candidate_pool, sample_candidates, shrink_pools_spatial_prior,
     summarize_distances, summarize_pool_sizes,
 )
 from tsmoe.prepare import dump_json
@@ -38,9 +39,10 @@ from tsmoe.ablation_summary import (
 )
 from tsmoe.engine import (
     Cache, GROUP_LABELS, PRIMARY_METRICS, ablation_row_from_eval, append_ablation_log,
-    candidates, format_ablation_key_flags, format_eval_report, metric_row,
-    model_config_from_checkpoint, ranks_of, results_root_dir, results_run_dir,
-    run_name_for_results,
+    apply_eval_bias_overrides, apply_score_calib, candidates,
+    format_ablation_key_flags, format_eval_report, make_tta_history_views,
+    metric_row, model_config_from_checkpoint, parse_tta_modes, ranks_of,
+    results_root_dir, results_run_dir, run_name_for_results,
 )
 from tsmoe.features import (
     GEO_FEAT_DIM, build_poi_cat_table, delta_geo_features, gather_side_features,
@@ -1111,6 +1113,13 @@ class TestCausalCounts(unittest.TestCase):
         self.assertEqual(legacy.category_score_bias, 0.0)
         self.assertEqual(legacy.pop_score_bias, 0.0)
         self.assertEqual(legacy.geo_score_bias, 0.0)
+        self.assertEqual(legacy.geo_score_power, 1.0)
+        self.assertEqual(legacy.revisit_score_bias, 0.0)
+        self.assertEqual(legacy.radiation_score_bias, 0.0)
+        self.assertEqual(legacy.jump_length_bias, 0.0)
+        self.assertEqual(legacy.return_gate, "off")
+        self.assertEqual(legacy.tsb_history_k, 1)
+        self.assertEqual(legacy.tsb_decay_hours, 0.0)
         self.assertEqual(legacy.surd_bias_gate, "off")
         self.assertEqual(legacy.surd_score_bias, 0.0)
         self.assertEqual(legacy.tsb_gate_mode, "off")
@@ -1164,8 +1173,216 @@ class TestCausalCounts(unittest.TestCase):
         torch.testing.assert_close(s_csb[1], s0[1], atol=1e-5, rtol=1e-5)
         self.assertGreater(float(s_psb[0] - s0[0]), 2.0)
         self.assertGreater(float(s0[1] - s_gsb[1]), 1.0)  # far cand penalized
+        # Gravity α>1 penalizes far candidates more than α=1 for same λ.
+        gsb_p = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, geo_score_bias=1., geo_score_power=2.)).eval()
+        gsb_p.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s_p2 = gsb_p(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        self.assertGreater(float(s_gsb[1] - s_p2[1]), 0.5)
+        # Revisit bias lifts high user→cand visit mass (cand_poi_feat dim 0).
+        feats2 = ctx["cand_poi_feat"].clone()
+        feats2[0, 0, 0] = 4.0
+        feats2[0, 1, 0] = 0.0
+        ctx["cand_poi_feat"] = feats2
+        rsb = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, revisit_score_bias=1.)).eval()
+        rsb.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s_rsb = rsb(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        self.assertGreater(float(s_rsb[0] - s0[0]), 3.0)
         with self.assertRaises(ValueError):
             ModelConfig(8, 2, 1, 0., 2, geo_score_bias=1.0)  # needs candidate_context
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on",
+                        geo_score_bias=1.0, geo_score_power=0.0)
+
+    def test_radiation_and_jump_length_score_biases(self):
+        """Radiation / jump-length priors: nearer better-opp and typical Δr lift Acc@1."""
+        torch.manual_seed(9)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        ctx = dict(ctx)
+        m = cand.shape[1]
+        # Distances: cand0 near, cand1 mid, cand2 far.
+        delta = torch.zeros(1, m, 3)
+        delta[0, 0, 0] = math.log1p(0.2)
+        delta[0, 1, 0] = math.log1p(1.0)
+        if m > 2:
+            delta[0, 2, 0] = math.log1p(5.0)
+        ctx["delta_geo"] = delta
+        feats = ctx["cand_poi_feat"].clone()
+        # High mass at mid-distance cand1 → radiation prefers opportunity over nearest hub.
+        feats[0, :, 1] = 0.0
+        feats[0, 0, 1] = math.log1p(2.0)
+        feats[0, 1, 1] = math.log1p(50.0)
+        if m > 2:
+            feats[0, 2, 1] = math.log1p(5.0)
+        ctx["cand_poi_feat"] = feats
+        # Origin mass from last hist tip.
+        hist = ctx["hist_poi_feat"].clone()
+        last = int(valid[0].long().sum().item()) - 1
+        hist[0, last, 1] = math.log1p(10.0)
+        ctx["hist_poi_feat"] = hist
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4,
+                    candidate_context="on")
+        off = TSMoE(n_pois, n_cats, 4, ModelConfig(**base)).eval()
+        rad = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, radiation_score_bias=1.0)).eval()
+        jump = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, jump_length_bias=1.0, jump_dist="lognormal",
+            jump_mu=0.0, jump_sigma=1.0)).eval()
+        rad.load_state_dict(off.state_dict())
+        jump.load_state_dict(off.state_dict())
+        with torch.no_grad():
+            s0 = off(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_rad = rad(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_jump = jump(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        # Radiation should change relative ranking vs baseline (not a no-op).
+        self.assertFalse(torch.allclose(s_rad[:2], s0[:2], atol=1e-4, rtol=1e-4))
+        # Jump log-density: km≈1 (log≈0) near μ=0 beats far km=5.
+        if m > 2:
+            self.assertGreater(float(s_jump[1] - s0[1]), float(s_jump[2] - s0[2]))
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, radiation_score_bias=1.0)
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on",
+                        jump_length_bias=1.0, jump_sigma=0.0)
+        # Helper sanity: hard intervening grows with distance order.
+        km = torch.tensor([[0.2, 1.0, 5.0]])
+        mass = torch.tensor([[2.0, 50.0, 5.0]])
+        mi = torch.tensor([10.0])
+        hard = TSMoE._radiation_log_score(km, mass, mi, kernel="hard")
+        soft = TSMoE._radiation_log_score(km, mass, mi, kernel="soft", soft_km=0.5)
+        self.assertEqual(hard.shape, (1, 3))
+        self.assertEqual(soft.shape, (1, 3))
+        self.assertTrue(torch.isfinite(hard).all())
+        self.assertTrue(torch.isfinite(soft).all())
+
+    def test_multi_hop_tsb_blends_history(self):
+        """K>1 multi-hop tsb changes scores vs last-only when older hops have mass."""
+        torch.manual_seed(13)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        ctx = dict(ctx)
+        # Inject mass on older hop → cand0; last hop → cand1 only.
+        last = int(valid[0].long().sum().item()) - 1
+        tr = ctx["poi_transition"].clone()
+        tr.zero_()
+        if last >= 1:
+            tr[0, 0, last - 1] = 40.0
+        tr[0, 1, last] = 5.0
+        ctx["poi_transition"] = tr
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4,
+                    transition_score_bias=1.0)
+        k1 = TSMoE(n_pois, n_cats, 4, ModelConfig(**base, tsb_history_k=1)).eval()
+        k2 = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, tsb_history_k=2, tsb_history_decay=0.5)).eval()
+        k2.load_state_dict(k1.state_dict())
+        with torch.no_grad():
+            s1 = k1(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s2 = k2(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        if last >= 1:
+            self.assertGreater(float(s2[0] - s1[0]), 0.5)
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, tsb_history_k=0)
+
+    def test_history_hit_and_recency_biases(self):
+        """History-hit / recency lift cands that appear in recent tips vs never-seen."""
+        torch.manual_seed(21)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4)
+        plain = TSMoE(n_pois, n_cats, 4, ModelConfig(**base)).eval()
+        hit = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, history_hit_bias=1.0, history_hit_k=5)).eval()
+        hit.load_state_dict(plain.state_dict())
+        rec = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, revisit_recency_bias=1.0, revisit_recency_tau=2.0)).eval()
+        rec.load_state_dict(plain.state_dict())
+        with torch.no_grad():
+            s0 = plain(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_hit = hit(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_rec = rec(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        # Last tip catalog row should get a hit boost.
+        last = int(valid[0].long().sum().item()) - 1
+        tip_row = int(h["P"][0, last].item()) - 2
+        if 0 <= tip_row < n_pois:
+            self.assertGreater(float(s_hit[tip_row] - s0[tip_row]), 0.5)
+            self.assertGreater(float(s_rec[tip_row] - s0[tip_row]), 0.1)
+
+    def test_return_gate_mixes_revisit_and_explore(self):
+        """Return-gate: π·revisit + (1−π)·gauss explore changes scores vs flat revisit."""
+        torch.manual_seed(11)
+        data, n_pois, n_cats = self._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        idx = chronological_indices(data)[:1]
+        h, valid, _ = make_batch(data, idx)
+        cand = torch.arange(n_pois).expand(1, -1)
+        ctx = gather_batch_context(
+            tables, data, idx, [list(range(n_pois))], int(valid.shape[1]), update=False)
+        ctx = dict(ctx)
+        m = cand.shape[1]
+        delta = torch.zeros(1, m, 3)
+        delta[0, 0, 0] = math.log1p(0.2)
+        delta[0, 1, 0] = math.log1p(3.0)
+        ctx["delta_geo"] = delta
+        feats = ctx["cand_poi_feat"].clone()
+        feats[0, 0, 0] = 3.0  # strong revisit on near cand
+        feats[0, 1, 0] = 0.0
+        ctx["cand_poi_feat"] = feats
+        prior = torch.zeros(1, n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(1, n_pois)
+        base = dict(dim=8, heads=2, layers=1, dropout=0., top_k=2,
+                    router_mode="hard_prior", causal_counts=True, visit_bins=4,
+                    candidate_context="on", revisit_score_bias=1.0)
+        flat = TSMoE(n_pois, n_cats, 4, ModelConfig(**base)).eval()
+        gated = TSMoE(n_pois, n_cats, 4, ModelConfig(
+            **base, return_gate="on", explore_spatial_bias="gauss",
+            explore_score_bias=1.0, gauss_sigma_km=0.5)).eval()
+        gated.load_state_dict(flat.state_dict(), strict=False)
+        with torch.no_grad():
+            s_flat = flat(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+            s_gate = gated(h, valid, cand, prior, conf, count_ctx=ctx)["score"][0]
+        self.assertFalse(torch.allclose(s_flat[:2], s_gate[:2], atol=1e-4, rtol=1e-4))
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on", return_gate="on",
+                        revisit_score_bias=0.1)  # missing explore
+        with self.assertRaises(ValueError):
+            ModelConfig(8, 2, 1, 0., 2, candidate_context="on", return_gate="on",
+                        explore_spatial_bias="gauss", explore_score_bias=0.2)  # missing revisit
 
     def test_surd_bias_gate_helpers_and_score_bias(self):
         """SURD/SMI gates: helpers + additive surd_score_bias lifts high-gate cands."""
@@ -1232,6 +1449,160 @@ class TestCausalCounts(unittest.TestCase):
             result, torch.tensor([0]), lambda_bpr=1., bpr_margin=1.0)
         self.assertGreater(float(bpr), 0.0)
         self.assertGreater(float(bpr_m), float(bpr))
+        # bpr_max / simce are finite and positive when a hard competitor exists.
+        _, (_, _, _, bpr_mx) = objective(
+            result, torch.tensor([0]), lambda_bpr=1., bpr_mode="bpr_max")
+        _, (_, _, _, bpr_sc) = objective(
+            result, torch.tensor([0]), lambda_bpr=1., bpr_mode="simce")
+        self.assertGreater(float(bpr_mx), 0.0)
+        self.assertGreater(float(bpr_sc), 0.0)
+        self.assertTrue(torch.isfinite(bpr_mx) and torch.isfinite(bpr_sc))
+
+    def test_objective_focal_ce_downweights_easy(self):
+        # Confident-but-not-saturated easy vs near-tie hard.
+        easy = dict(
+            score=torch.tensor([[3.0, 0.0, -1.0]]),
+            mask=torch.tensor([[True, True, True]]),
+            confidence=torch.ones(1, 3),
+            log_pi=torch.zeros(1, 3, 15), mass=torch.zeros(1, 3, 15),
+            gate=torch.ones(1, 3), gate_logits=torch.zeros(1, 3),
+            alpha=torch.zeros(1, 3))
+        hard = dict(
+            score=torch.tensor([[0.1, 0.0, -1.0]]),
+            mask=torch.tensor([[True, True, True]]),
+            confidence=torch.ones(1, 3),
+            log_pi=torch.zeros(1, 3, 15), mass=torch.zeros(1, 3, 15),
+            gate=torch.ones(1, 3), gate_logits=torch.zeros(1, 3),
+            alpha=torch.zeros(1, 3))
+        labels = torch.tensor([0])
+        _, (rec_plain_e, *_) = objective(easy, labels, ce_focal_gamma=0.)
+        _, (rec_focal_e, *_) = objective(easy, labels, ce_focal_gamma=2.)
+        _, (rec_plain_h, *_) = objective(hard, labels, ce_focal_gamma=0.)
+        _, (rec_focal_h, *_) = objective(hard, labels, ce_focal_gamma=2.)
+        self.assertLess(float(rec_focal_e), float(rec_plain_e))
+        # Hard example retains more of its CE under focal than the easy one.
+        self.assertGreater(
+            float(rec_focal_h) / max(float(rec_plain_h), 1e-8),
+            float(rec_focal_e) / max(float(rec_plain_e), 1e-8))
+
+    def test_apply_eval_bias_overrides_replaces_frozen_cfg(self):
+        """#38: evaluate-time geo/revisit overrides mutate frozen ModelConfig."""
+        from types import SimpleNamespace
+        model = TSMoE(4, 2, 4, ModelConfig(
+            dim=8, heads=2, layers=1, dropout=0., top_k=2,
+            geo_score_bias=0.15, revisit_score_bias=0.10))
+        cfg = apply_eval_bias_overrides(
+            model, SimpleNamespace(geo_score_bias=0.17, revisit_score_bias=0.08))
+        self.assertAlmostEqual(cfg.geo_score_bias, 0.17)
+        self.assertAlmostEqual(cfg.revisit_score_bias, 0.08)
+        self.assertAlmostEqual(model.cfg.geo_score_bias, 0.17)
+        # None keeps checkpoint values.
+        model2 = TSMoE(4, 2, 4, ModelConfig(
+            dim=8, heads=2, layers=1, dropout=0., top_k=2,
+            geo_score_bias=0.15, revisit_score_bias=0.10))
+        cfg2 = apply_eval_bias_overrides(
+            model2, SimpleNamespace(geo_score_bias=None, revisit_score_bias=None))
+        self.assertAlmostEqual(cfg2.geo_score_bias, 0.15)
+        self.assertAlmostEqual(cfg2.revisit_score_bias, 0.10)
+
+    def test_tta_mask_keeps_last_and_calib_can_flip_top1(self):
+        """#36 keep-last mask; #34 gauss_rev can change argmax via feature mix."""
+        self.assertEqual(parse_tta_modes("mask,substitute"), ("mask", "substitute"))
+        h = {"P": torch.tensor([[2, 3, 4, 5]])}
+        valid = torch.tensor([[True, True, True, True]])
+        views = list(make_tta_history_views(
+            h, valid, ("mask",), keep_last=True, n_views=1, seed=0))
+        self.assertEqual(len(views), 1)
+        _, v2 = views[0]
+        self.assertTrue(bool(v2[0, -1].item()))
+        self.assertLess(int(v2[0].sum().item()), 4)
+        scores = torch.tensor([[1.0, 0.9, 0.5]])
+        mask = torch.ones_like(scores, dtype=torch.bool)
+        rows = torch.arange(3).expand(1, -1)
+        # High revisit on cand1 → can beat cand0 after calib.
+        ctx = {"cand_poi_feat": torch.tensor([[[0.0, 0.0], [5.0, 0.0], [0.0, 0.0]]])}
+        out = apply_score_calib(scores, rows, mask, ctx, "gauss_rev", 1.0)
+        self.assertEqual(int(out[0].argmax().item()), 1)
+
+    def test_shrink_pools_spatial_prior_keeps_gt_and_top_m(self):
+        """#10: geo top-M shrink always retains GT; reports natural coverage."""
+        # Catalog: 0 at origin, 1 near, 2 far, 3 farthest. Target=3 (far).
+        coords = torch.tensor([[0.0, 0.0], [0.01, 0.0], [1.0, 0.0], [2.0, 0.0]],
+                              dtype=torch.float64)
+        data = {
+            "end": torch.tensor([1]),
+            "lat": torch.tensor([0.0, 0.0]),
+            "lon": torch.tensor([0.0, 0.0]),
+            "poi_token": torch.tensor([2, 5]),  # prev row0, target row3 → token 5
+            "trail": torch.tensor([0, 0]),
+            "trails": [["u", "t"]],
+        }
+        pools = [torch.tensor([0, 1, 2, 3])]
+        new_pools, stats = shrink_pools_spatial_prior(
+            data, pools, coords, prior="geo", top_m=2)
+        kept = set(new_pools[0].tolist())
+        self.assertEqual(len(kept), 3)  # top2 nearest {0,1} + forced GT 3
+        self.assertIn(3, kept)
+        self.assertAlmostEqual(stats["natural_gt_coverage"], 0.0)
+
+    def test_mix_adaptive_negatives_prefers_hard_scores(self):
+        """#37: hard_frac takes top probe scores; rest random from remainders."""
+        # probe: pos=0, negs 1,2,3 with scores 0.1, 9.0, 5.0 → hard should be 2 then 3
+        probe_rows = torch.tensor([[0, 1, 2, 3]])
+        probe_mask = torch.ones(1, 4, dtype=torch.bool)
+        probe_scores = torch.tensor([[0.0, 0.1, 9.0, 5.0]])
+        targets = torch.tensor([0])
+        rows, labels, mask = mix_adaptive_negatives(
+            probe_rows, probe_mask, probe_scores, targets,
+            n_negatives=2, hard_frac=1.0, rng=random.Random(0))
+        self.assertEqual(int(rows[0, 0].item()), 0)
+        self.assertEqual(int(labels[0].item()), 0)
+        negs = set(rows[0, 1:][mask[0, 1:]].tolist())
+        self.assertEqual(negs, {2, 3})
+
+    def test_soft_ema_targets_mixes_teacher_softmax(self):
+        """#39: EMA soft labels put mass on high teacher scores + one-hot."""
+        from tsmoe.model import soft_ema_targets
+        labels = torch.tensor([0])
+        mask = torch.ones(1, 3, dtype=torch.bool)
+        # Teacher strongly prefers col 2; with β=1 mix ≈ one-hot at 2 after softmax.
+        scores = torch.tensor([[0.0, 0.0, 10.0]])
+        soft = soft_ema_targets(labels, mask, scores, beta=1.0)
+        self.assertAlmostEqual(float(soft[0, 2].item()), 1.0, places=4)
+        soft05 = soft_ema_targets(labels, mask, scores, beta=0.5)
+        self.assertGreater(float(soft05[0, 0].item()), 0.4)
+        self.assertGreater(float(soft05[0, 2].item()), 0.4)
+
+    def test_soft_prior_targets_mixes_onehot_and_priors(self):
+        from tsmoe.model import soft_prior_targets
+        labels = torch.tensor([0])
+        mask = torch.tensor([[True, True, True]])
+        rows = torch.tensor([[10, 11, 12]])
+        valid = torch.tensor([[True, True]])
+        # poi_transition [B,M,L]: last tip → cand counts
+        poi_tr = torch.zeros(1, 3, 2)
+        poi_tr[0, :, 1] = torch.tensor([0.0, 9.0, 1.0])  # last hop
+        cand_feat = torch.zeros(1, 3, 2)
+        cand_feat[0, :, 0] = torch.log1p(torch.tensor([4.0, 0.0, 0.0]))
+        ctx = dict(poi_transition=poi_tr, cand_poi_feat=cand_feat)
+        hard = soft_prior_targets(labels, mask, ctx, rows, valid, ("tsb",), 0.0)
+        self.assertTrue(torch.allclose(hard[0], torch.tensor([1.0, 0.0, 0.0])))
+        soft = soft_prior_targets(
+            labels, mask, ctx, rows, valid, ("tsb", "revisit"), 0.2)
+        self.assertAlmostEqual(float(soft.sum()), 1.0, places=5)
+        self.assertGreater(float(soft[0, 0]), 0.7)  # mostly one-hot
+        self.assertGreater(float(soft[0, 1]), float(soft[0, 2]))  # tsb favors cand1
+        # Soft CE is finite and differs from hard CE when β>0.
+        result = dict(
+            score=torch.tensor([[2.0, 1.5, 0.0]]),
+            mask=mask, confidence=torch.ones(1, 3),
+            log_pi=torch.zeros(1, 3, 15), mass=torch.zeros(1, 3, 15),
+            gate=torch.ones(1, 3), gate_logits=torch.zeros(1, 3),
+            alpha=torch.zeros(1, 3))
+        _, (rec_h, *_) = objective(result, labels)
+        _, (rec_s, *_) = objective(result, labels, soft_targets=soft)
+        self.assertTrue(torch.isfinite(rec_s))
+        self.assertNotAlmostEqual(float(rec_s), float(rec_h), places=5)
 
     def test_legacy_checkpoint_disables_causal_counts(self):
         legacy = model_config_from_checkpoint(dict(
