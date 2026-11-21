@@ -27,7 +27,7 @@ Intent only. Flags → [`model-settings.md`](model-settings.md). Numbers → [`e
 | --- | --- | --- |
 | Soft prior ≠ revisit | Does tsb/EMA soft label help more than revisit soft? | No — only revisit@0.10 Keep |
 | hour-pop (#8) | Hour-conditioned popularity as score prior | Acc↓ on soft10r |
-| 2-hop A² (#4) | Multi-hop transition mass beyond last→cand | Under test |
+| 2-hop A² (#4) | Multi-hop transition mass beyond last→cand | Acc↓ on soft10r (Discard) |
 | geo-power (#6) | Sharper distance kernel than log1p | Acc↓ |
 | cat MTL (#45) | Dense next-category aux without score prior | Acc↓ |
 | ep>1 (#47) | Longer Acc1-selected training | ep1 still best |

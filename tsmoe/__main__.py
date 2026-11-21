@@ -387,7 +387,7 @@ def main():
         "--candidate-context", choices=CANDIDATE_CONTEXT_MODES, default="off",
         help="fuse candidate category emb + Δgeo (haversine/east/north log1p) into "
              "the candidate query before shared cross-attn (default off). "
-             "Does not enter hard_prior router logits. See docs/candidate-context.md")
+             "Does not enter hard_prior router logits. See docs/candidates.md")
     t.add_argument(
         "--candidate-context-time", choices=CANDIDATE_CONTEXT_TIME_MODES, default="off",
         help="optional time side of candidate-context: off (default); last_slot = "

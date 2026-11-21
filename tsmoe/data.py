@@ -149,7 +149,7 @@ class Categories:
 
 
 def numeric_features(event, previous):
-    """STHGCN-aligned T/L vectors (see FEATURE_METHOD / docs/sthgcn-tl-features.md)."""
+    """STHGCN-aligned T/L vectors (see FEATURE_METHOD / Basic §4.3)."""
     from .candidates import haversine_km
 
     t = event.time

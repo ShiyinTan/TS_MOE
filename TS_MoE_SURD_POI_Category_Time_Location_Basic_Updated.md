@@ -294,13 +294,30 @@ $$
 
 ### 4.3 T/L：STHGCN 对齐的时间 / 位置特征（`sthgcn_tl_features_v1`）
 
-实现默认与 Massive-STEPS 基线 **STHGCN**（Yan et al., SIGIR 2023）对齐，细节见仓库 [`docs/sthgcn-tl-features.md`](docs/sthgcn-tl-features.md)。相对编码使用固定初始化的
+实现默认与 Massive-STEPS 基线 **STHGCN**（Yan et al., SIGIR 2023；官方 [alipay/Spatio-Temporal-Hypergraph-Model](https://github.com/alipay/Spatio-Temporal-Hypergraph-Model)，Massive-STEPS 子模块 [w11wo/Spatio-Temporal-Hypergraph-Model](https://github.com/w11wo/Spatio-Temporal-Hypergraph-Model)）对齐。缓存 `feature_method`：**`sthgcn_tl_features_v1`**。换 `feature_method` / `t_dim` / `l_dim` / `sthgcn_basis_dim` 会改 prepare 指纹——**须重新 prepare**（同一 `--out` 默认覆盖；旧 `basic_fixed_features_v1` 缓存不兼容）。P/C 哈希 salt 仍为 `*/basic_fixed_features_v1`（身份编码未改）。
+
+STHGCN 侧对照：
+
+1. **签到绝对时间**（`CheckinEmbedding`）：小时 (0–23) 与星期 (0–6) ID → embedding。
+2. **相对时间**（`TimeEncoder`）：边 Δt 以**小时**计（`delta_ts/(60·60)`），\(\Phi(\Delta t)_i=\cos(\Delta t\cdot 10^{-\mathrm{linspace}(0,9,d)})\)，再经可学习投影。
+3. **相对空间**（最佳配置 `distance_encoder_type: time`）：Haversine **Δs（km）** 用同一 `TimeEncoder`（非绝对 lat/lon、非方位角）。
+
+论文 *Spatio-Temporal Hypergraph Learning for Next POI Recommendation*（Eq. 3–5）；代码 `layer/st_encoder.py`、`model/sthgcn.py`、`conf/best_conf/*.yml`。
+
+TS-MoE 离线存储 / 投影：
+
+| 来源 | 维数 | 布局 |
+| --- | ---: | --- |
+| **T** | 48 | hour one-hot (24) ‖ weekday one-hot (7) ‖ Φ(Δt hours, basis=16) ‖ `gap_valid` |
+| **L** | 18 | Φ(Δs km, 同 basis=16) ‖ `coord_valid` ‖ `step_valid` |
+
+相对编码使用固定初始化的
 
 $$
 \Phi(\Delta)_i=\cos\bigl(\Delta\cdot 10^{-\mathrm{linspace}(0,9,d)}\bigr),\quad d=16,
 $$
 
-其中 Δt 以**小时**计（与官方 `delta_ts/(60·60)` 一致），Δs 为 Haversine **公里**（与 `distance_encoder_type: time` 一致）。绝对时间用小时 / 星期 **one-hot**（对应 STHGCN check-in Embedding 的 hour / weekday ID 输入）；随后的 MLP→`dim` 对应可学习投影 \(W_t\)/\(W_s\)。
+其中 Δt 以**小时**计，Δs 为 Haversine **公里**。Φ 取 **固定 TimeEncoder init**（phase 0）；T/L 的 **MLP → `dim`** 扮演 \(W_t\) / \(W_s\)。绝对时间用小时 / 星期 **one-hot**。
 
 $$
 \psi_T(\tau_j)
@@ -325,7 +342,7 @@ $$
 \in\mathbb{R}^{18}.
 $$
 
-统一 UTC；窗口第一步将相对 Φ、gap_valid、step_valid 置 0（保留 hour/weekday 与 coord_valid）。无有效坐标时 Φ 与 step_valid 为 0、coord_valid=0。L **不再**使用单位球面坐标或方位角，以便与 STHGCN 相对距离编码一致。缺失 timestamp 按第 2 节处理；间隔只读当前窗口内相邻历史，不读目标时间。
+统一 UTC；窗口第一步将相对 Φ、gap_valid、step_valid 置 0（保留 hour/weekday 与 coord_valid）。无有效坐标时 Φ 与 step_valid 为 0、coord_valid=0。L **不再**使用单位球面坐标、log-gap 或方位角（旧 `basic_fixed_features_v1` 方案已移除），以便与 STHGCN 相对距离编码一致。缺失 timestamp 按第 2 节处理；间隔只读当前窗口内相邻历史，不读目标时间。
 
 附录 D 接收已生成数值张量；默认 `T: [B,N,48]`、`L: [B,N,18]`。`feature_method` / 维数进入 prepare 指纹；换 schema 必须重建缓存。
 

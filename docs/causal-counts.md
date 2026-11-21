@@ -1,6 +1,7 @@
 # Causal online count tables + transition cross-attn
 
-Runtime feature (no prepare / fingerprint change). Default **on**.
+Runtime feature (no prepare / fingerprint change). Default **on**.  
+Added Acc knobs that *use* these tables (tsb, geo/revisit biases, SURD gates, soft targets) are listed in [`model-settings.md`](model-settings.md); recipes in [`runbook.md`](runbook.md).
 
 ## What is stored
 
@@ -58,41 +59,25 @@ Optional **Acc@1** prior (default **0 = off**), independent of `--transition-att
 \text{score}_c \mathrel{+}= \lambda \cdot \log(1 + \text{count}(\text{last history POI} \to c))
 \]
 
-Needs causal counts on. Locked Tokyo WIN / peak recipes (tsb=2.0, λ_bpr=**0.29**, …): [`runbook.md`](runbook.md) · [`model-settings.md`](model-settings.md).
+Needs causal counts on. Locked Tokyo WIN / peak (tsb=2.0, λ_bpr=**0.29**, …): [`runbook.md`](runbook.md) · [`model-settings.md`](model-settings.md).
 
-## Extra score-level graph / feature priors (default **0 = off**)
+## Score / SURD gates that read these tables (default off)
 
-All are Acc@1 score additives on top of the model; **no re-prepare**. Defaults are **0** (off) so Basic / untuned trains stay unchanged.
+Acc@1 additives and SURD gates that **consume** the tables above. Formulas stay here; recipe values live in [`model-settings.md`](model-settings.md). **No re-prepare.** Defaults **0 / off** so Basic trains stay unchanged.
 
-| Flag | Formula (added to score) | Needs |
+| Flag | Formula / effect | Needs |
 | --- | --- | --- |
-| `--category-score-bias` | \(\lambda\cdot\log(1+\text{count}(\text{last cat}\to c))\) via `cat_transition` | causal on |
-| `--pop-score-bias` | \(\lambda\cdot\log(1+\text{global visits}(c))\) from causal cand feats | causal on |
-| `--geo-score-bias` | \(-\lambda\cdot\log(1+\text{haversine km})\) (nearer ranks higher) | `--candidate-context on` |
+| `--category-score-bias` | \(\lambda\cdot\log(1+\text{count}(\text{last cat}\to c))\) | causal on |
+| `--pop-score-bias` | \(\lambda\cdot\log(1+\text{global visits}(c))\) | causal on |
+| `--geo-score-bias` | \(-\lambda\cdot\log(1+\text{haversine km})\) | `--candidate-context on` |
+| `--surd-bias-gate` | \(g_c\): `unique_p` / `smi_p` / `smi_pc` / `u_mass` / `confidence` | SURD on |
+| `--surd-score-bias` | add \(\lambda\cdot g_c\) to scores | gate ≠ off |
+| `--tsb-gate-mode` | `mul` = term·g; `residual` = term·(1+g) on tsb / category-score-bias | gate ≠ off |
+| `--surd-attn-gate` | same apply modes on `--transition-attn bias` λ·φ | gate ≠ off |
 
-`--tsb-gate-mode` also modulates `--category-score-bias` when a SURD gate is active (same `mul` / `residual` rules as tsb).
+Gate defs (all × SURD confidence except raw `confidence`): **`unique_p`** Unique_P atom; **`u_mass`** sum Unique_P/C/T/L; **`smi_p` / `smi_pc`** Specific MI for P / PC ÷ Σ specific; **`confidence`** only. `residual` amplifies high-SURD cands; `mul` focuses bias on them.
 
-## SURD / Specific-MI bias gates (default **off**)
-
-Let the frozen per-POI SURD table (or its Specific MI) **control** how strongly transition / score biases fire per candidate. No re-prepare.
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--surd-bias-gate` | `off` | Gate feature \(g_c\): `unique_p` / `smi_p` / `smi_pc` / `u_mass` / `confidence` |
-| `--surd-score-bias` | `0` | Add \(\lambda\cdot g_c\) to ranking scores (SURD contributes directly) |
-| `--tsb-gate-mode` | `off` | How \(g_c\) modulates `--transition-score-bias` / `--category-score-bias`: `mul` = term·g; `residual` = term·(1+g) |
-| `--surd-attn-gate` | `off` | Same apply modes for `--transition-attn bias` λ·φ (broadcast over history) |
-
-Gate definitions (all × SURD confidence except raw `confidence`):
-
-- **`unique_p`** — routing-prior Unique_P atom
-- **`u_mass`** — sum of Unique_P/C/T/L atoms
-- **`smi_p` / `smi_pc`** — Specific MI for subset P / PC, normalized by Σ specific
-- **`confidence`** — SURD confidence only
-
-`residual` keeps the flat WIN-style term and **amplifies** high-SURD candidates; `mul` **focuses** the bias on high-SURD candidates (can weaken low-SURD ones).
-
-## Flags
+## Flags (module core)
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -100,35 +85,23 @@ Gate definitions (all × SURD confidence except raw `confidence`):
 | `--transition-attn {bias,gate,rel_key}` | `bias` | Transition injection mode |
 | `--transition-lambda` | `1.0` | Bias scale for attn logits |
 | `--transition-score-bias` | `0.0` | Add `λ·log1p(last→cand POI transition)` to ranking scores (0 = off) |
-| `--category-score-bias` | `0.0` | Add `λ·log1p(last_cat→cand_poi)` (hypergraph; 0 = off) |
-| `--pop-score-bias` | `0.0` | Add `λ·log1p(global POI visits)` (0 = off) |
-| `--geo-score-bias` | `0.0` | Subtract `λ·log1p(haversine km)` (needs candidate-context; 0 = off) |
-| `--surd-bias-gate` | `off` | SURD/SMI gate feature for score/attn biases |
-| `--surd-score-bias` | `0.0` | Add `λ·gate` to scores (needs gate ≠ off) |
-| `--tsb-gate-mode` | `off` | `off` / `mul` / `residual` on transition- / category-score-bias |
-| `--surd-attn-gate` | `off` | `off` / `mul` / `residual` on transition-attn bias λ |
 | `--visit-bins` | `10` | Equal-frequency bins for T/L visit embedding |
 
-Stored in the checkpoint `config` (+ `count_tables` / `visit_bin_edges` when enabled) so `evaluate` / `explain` / `recommend` match training.
+Score-bias / SURD-gate flags: see table above + [`model-settings.md`](model-settings.md). Stored in checkpoint `config` (+ `count_tables` / `visit_bin_edges`) so `evaluate` / `explain` / `recommend` match training.
 
 ## Copy-paste
 
 ```bash
-# Chronological train + default bias transition attn (causal counts on)
+# Default: causal on + transition-attn=bias
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_causal \
   --epochs 1 --dim 16 --heads 2 --layers 1
 
-# Gate / rel_key modes
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_gate \
   --transition-attn gate --epochs 1 --dim 16 --heads 2 --layers 1
-python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_rel \
-  --transition-attn rel_key --epochs 1 --dim 16 --heads 2 --layers 1
 
-# Locked WIN / Acc peak recipes: see docs/runbook.md (do not duplicate here).
-
-# Ablate the whole module (shuffled minibatches restored)
+# Ablate module (shuffle restored)
 python -m tsmoe train --cache runs/demo/cache --out runs/demo/model_nocounts \
   --no-causal-counts --epochs 1 --dim 16 --heads 2 --layers 1
 ```
 
-Results still under `results/`. No re-prepare required for this feature.
+WIN / peak recipes: [`runbook.md`](runbook.md). More demos: [`../README.md`](../README.md) §3.8. Results under `results/`. No re-prepare.
