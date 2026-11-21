@@ -88,17 +88,17 @@ Stack for leftovers = soft10r (= Base + A + B). Extra = only the lever under tes
 | #45 cat MTL | `--lambda-cat-aux 0.1/0.3` | 0.257/0.256 | Discard |
 | #47 ep2–3 | `--epochs 2/3` | best=peak; later↓ | Discard |
 | #6 geo power | `--geo-score-power 1.5/2.0` | 0.2634/0.256 | Discard |
+| #8 hour-pop | `--hour-pop-score-bias 0.10/0.15` | 0.2518 / 0.2624 | Discard |
 | earlier: radiation/jump/return-gate/Δt-bins/cat-stage/focal/BPR-max/calib/tsb-decay | various | ≪ | Discard |
 
 ### Queued Added (implement / run)
 
-| # | Extra flags |
-| --- | --- |
-| #4 | `--transition-2hop-bias 0.3/0.5` |
-| #8 | `--hour-pop-score-bias 0.10/0.15` |
-| #9 | `--cat-stage-bias` (mild) |
-| #11 | learned bilinear transition (TBD) |
-| #5 | eval `--score-temperature` / Platt on frozen peak |
+| # | Extra flags | status |
+| --- | --- | --- |
+| #4 | `--transition-2hop-bias 0.3/0.5` | relaunched after A2-after-split fix (`on_s10r_2hop03/05` b) |
+| #9 | `--cat-stage-bias` (mild) | queued |
+| #11 | learned bilinear transition (TBD) | queued |
+| #5 | eval `--score-temperature` / Platt on frozen peak | queued |
 
 ---
 

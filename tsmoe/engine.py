@@ -1957,7 +1957,10 @@ def train(args):
     data, val = cache.split("train"), cache.split("validation")
     if transition_2hop_bias > 0:
         print(f"building transition A² log1p (n_pois={len(cache.pois)}) …", flush=True)
-        cfg._transition_a2_log1p = build_transition_a2_log1p(data, len(cache.pois))
+        # ModelConfig is frozen; stash runtime tensor via object.__setattr__.
+        object.__setattr__(
+            cfg, "_transition_a2_log1p",
+            build_transition_a2_log1p(data, len(cache.pois)))
         print(f"transition_2hop_bias={transition_2hop_bias}", flush=True)
     if hour_pop_score_bias > 0:
         print(f"hour_pop_score_bias={hour_pop_score_bias}", flush=True)
@@ -2437,6 +2440,11 @@ def evaluate_cli(args):
         print(f"causal_counts: loaded train-end tables "
               f"(visit_bins={cfg.visit_bins}); continuing chronological updates on "
               f"{args.split}", flush=True)
+    if float(getattr(cfg, "transition_2hop_bias", 0.0) or 0.0) > 0:
+        print(f"building transition A² log1p (n_pois={len(cache.pois)}) …", flush=True)
+        object.__setattr__(
+            cfg, "_transition_a2_log1p",
+            build_transition_a2_log1p(training, len(cache.pois)))
     score_temp = float(getattr(args, "score_temperature", 1.0) or 1.0)
     if score_temp <= 0:
         raise ValueError("--score-temperature must be positive")
