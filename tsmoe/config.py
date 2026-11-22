@@ -16,8 +16,9 @@ META_KEYS = frozenset({
 })
 
 # Keys safe to pass through to `evaluate` from a train recipe config.
+# (evaluate has no --seed; geo/revisit here are optional eval-time overrides.)
 EVAL_CONFIG_KEYS = frozenset({
-    "cache", "device", "chunk", "eval_batch_size", "threads", "seed",
+    "cache", "device", "chunk", "eval_batch_size", "threads",
     "score_temperature", "geo_score_bias", "revisit_score_bias",
 })
 

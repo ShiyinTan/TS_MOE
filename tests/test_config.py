@@ -57,6 +57,7 @@ class ConfigTests(unittest.TestCase):
         ])
         self.assertNotIn("--out", argv)
         self.assertNotIn("--lambda-bpr", argv)
+        self.assertNotIn("--seed", argv)  # evaluate has no --seed
         self.assertIn("--cache", argv)
         self.assertIn("--checkpoint", argv)
 
