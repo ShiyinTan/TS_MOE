@@ -1,0 +1,5 @@
+# tokyo · base — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/base.yaml
+city: tokyo
+cache: runs/tokyo/cache_abl_tgt_last
+out: runs/tokyo/base

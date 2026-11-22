@@ -1,0 +1,5 @@
+# petaling_jaya · peak — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/peak.yaml
+city: petaling_jaya
+cache: runs/petaling_jaya/cache_abl_tgt_last
+out: runs/petaling_jaya/peak

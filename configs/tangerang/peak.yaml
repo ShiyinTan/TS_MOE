@@ -1,0 +1,5 @@
+# tangerang · peak — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/peak.yaml
+city: tangerang
+cache: runs/tangerang/cache_abl_tgt_last
+out: runs/tangerang/peak

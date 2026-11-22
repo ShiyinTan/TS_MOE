@@ -5,6 +5,9 @@
 This file lists **only settings that extend or change** that Base (router alternatives, WIN stack, Acc climb overlays, score biases, soft targets, aux losses).  
 Outcomes → [`experiments.md`](experiments.md). Why → [`design-notes.md`](design-notes.md). Commands → [`runbook.md`](runbook.md).
 
+**Launch via config (preferred):** `configs/recipes/{base,win,peak}.yaml` plus `configs/<city>/{base,win,peak}.yaml` (city sets `cache` / `out`).  
+`python -m tsmoe train --config configs/<city>/<recipe>.yaml` — see [`runbook.md`](runbook.md).
+
 ---
 
 ## Base snapshot (do not restate the whole Basic doc)

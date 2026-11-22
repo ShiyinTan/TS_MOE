@@ -1,0 +1,5 @@
+# tokyo · win — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/win.yaml
+city: tokyo
+cache: runs/tokyo/cache_abl_tgt_last
+out: runs/tokyo/hc_sg_Atime_bpr029_ssb026

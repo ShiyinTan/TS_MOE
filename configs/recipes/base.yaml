@@ -1,0 +1,18 @@
+# Base = Basic_Updated Acc protocol (multi-city / Tokyo Base).
+# Full Basic model card: TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md
+recipe: base
+description: "Basic_Updated · dim128 · hard_prior · ep1 · acc1 ckpt"
+seed: 42
+device: cuda
+router_mode: hard_prior
+dim: 128
+heads: 4
+layers: 2
+top_k: 4
+dropout: 0.1
+temperature: 1.0
+epochs: 1
+checkpoint_metric: acc1
+eval_test_every_epoch: true
+# causal counts + transition-attn bias are code defaults (on / bias)
+transition_attn: bias

@@ -1,0 +1,14 @@
+# LOCKED WIN = hc_sg_Atime_bpr029_ssb026 (prefs / model-settings.md)
+extends: base.yaml
+recipe: win
+recipe_id: hc_sg_Atime_bpr029_ssb026
+description: "WIN · dim256 · λ_bpr=0.29 · tsb=2.0 · unique_p residual · ssb=0.26 · A+time last_slot"
+dim: 256
+heads: 8
+lambda_bpr: 0.29
+transition_score_bias: 2.0
+surd_bias_gate: unique_p
+tsb_gate_mode: residual
+surd_score_bias: 0.26
+candidate_context: "on"
+candidate_context_time: last_slot

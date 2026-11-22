@@ -1,0 +1,5 @@
+# beijing · base — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/base.yaml
+city: beijing
+cache: runs/beijing/cache_abl_tgt_last
+out: runs/beijing/base

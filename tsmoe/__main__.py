@@ -6,6 +6,7 @@ import sys
 import torch
 
 from .ablation_summary import add_ablation_summary_parser
+from .config import expand_config_argv
 from .counts import DEFAULT_VISIT_BINS, TRANSITION_ATTN_MODES
 from .engine import evaluate_cli, explain, recommend, train
 from .model import (
@@ -23,8 +24,16 @@ def positive(value):
     return n
 
 
-def main():
-    root = argparse.ArgumentParser(description="TS-MoE for Massive-STEPS check-in CSVs")
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = expand_config_argv(argv)
+    root = argparse.ArgumentParser(
+        description="TS-MoE for Massive-STEPS check-in CSVs",
+        epilog="Recipes: python -m tsmoe train --config configs/<city>/<base|win|peak>.yaml "
+               "[--device cuda]. Config flags apply first; later CLI flags override. "
+               "See docs/runbook.md.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     commands = root.add_subparsers(dest="command", required=True)
     p = commands.add_parser(
         "prepare",
@@ -109,8 +118,14 @@ def main():
     t = commands.add_parser(
         "train",
         help="train with the shared train-all SURD table; checkpoint by "
-             "validation NDCG@10 (default) or Acc@1 via --checkpoint-metric")
-    t.add_argument("--out", required=True)
+             "validation NDCG@10 (default) or Acc@1 via --checkpoint-metric. "
+             "Prefer --config configs/<city>/<recipe>.yaml for Base/WIN/Peak.")
+    t.add_argument(
+        "--config",
+        help="YAML/JSON recipe (expanded before other flags; CLI overrides). "
+             "See configs/ and docs/runbook.md")
+    t.add_argument("--out", required=True,
+                   help="run directory under runs/ (also set via --config)")
     for name, value in [("epochs", 20), ("batch-size", 32), ("dim", 128), ("heads", 4),
                         ("layers", 2), ("top-k", 4)]:
         t.add_argument("--" + name, type=positive, default=value)
@@ -442,8 +457,12 @@ def main():
              "(multi-source neighborhood+popular+user-frequent+random by "
              "default; or --candidate-radius random / full; in-catalog GT "
              "always present); report Acc@1 / NDCG@1 / MRR (+ full @K tables "
-             "and Head/Mid/Tail groups) to metrics.json + report.txt")
+             "and Head/Mid/Tail groups) to metrics.json + report.txt. "
+             "May use --config for cache/device/shared knobs.")
     e.set_defaults(func=evaluate_cli)
+    e.add_argument(
+        "--config",
+        help="YAML/JSON recipe (expanded before other flags; CLI overrides)")
     e.add_argument("--out", help="directory for metrics.json and report.txt "
                    "(default: results/<run_from_checkpoint>/eval_<split>)")
     e.add_argument(
@@ -519,7 +538,11 @@ def main():
             parser.add_argument("--eval-batch-size", type=positive, default=16)
     for parser in (p, a, t, e, x, r):
         parser.add_argument("--threads", type=positive, default=2, help="PyTorch CPU threads")
-    args = root.parse_args()
+    # --config is consumed by expand_config_argv; suppress leftover if present
+    args = root.parse_args(argv)
+    if getattr(args, "config", None):
+        # Should have been expanded away; ignore leftover dest if parser kept it
+        pass
     if any(not math.isfinite(v) for v in vars(args).values() if isinstance(v, float)):
         root.error("numeric options must be finite")
     if args.command == "prepare" and min(args.tau_pos, args.kappa_i, args.kappa_n) <= 0:

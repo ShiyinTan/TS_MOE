@@ -1,0 +1,5 @@
+# palembang · peak — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/peak.yaml
+city: palembang
+cache: runs/palembang/cache_abl_tgt_last
+out: runs/palembang/peak

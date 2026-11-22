@@ -1,0 +1,10 @@
+# Acc peak = on_rev_soft10r = WIN + gate + geo0.15 + revisit0.10 + softβ0.10/revisit
+extends: win.yaml
+recipe: peak
+recipe_id: on_rev_soft10r
+description: "Peak · WIN + transition-attn gate + geo 0.15 + revisit 0.10 + soft-target β0.10 prior=revisit"
+transition_attn: gate
+geo_score_bias: 0.15
+revisit_score_bias: 0.10
+soft_target_beta: 0.10
+soft_target_prior: revisit

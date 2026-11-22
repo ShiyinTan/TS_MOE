@@ -1,0 +1,5 @@
+# sao_paulo · peak — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/peak.yaml
+city: sao_paulo
+cache: runs/sao_paulo/cache_abl_tgt_last
+out: runs/sao_paulo/peak

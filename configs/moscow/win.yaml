@@ -1,0 +1,5 @@
+# moscow · win — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/win.yaml
+city: moscow
+cache: runs/moscow/cache_abl_tgt_last
+out: runs/moscow/win

@@ -1,0 +1,5 @@
+# petaling_jaya · win — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/win.yaml
+city: petaling_jaya
+cache: runs/petaling_jaya/cache_abl_tgt_last
+out: runs/petaling_jaya/win
