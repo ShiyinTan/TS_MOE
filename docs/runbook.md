@@ -62,6 +62,11 @@ python -m tsmoe train --config configs/tokyo/peak.yaml \
 
 Pack free GPU memory; ≤8 of our jobs/GPU; do not kill foreign jobs.
 
+Multi-city dense packer (`scripts/multicity_dense_pack.py` on the GPU box) launches
+Base/WIN/Peak with `--config configs/<city>/{base,win,peak}.yaml` and overrides
+`--out` to the packer tag (`mc_*` / `tune_*`). Do not kill running Acc jobs when
+retargeting; restart the packer process only so *new* launches pick up configs.
+
 ---
 
 ## Prepare Tokyo Acc-climb cache
