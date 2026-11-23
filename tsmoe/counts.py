@@ -540,6 +540,15 @@ class CausalCountTables:
                 else:
                     poi_trans[c, j] = self.poi_poi_count(hp, dst)
                     cat_trans[c, j] = self.cat_poi_count(hc, dst)
+        # Last-hop PMI for optional --pmi-score-bias (independent of transition_pmi).
+        pmi_last = torch.zeros(n_cand, dtype=torch.float32)
+        if length > 0:
+            last_hp = int(history_poi_rows[length - 1])
+            for c, row in enumerate(candidate_rows):
+                dst = int(row)
+                if dst < 0:
+                    continue
+                pmi_last[c] = self.poi_poi_pmi(last_hp, dst)
         out = dict(
             hist_poi_feat=torch.tensor(hist_poi[:max_length], dtype=torch.float32),
             hist_cat_feat=torch.tensor(hist_cat[:max_length], dtype=torch.float32),
@@ -547,6 +556,7 @@ class CausalCountTables:
             visit_bin=visit_bin,
             poi_transition=poi_trans,
             cat_transition=cat_trans,
+            poi_pmi_last=pmi_last,
         )
         # Last-hop Δt-binned transitions [n_cand, n_dt_bins] (raw counts).
         if self.n_dt_bins > 0 and length > 0:
@@ -581,7 +591,7 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
     **after** its features are read (strict causal online protocol).
     """
     hist_poi, hist_cat, cand_feat = [], [], []
-    visit_bins, poi_tr, cat_tr, poi_dt = [], [], [], []
+    visit_bins, poi_tr, cat_tr, poi_dt, poi_pmi = [], [], [], [], []
     widths = [len(c) for c in candidate_rows_list]
     width = max(widths) if widths else 0
     n_dt = int(getattr(tables, "n_dt_bins", 0) or 0)
@@ -601,6 +611,12 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
         visit_bins.append(feat["visit_bin"])
         poi_tr.append(feat["poi_transition"])
         cat_tr.append(feat["cat_transition"])
+        pmi = feat.get("poi_pmi_last")
+        if pmi is None:
+            pmi = torch.zeros(width, dtype=torch.float32)
+        elif pmi.shape[0] < width:
+            pmi = torch.cat([pmi, torch.zeros(width - pmi.shape[0], dtype=torch.float32)], 0)
+        poi_pmi.append(pmi)
         if n_dt > 0:
             dt = feat.get("poi_transition_dt")
             if dt is None:
@@ -619,6 +635,7 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
             visit_bin=torch.zeros(0, dtype=torch.long),
             poi_transition=torch.zeros(0, width, max_length),
             cat_transition=torch.zeros(0, width, max_length),
+            poi_pmi_last=torch.zeros(0, width),
         )
         if n_dt > 0:
             empty["poi_transition_dt"] = torch.zeros(0, width, n_dt)
@@ -630,6 +647,7 @@ def gather_batch_context(tables, data, indices, candidate_rows_list, max_length,
         visit_bin=torch.tensor(visit_bins, dtype=torch.long),
         poi_transition=torch.stack(poi_tr, 0),
         cat_transition=torch.stack(cat_tr, 0),
+        poi_pmi_last=torch.stack(poi_pmi, 0),
     )
     if poi_dt:
         out["poi_transition_dt"] = torch.stack(poi_dt, 0)
