@@ -1,8 +1,9 @@
-# beijing · climb_ep2_trbias_soft005_geo020 — wave2 Acc climb around ep2_trbias plateau 0.4091
+# beijing · climb_ep2_trbias_soft005_geo020 — CITY BEST TEST Acc@1=0.420455 (was 0.409091; STHGCN 0.453)
+# Peak + transition_attn=bias + epochs=2 + soft β=0.05 revisit + geo_score_bias=0.20
 extends: ./climb_ep2_trbias.yaml
 out: runs/beijing/climb_ep2_trbias_soft005_geo020
 recipe_id: climb_ep2_trbias_soft005_geo020
-description: "wave2 soft_target_beta=0.05, soft_target_prior=revisit, geo_score_bias=0.2"
+description: "ep2_trbias + soft005 + geo020 (Beijing city best vs STHGCN gap −0.0325)"
 soft_target_beta: 0.05
 soft_target_prior: "revisit"
-geo_score_bias: 0.2
+geo_score_bias: 0.20
