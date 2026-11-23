@@ -1,0 +1,6 @@
+# tangerang · climb_soft010_filter_last — alt-cache follow-up of city best soft010
+extends: ./climb_soft010.yaml
+cache: runs/tangerang/cache_filter_last
+out: runs/tangerang/climb_soft010_filter_last
+recipe_id: climb_soft010_filter_last
+description: "WIN + soft010 on cache_filter_last (follow-up of Tangerang city best)"
