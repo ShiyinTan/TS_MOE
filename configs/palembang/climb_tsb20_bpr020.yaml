@@ -1,0 +1,10 @@
+# palembang · climb_tsb20_bpr020 — BEST TEST Acc@1=0.227390 (was 0.2093; STHGCN 0.246)
+# Base family + tsb=2.0 + λ_bpr=0.20 on cache_abl_tgt_last
+extends: ../recipes/base.yaml
+city: palembang
+cache: runs/palembang/cache_abl_tgt_last
+out: runs/palembang/climb_tsb20_bpr020
+recipe_id: climb_tsb20_bpr020
+description: "Base + tsb 2.0 + λ_bpr 0.20 (Palembang climb best)"
+transition_score_bias: 2.0
+lambda_bpr: 0.20
