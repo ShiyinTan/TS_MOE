@@ -311,7 +311,6 @@ class ModelConfig:
                 ("user_pref", self.user_pref),
                 ("user_id_emb", self.user_id_emb),
                 ("transition_pmi", self.transition_pmi),
-                ("pmi_score_bias", self.pmi_score_bias),
                 ("expert_cross_attn_sparse", self.expert_cross_attn_sparse)):
             if value not in ON_OFF:
                 raise ValueError(f"{name} must be one of {ON_OFF}")
