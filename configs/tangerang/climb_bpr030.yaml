@@ -1,0 +1,8 @@
+# tangerang · climb_bpr030 — runner-up TEST Acc@1=0.282180 (vs soft010 0.280029)
+extends: ../recipes/win.yaml
+city: tangerang
+cache: runs/tangerang/cache_abl_tgt_last
+out: runs/tangerang/climb_bpr030
+recipe_id: climb_bpr030
+description: "WIN + lambda_bpr=0.30 (Tangerang runner-up behind climb_rev005)"
+lambda_bpr: 0.30
