@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_catmtl01 — Acc climb on soft005_geo020 (opt-in)
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_catmtl01
+recipe_id: climb_s5g20_catmtl01
+description: "fix lambda_cat_aux=0.1"
+lambda_cat_aux: 0.1

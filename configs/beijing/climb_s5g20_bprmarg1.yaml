@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_bprmarg1 — Acc climb on soft005_geo020 (opt-in)
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_bprmarg1
+recipe_id: climb_s5g20_bprmarg1
+description: "fix bpr_margin=1.0"
+bpr_margin: 1.0

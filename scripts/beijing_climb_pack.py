@@ -19,21 +19,16 @@ PIDDIR = ROOT / "logs" / "multicity"
 
 # Priority order: compose around city best ep2_trbias, then filter_last
 QUEUE = [
-    "climb_s5g20_pmisb012",
-    "climb_s5g20_pmisb014",
-    "climb_s5g20_pmisb016",
-    "climb_s5g20_pmisb018",
-    "climb_s5g20_pmisb015_upref",
-    "climb_s5g20_pmisb015_ssb022",
     "climb_s5g20_focal1",
     "climb_s5g20_focal2",
-    "climb_s5g20_bprmax",
-    "climb_s5g20_simce",
-    "climb_s5g20_revrec015",
-    "climb_s5g20_hh010",
-    "climb_s5g20_kd01",
-    "climb_s5g20_kd02",
-    "climb_s5g20_kd01_pmisb015",
+    "climb_s5g20_soft0",
+    "climb_s5g20_ema",
+    "climb_s5g20_soft_tsb",
+    "climb_s5g20_soft_tsbrev",
+    "climb_s5g20_bprmarg1",
+    "climb_s5g20_bprmarg2",
+    "climb_s5g20_laplace",
+    "climb_s5g20_catmtl01",
 ]
 
 
