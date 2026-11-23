@@ -1,0 +1,6 @@
+# beijing · climb_ep2_trbias_tsb18 — wave2 Acc climb around ep2_trbias plateau 0.4091
+extends: ./climb_ep2_trbias.yaml
+out: runs/beijing/climb_ep2_trbias_tsb18
+recipe_id: climb_ep2_trbias_tsb18
+description: "wave2 transition_score_bias=1.8"
+transition_score_bias: 1.8

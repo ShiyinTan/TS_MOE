@@ -19,16 +19,26 @@ PIDDIR = ROOT / "logs" / "multicity"
 
 # Priority order: compose around city best ep2_trbias, then filter_last
 QUEUE = [
-    "climb_ep2_trbias_soft005",
-    "climb_ep2_trbias_soft012",
-    "climb_ep2_trbias_soft015",
-    "climb_ep2_trbias_bpr025",
-    "climb_ep2_trbias_bpr035",
-    "climb_ep2_trbias_rev015",
-    "climb_ep2_trbias_geo010",
-    "climb_ep2_trbias_ssb030",
-    "climb_ep3_trbias_soft005",
-    "climb_ep2_trbias_filter_last",
+    "climb_ep2_trbias_soft008",
+    "climb_ep2_trbias_soft011",
+    "climb_ep2_trbias_soft013",
+    "climb_ep2_trbias_geo005",
+    "climb_ep2_trbias_geo012",
+    "climb_ep2_trbias_geo018",
+    "climb_ep2_trbias_geo025",
+    "climb_ep2_trbias_rev008",
+    "climb_ep2_trbias_rev012",
+    "climb_ep2_trbias_rev020",
+    "climb_ep2_trbias_bpr027",
+    "climb_ep2_trbias_bpr031",
+    "climb_ep2_trbias_bpr033",
+    "climb_ep2_trbias_tsb18",
+    "climb_ep2_trbias_tsb22",
+    "climb_ep2_trbias_hh005",
+    "climb_ep2_trbias_hh010",
+    "climb_ep2_trbias_soft005_geo020",
+    "climb_ep2_trbias_soft005_rev015",
+    "climb_ep4_trbias_soft005",
 ]
 
 

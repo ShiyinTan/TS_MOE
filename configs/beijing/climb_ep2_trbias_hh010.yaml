@@ -1,0 +1,6 @@
+# beijing · climb_ep2_trbias_hh010 — wave2 Acc climb around ep2_trbias plateau 0.4091
+extends: ./climb_ep2_trbias.yaml
+out: runs/beijing/climb_ep2_trbias_hh010
+recipe_id: climb_ep2_trbias_hh010
+description: "wave2 history_hit_bias=0.1"
+history_hit_bias: 0.1
