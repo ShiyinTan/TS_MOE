@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_pmisb012 — densify around soft005_geo020 / pmisb015 plateau
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_pmisb012
+recipe_id: climb_s5g20_pmisb012
+description: "densify pmi_score_bias=0.12"
+pmi_score_bias: 0.12
