@@ -1,0 +1,8 @@
+# tangerang · climb_bpr035 — CITY BEST TEST Acc@1=0.276443 (vs mc_win 0.261384; STHGCN 0.293)
+extends: ../recipes/win.yaml
+city: tangerang
+cache: runs/tangerang/cache_abl_tgt_last
+out: runs/tangerang/climb_bpr035
+recipe_id: climb_bpr035
+description: "WIN + λ_bpr=0.35 (Tangerang city best vs STHGCN gap −0.0166)"
+lambda_bpr: 0.35
