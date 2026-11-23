@@ -1,0 +1,10 @@
+# beijing · climb_ep2_trbias — CITY BEST TEST Acc@1=0.409091 (tied ep3_trbias; STHGCN 0.453)
+# Peak recipe but transition_attn=bias (gate underperforms on Beijing) · epochs=2
+extends: ../recipes/peak.yaml
+city: beijing
+cache: runs/beijing/cache_abl_tgt_last
+out: runs/beijing/climb_ep2_trbias
+recipe_id: climb_ep2_trbias
+description: "Peak + transition_attn=bias + epochs=2 (Beijing city best vs STHGCN gap −0.0439)"
+transition_attn: bias
+epochs: 2

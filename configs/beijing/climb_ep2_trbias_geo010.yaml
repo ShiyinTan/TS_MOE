@@ -1,0 +1,5 @@
+extends: ./climb_ep2_trbias.yaml
+out: runs/beijing/climb_ep2_trbias_geo010
+recipe_id: climb_ep2_trbias_geo010
+description: "ep2_trbias + geo_score_bias=0.10"
+geo_score_bias: 0.10
