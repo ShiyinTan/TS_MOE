@@ -1,0 +1,7 @@
+# bandung · climb_ep2 — Acc climb toward STHGCN (wave3)
+extends: ../recipes/peak.yaml
+city: bandung
+cache: runs/bandung/cache_abl_tgt_last
+out: runs/bandung/climb_ep2
+recipe_id: climb_ep2
+epochs: 2
