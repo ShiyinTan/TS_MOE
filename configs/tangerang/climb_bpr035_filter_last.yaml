@@ -1,0 +1,6 @@
+# tangerang · climb_bpr035_filter_last — alt-cache follow-up of city best bpr035
+extends: ./climb_bpr035.yaml
+cache: runs/tangerang/cache_filter_last
+out: runs/tangerang/climb_bpr035_filter_last
+recipe_id: climb_bpr035_filter_last
+description: "WIN + λ_bpr=0.35 on cache_filter_last (follow-up of Tangerang city best)"
