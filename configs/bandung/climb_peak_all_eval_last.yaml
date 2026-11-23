@@ -1,0 +1,7 @@
+# bandung · Peak on train-all/eval-last cache
+extends: ../recipes/peak.yaml
+city: bandung
+cache: runs/bandung/cache_tgt_all_eval_last
+out: runs/bandung/climb_peak_all_eval_last
+recipe_id: climb_peak_all_eval_last
+description: "Peak on cache_tgt_all_eval_last"

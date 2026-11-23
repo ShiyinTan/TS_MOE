@@ -1,0 +1,6 @@
+# shanghai · soft005 winner on filter-unknown cache
+extends: ./climb_soft005.yaml
+cache: runs/shanghai/cache_filter_last
+out: runs/shanghai/climb_soft005_filter_last
+recipe_id: climb_soft005_filter_last
+description: "soft005 on cache_filter_last"
