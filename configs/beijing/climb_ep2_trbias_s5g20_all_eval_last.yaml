@@ -1,9 +1,9 @@
-# beijing · climb_ep2_trbias_s5g20_all_eval_last — wave3 around soft005_geo020 city best 0.420455 (STHGCN 0.453)
+# beijing · climb_ep2_trbias_s5g20_all_eval_last — wave4 around soft005_geo020 0.420455
 extends: ./climb_ep2_trbias_soft005_geo020.yaml
 out: runs/beijing/climb_ep2_trbias_s5g20_all_eval_last
 recipe_id: climb_ep2_trbias_s5g20_all_eval_last
-description: "wave3 soft_target_beta=0.05, soft_target_prior=revisit, geo_score_bias=0.2, cache=runs/beijing/cache_tgt_all_eval_last"
+description: "wave4 soft_target_beta=0.05, soft_target_prior=revisit, geo_score_bias=0.2, cache=runs/beijing/cache_tgt_all_eval_last"
 soft_target_beta: 0.05
 soft_target_prior: "revisit"
 geo_score_bias: 0.2
-cache: "runs/beijing/cache_tgt_all_eval_last"
+cache: runs/beijing/cache_tgt_all_eval_last

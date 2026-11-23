@@ -19,26 +19,26 @@ PIDDIR = ROOT / "logs" / "multicity"
 
 # Priority order: compose around city best ep2_trbias, then filter_last
 QUEUE = [
-    "climb_ep2_trbias_soft003_geo020",
-    "climb_ep2_trbias_soft004_geo020",
-    "climb_ep2_trbias_soft006_geo020",
-    "climb_ep2_trbias_soft007_geo020",
-    "climb_ep2_trbias_soft008_geo020",
-    "climb_ep2_trbias_soft010_geo020",
-    "climb_ep2_trbias_soft005_geo016",
-    "climb_ep2_trbias_soft005_geo018",
-    "climb_ep2_trbias_soft005_geo019",
-    "climb_ep2_trbias_soft005_geo021",
-    "climb_ep2_trbias_soft005_geo022",
-    "climb_ep2_trbias_soft005_geo024",
-    "climb_ep2_trbias_s5g20_bpr025",
-    "climb_ep2_trbias_s5g20_bpr031",
-    "climb_ep2_trbias_s5g20_rev012",
-    "climb_ep2_trbias_s5g20_hh005",
-    "climb_ep2_trbias_s5g20_tsb18",
-    "climb_ep3_trbias_soft005_geo020",
+    "climb_ep2_trbias_soft005_geo0205",
+    "climb_ep2_trbias_soft0055_geo020",
+    "climb_ep2_trbias_soft0045_geo020",
+    "climb_ep2_trbias_soft005_geo020_rev005",
+    "climb_ep2_trbias_soft005_geo020_rev000",
+    "climb_ep2_trbias_soft005_geo020_rev015",
+    "climb_ep2_trbias_soft005_geo021_rev005",
+    "climb_ep2_trbias_s5g20_ssb022",
+    "climb_ep2_trbias_s5g20_ssb030",
+    "climb_ep2_trbias_s5g20_bpr027",
+    "climb_ep2_trbias_s5g20_bpr029",
+    "climb_ep2_trbias_s5g20_tsb19",
+    "climb_ep2_trbias_s5g20_tsb21",
+    "climb_ep2_trbias_soft005_geo021_bpr027",
+    "climb_ep2_trbias_soft005_geo021_ssb022",
+    "climb_ep1_trbias_soft005_geo020",
+    "climb_ep5_trbias_soft005_geo020",
     "climb_ep2_trbias_s5g20_filter_last",
     "climb_ep2_trbias_s5g20_all_eval_last",
+    "climb_win_trbias_soft005_geo020",
 ]
 
 
@@ -121,7 +121,7 @@ def cache_ready(tag: str) -> bool:
     cache = "runs/beijing/cache_abl_tgt_last"
     for line in text.splitlines():
         if line.strip().startswith("cache:"):
-            cache = line.split(":", 1)[1].strip()
+            cache = line.split(":", 1)[1].strip().strip("\"'")
             break
     return (ROOT / cache / "manifest.json").exists()
 
