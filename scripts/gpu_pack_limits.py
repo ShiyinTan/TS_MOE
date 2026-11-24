@@ -5,7 +5,8 @@ Rules (prefs 2026-11-24):
 - If another user has a compute process on that GPU — except users listed in
   ``TSMOE_IGNORE_FOREIGN_USERS`` (default **dl-box**) — cap drops to
   ``TSMOE_MAX_PER_GPU_SHARED`` (default **2**).
-- Never kill foreign processes; only decide how many of *our* jobs to add.
+- Caps only gate **new** launches. Never kill / stop / signal running jobs
+  (ours or foreign) when a GPU is already over the limit — let them finish.
 """
 from __future__ import annotations
 

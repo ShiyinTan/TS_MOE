@@ -6,6 +6,7 @@ winner. Per-GPU our-job caps via ``gpu_pack_limits``:
   - 4 when GPU has no foreign users (``dl-box`` ignored)
   - 2 when another user (e.g. camob) is on that GPU
 Total our jobs per GPU are capped; cities share via ``all_counts``.
+Over-limit only blocks new launches — never kills already-running jobs.
 
 Never touches foreign processes. Prefer configs under configs/beijing/climb_*.yaml.
 Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
@@ -196,9 +197,13 @@ def main():
         ]
         launched = 0
         order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
+        over = []
         for g in order:
             lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
             ccap = city_cap(lim)
+            # Over-limit: skip new launches only — never kill already-running jobs.
+            if by_all[g] > lim:
+                over.append(f"gpu{g}:{by_all[g]}>lim{lim}")
             while (
                 by_all[g] < lim
                 and by_city[g] < ccap
@@ -213,6 +218,11 @@ def main():
                 by_city[g] += 1
                 free[g] = free.get(g, 0) - 2000
                 launched += 1
+        if over:
+            print(
+                f"over-limit (leave running, no kill): {', '.join(over)}",
+                flush=True,
+            )
         print(
             f"tick launched={launched} all={[by_all[g] for g in range(4)]} "
             f"city={[by_city[g] for g in range(4)]} "
