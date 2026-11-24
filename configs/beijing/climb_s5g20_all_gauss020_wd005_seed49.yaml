@@ -1,0 +1,5 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_seed49
+recipe_id: climb_s5g20_all_gauss020_wd005_seed49
+description: "WIN replicate seed=49"
+seed: 49

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Palembang-only Acc climb packer: fill free GPU slots (max 2 of our jobs/GPU).
+"""Palembang Acc climb packer (runs in parallel with still-optimizing prior cities).
+
+Policy: after a city beats STHGCN, start the next city but do **not** stop climbing
+the winner. Global cap = 2 our tsmoe jobs/GPU; per-city cap leaves room for the
+sibling city packer (default 1/GPU).
 
 Never touches foreign processes. Prefer configs under configs/palembang/climb_*.yaml.
 Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
@@ -13,9 +17,12 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CITY = "palembang"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
 # Hard cap: at most 2 of *our* train jobs per GPU (prefs 2026-11-24).
 MAX_OUR_PER_GPU = int(os.environ.get("TSMOE_MAX_PER_GPU", "2"))
+# Leave room for the parallel prior-city packer (beat→continue + start next).
+MAX_CITY_PER_GPU = int(os.environ.get("TSMOE_MAX_CITY_PER_GPU", "1"))
 MIN_FREE_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "3500"))
 LOG = ROOT / "runs" / "packer_logs"
 PIDDIR = ROOT / "logs" / "multicity"
@@ -91,7 +98,8 @@ def uuid_map():
 
 
 def our_by_gpu(uu):
-    by = defaultdict(int)
+    by_all = defaultdict(int)
+    by_city = defaultdict(int)
     live = set()
     for line in subprocess.check_output(
         ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True
@@ -108,9 +116,11 @@ def our_by_gpu(uu):
             continue
         if "tsmoe" not in cmd:
             continue
-        by[g] += 1
+        by_all[g] += 1
+        if f"configs/{CITY}/" in cmd or f"runs/{CITY}/" in cmd or f"/{CITY}/" in cmd:
+            by_city[g] += 1
         live.add(cmd)
-    return by, live
+    return by_all, by_city, live
 
 
 def gpu_free():
@@ -217,7 +227,7 @@ def launch(tag: str, gpu: int) -> int:
 def main():
     print(
         f"palembang climb packer queue={len(QUEUE)} max_per_gpu={MAX_OUR_PER_GPU} "
-        f"stop={STOP_SENTINEL}",
+        f"max_city_per_gpu={MAX_CITY_PER_GPU} stop={STOP_SENTINEL}",
         flush=True,
     )
     while True:
@@ -229,23 +239,29 @@ def main():
             time.sleep(45)
             continue
         uu = uuid_map()
-        by, live = our_by_gpu(uu)
+        by_all, by_city, live = our_by_gpu(uu)
         free = gpu_free()
         pending = [t for t in QUEUE if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)]
         launched = 0
-        order = sorted(range(4), key=lambda g: (by[g], -free.get(g, 0)))
+        order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
         for g in order:
-            while by[g] < MAX_OUR_PER_GPU and free.get(g, 0) >= MIN_FREE_MIB and pending:
+            while (
+                by_all[g] < MAX_OUR_PER_GPU
+                and by_city[g] < MAX_CITY_PER_GPU
+                and free.get(g, 0) >= MIN_FREE_MIB
+                and pending
+            ):
                 if stop_requested() or not host_ram_ok():
                     break
                 tag = pending.pop(0)
                 launch(tag, g)
-                by[g] += 1
-                # optimistic free-mem decrement (~6 GiB/job for Palembang)
+                by_all[g] += 1
+                by_city[g] += 1
                 free[g] = free.get(g, 0) - 6000
                 launched += 1
         print(
-            f"tick launched={launched} per_gpu={[by[g] for g in range(4)]} "
+            f"tick launched={launched} all={[by_all[g] for g in range(4)]} "
+            f"city={[by_city[g] for g in range(4)]} "
             f"free={[free.get(g, 0) for g in range(4)]} pending~={len(pending)}",
             flush=True,
         )

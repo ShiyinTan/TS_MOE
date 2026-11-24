@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Beijing-only Acc climb packer: fill free GPU slots (max 2 of our jobs/GPU).
+"""Beijing Acc climb packer (keeps optimizing after beat; shares GPUs with next city).
+
+Policy: after a city beats STHGCN, start the next city but do **not** stop climbing
+the winner. Global cap = 2 our tsmoe jobs/GPU; per-city cap leaves room for the
+sibling city packer (default 1/GPU).
 
 Never touches foreign processes. Prefer configs under configs/beijing/climb_*.yaml.
 Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
@@ -13,9 +17,12 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CITY = "beijing"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
 # Hard cap: at most 2 of *our* train jobs per GPU (prefs 2026-11-24).
 MAX_OUR_PER_GPU = int(os.environ.get("TSMOE_MAX_PER_GPU", "2"))
+# Leave room for the parallel next-city packer (beat→continue + start next).
+MAX_CITY_PER_GPU = int(os.environ.get("TSMOE_MAX_CITY_PER_GPU", "1"))
 MIN_FREE_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "3500"))
 LOG = ROOT / "runs" / "packer_logs"
 PIDDIR = ROOT / "logs" / "multicity"
@@ -23,50 +30,30 @@ STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 
-# Wave7: post-WIN Acc climb around gauss020_wd005 (0.454545 vs STHGCN 0.453).
+# Wave8: continue post-WIN Acc climb (parallel with Palembang).
 QUEUE = [line.strip() for line in """
-climb_s5g20_all_gauss020_wd001
-climb_s5g20_all_gauss020_wd003
-climb_s5g20_all_gauss020_wd004
-climb_s5g20_all_gauss020_wd006
-climb_s5g20_all_gauss020_wd007
-climb_s5g20_all_gauss020_wd008
-climb_s5g20_all_gauss020_wd015
-climb_s5g20_all_gauss020_wd005_soft004
-climb_s5g20_all_gauss020_wd005_soft045
-climb_s5g20_all_gauss020_wd005_soft055
-climb_s5g20_all_gauss020_wd005_soft006
-climb_s5g20_all_gauss020_wd005_soft007
-climb_s5g20_all_gauss020_wd005_g017
-climb_s5g20_all_gauss020_wd005_g018
-climb_s5g20_all_gauss020_wd005_g019
-climb_s5g20_all_gauss020_wd005_g021
-climb_s5g20_all_gauss020_wd005_g022
-climb_s5g20_all_gauss020_wd005_g023
-climb_s5g20_all_gauss020_wd005_s035
-climb_s5g20_all_gauss020_wd005_s040
-climb_s5g20_all_gauss020_wd005_s060
-climb_s5g20_all_gauss020_wd005_s075
-climb_s5g20_all_gauss020_wd005_ep3
-climb_s5g20_all_gauss020_wd005_ep4
-climb_s5g20_all_gauss020_wd005_lr5e4
-climb_s5g20_all_gauss020_wd005_lr2e3
-climb_s5g20_all_gauss020_wd005_drop05
-climb_s5g20_all_gauss020_wd005_drop15
-climb_s5g20_all_gauss020_wd005_neg31
-climb_s5g20_all_gauss020_wd005_neg127
-climb_s5g20_all_gauss020_wd005_bpr015
-climb_s5g20_all_gauss020_wd005_bpr025
-climb_s5g20_all_gauss020_wd005_rev005
-climb_s5g20_all_gauss020_wd005_rev010
-climb_s5g20_all_gauss020_wd005_geo005
-climb_s5g20_all_gauss020_wd005_seed43
-climb_s5g20_all_gauss020_wd005_seed44
-climb_s5g20_all_gauss020_wd005_seed45
-climb_s5g20_all_gauss020_wd005_seed46
-climb_s5g20_all_gauss020_wd005_s004_g021
-climb_s5g20_all_gauss020_wd005_s006_g019
-climb_s5g20_all_gauss020_wd005_s0055_g0205
+climb_s5g20_all_gauss020_wd005_filter
+climb_s5g20_all_gauss020_wd005_allf
+climb_s5g20_all_gauss020_wd005_allp80
+climb_s5g20_all_gauss020_wd005_abl
+climb_s5g20_all_gauss020_wd005_soft008
+climb_s5g20_all_gauss020_wd005_soft009
+climb_s5g20_all_gauss020_wd005_soft010
+climb_s5g20_all_gauss020_wd005_soft012
+climb_s5g20_all_gauss020_wd005_tsb18
+climb_s5g20_all_gauss020_wd005_tsb22
+climb_s5g20_all_gauss020_wd005_tsb25
+climb_s5g20_all_gauss020_wd005_ssb020
+climb_s5g20_all_gauss020_wd005_ssb022
+climb_s5g20_all_gauss020_wd005_ssb030
+climb_s5g20_all_gauss020_wd005_soft008_g019
+climb_s5g20_all_gauss020_wd005_soft008_g021
+climb_s5g20_all_gauss020_wd005_soft008_ep3
+climb_s5g20_all_gauss020_wd005_soft008_wd003
+climb_s5g20_all_gauss020_wd005_soft008_wd007
+climb_s5g20_all_gauss020_wd005_seed47
+climb_s5g20_all_gauss020_wd005_seed48
+climb_s5g20_all_gauss020_wd005_seed49
 """.strip().splitlines()]
 
 
@@ -90,7 +77,8 @@ def uuid_map():
 
 
 def our_by_gpu(uu):
-    by = defaultdict(int)
+    by_all = defaultdict(int)
+    by_city = defaultdict(int)
     live = set()
     for line in subprocess.check_output(
         ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True
@@ -107,9 +95,11 @@ def our_by_gpu(uu):
             continue
         if "tsmoe" not in cmd:
             continue
-        by[g] += 1
+        by_all[g] += 1
+        if f"configs/{CITY}/" in cmd or f"runs/{CITY}/" in cmd or f"/{CITY}/" in cmd:
+            by_city[g] += 1
         live.add(cmd)
-    return by, live
+    return by_all, by_city, live
 
 
 def gpu_free():
@@ -216,7 +206,7 @@ def launch(tag: str, gpu: int) -> int:
 def main():
     print(
         f"beijing climb packer queue={len(QUEUE)} max_per_gpu={MAX_OUR_PER_GPU} "
-        f"stop={STOP_SENTINEL}",
+        f"max_city_per_gpu={MAX_CITY_PER_GPU} stop={STOP_SENTINEL}",
         flush=True,
     )
     while True:
@@ -228,23 +218,30 @@ def main():
             time.sleep(45)
             continue
         uu = uuid_map()
-        by, live = our_by_gpu(uu)
+        by_all, by_city, live = our_by_gpu(uu)
         free = gpu_free()
         pending = [t for t in QUEUE if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)]
         launched = 0
-        order = sorted(range(4), key=lambda g: (by[g], -free.get(g, 0)))
+        order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
         for g in order:
-            while by[g] < MAX_OUR_PER_GPU and free.get(g, 0) >= MIN_FREE_MIB and pending:
+            while (
+                by_all[g] < MAX_OUR_PER_GPU
+                and by_city[g] < MAX_CITY_PER_GPU
+                and free.get(g, 0) >= MIN_FREE_MIB
+                and pending
+            ):
                 if stop_requested() or not host_ram_ok():
                     break
                 tag = pending.pop(0)
                 launch(tag, g)
-                by[g] += 1
+                by_all[g] += 1
+                by_city[g] += 1
                 # optimistic free-mem decrement (~6 GiB/job for Beijing)
                 free[g] = free.get(g, 0) - 6000
                 launched += 1
         print(
-            f"tick launched={launched} per_gpu={[by[g] for g in range(4)]} "
+            f"tick launched={launched} all={[by_all[g] for g in range(4)]} "
+            f"city={[by_city[g] for g in range(4)]} "
             f"free={[free.get(g, 0) for g in range(4)]} pending~={len(pending)}",
             flush=True,
         )
