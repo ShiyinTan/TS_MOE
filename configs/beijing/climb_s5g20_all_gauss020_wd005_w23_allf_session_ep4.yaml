@@ -1,0 +1,7 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w23_allf_session_ep4
+recipe_id: climb_s5g20_all_gauss020_wd005_w23_allf_session_ep4
+description: beijing climb · climb_s5g20_all_gauss020_wd005_w23_allf_session_ep4
+cache: runs/beijing/cache_all_filter_last
+session_summary: on
+epochs: 4
