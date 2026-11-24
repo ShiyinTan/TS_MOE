@@ -1,20 +1,23 @@
 """Per-GPU launch caps for multi-city climb packers.
 
-Rules (prefs 2026-11-24; set to **4** later same day):
-- Default: up to ``TSMOE_MAX_PER_GPU`` (default **4**) of *our* ``tsmoe`` jobs per GPU.
+Rules (prefs 2026-11-25):
+- Default: up to ``TSMOE_MAX_PER_GPU`` (default **2**) of *our* ``tsmoe`` jobs per GPU.
 - If another user has a compute process on that GPU — except users listed in
   ``TSMOE_IGNORE_FOREIGN_USERS`` (default **dl-box**) — cap is
-  ``TSMOE_MAX_PER_GPU_SHARED`` (default **4**, same as free).
+  ``TSMOE_MAX_PER_GPU_SHARED`` (default **2**, same as free).
 - Caps only gate **new** launches. Never kill / stop / signal running jobs
   (ours or foreign) when a GPU is already over the limit — let them finish.
+- Also gate on host RAM, per-GPU free VRAM, and destination filesystem free space.
 """
 from __future__ import annotations
 
 import getpass
 import os
 import pwd
+import shutil
 import subprocess
 from collections import defaultdict
+from pathlib import Path
 
 
 OUR_USER = os.environ.get("TSMOE_OUR_USER") or os.environ.get("USER") or getpass.getuser()
@@ -23,9 +26,13 @@ IGNORE_FOREIGN_USERS = {
     for u in os.environ.get("TSMOE_IGNORE_FOREIGN_USERS", "dl-box").split(",")
     if u.strip()
 }
-MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "4"))
-# User 2026-11-24: per-GPU our-job run limit = 4 (free and shared).
-MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "4"))
+# Prefs 2026-11-25: ≤2 our jobs per GPU (free and shared).
+MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "2"))
+MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "2"))
+# Leave headroom so a new train does not OOM the host / GPU.
+MIN_HOST_RAM_GIB = float(os.environ.get("TSMOE_MIN_HOST_RAM_GIB", "24"))
+MIN_FREE_VRAM_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "6000"))
+MIN_DISK_FREE_GIB = float(os.environ.get("TSMOE_MIN_DISK_FREE_GIB", "8"))
 
 
 def proc_user(pid: int) -> str | None:
@@ -135,3 +142,72 @@ def city_cap(
     if other_city_on_gpu <= 0 and not peer_packers:
         return max(1, gpu_limit)
     return max(1, (gpu_limit + 1) // 2)
+
+
+def host_ram_available_gib() -> float | None:
+    try:
+        meminfo = Path("/proc/meminfo").read_text()
+    except Exception:
+        return None
+    for line in meminfo.splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) / (1024 * 1024)
+    return None
+
+
+def host_ram_ok(min_gib: float | None = None) -> bool:
+    """True when host MemAvailable is above the launch floor."""
+    floor = MIN_HOST_RAM_GIB if min_gib is None else float(min_gib)
+    avail = host_ram_available_gib()
+    if avail is None:
+        return True
+    return avail >= floor
+
+
+def disk_free_gib(path: str | Path) -> float | None:
+    try:
+        usage = shutil.disk_usage(str(path))
+    except Exception:
+        return None
+    return usage.free / (1024 ** 3)
+
+
+def disk_ok(path: str | Path, min_gib: float | None = None) -> bool:
+    """True when ``path``'s filesystem has enough free space for a new train."""
+    floor = MIN_DISK_FREE_GIB if min_gib is None else float(min_gib)
+    free = disk_free_gib(path)
+    if free is None:
+        return True
+    return free >= floor
+
+
+def gpu_free_mib() -> dict[int, int]:
+    free: dict[int, int] = {}
+    for line in subprocess.check_output(
+        ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"],
+        text=True,
+    ).strip().splitlines():
+        i, m = [x.strip() for x in line.split(",")]
+        free[int(i)] = int(float(m))
+    return free
+
+
+def resource_snapshot(runs_path: str | Path | None = None) -> str:
+    """One-line host RAM / VRAM / disk snapshot for packer logs and reports."""
+    ram = host_ram_available_gib()
+    ram_s = f"{ram:.1f}GiB" if ram is not None else "?"
+    try:
+        free = gpu_free_mib()
+        vram_s = ",".join(str(free.get(g, 0)) for g in range(4))
+    except Exception:
+        vram_s = "?"
+    disk_s = "?"
+    if runs_path is not None:
+        d = disk_free_gib(runs_path)
+        if d is not None:
+            disk_s = f"{d:.1f}GiB"
+    return (
+        f"ram_avail={ram_s} (floor={MIN_HOST_RAM_GIB:g}GiB) "
+        f"vram_free_mib=[{vram_s}] (floor={MIN_FREE_VRAM_MIB}) "
+        f"disk_free={disk_s} (floor={MIN_DISK_FREE_GIB:g}GiB)"
+    )

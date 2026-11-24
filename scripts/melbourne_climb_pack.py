@@ -3,8 +3,8 @@
 
 Policy: after a city beats STHGCN, start the next city but keep optimizing the
 winner. Per-GPU our-job caps via ``gpu_pack_limits``:
-  - 4 when GPU has no foreign users (``dl-box`` ignored)
-  - 4 when another user (e.g. camob) is on that GPU
+  - **2** when GPU has no foreign users (``dl-box`` ignored)
+  - **2** when another user (e.g. camob) is on that GPU
 Total our jobs per GPU are capped; cities share via ``all_counts``.
 Over-limit only blocks new launches — never kills already-running jobs.
 
@@ -25,14 +25,19 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from gpu_pack_limits import (  # noqa: E402
     MAX_OUR_PER_GPU_FREE,
     MAX_OUR_PER_GPU_SHARED,
+    MIN_FREE_VRAM_MIB,
     city_cap,
+    disk_ok,
+    gpu_free_mib,
+    host_ram_ok,
     peer_climb_packers_alive,
+    resource_snapshot,
     scan_gpus,
 )
 
 CITY = "melbourne"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
-MIN_FREE_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "2500"))
+MIN_FREE_MIB = MIN_FREE_VRAM_MIB
 LOG = ROOT / "runs" / "packer_logs"
 PIDDIR = ROOT / "logs" / "multicity"
 STOP_SENTINEL = Path(
@@ -357,29 +362,8 @@ def stop_requested() -> bool:
     return False
 
 
-def gpu_free():
-    free = {}
-    for line in subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"], text=True
-    ).strip().splitlines():
-        i, m = [x.strip() for x in line.split(",")]
-        free[int(i)] = int(float(m))
-    return free
 
 
-def host_ram_ok() -> bool:
-    try:
-        meminfo = Path("/proc/meminfo").read_text()
-    except Exception:
-        return True
-    avail_kb = None
-    for line in meminfo.splitlines():
-        if line.startswith("MemAvailable:"):
-            avail_kb = int(line.split()[1])
-            break
-    if avail_kb is None:
-        return True
-    return avail_kb >= 16 * 1024 * 1024
 
 
 def failed(tag: str) -> bool:
@@ -477,15 +461,19 @@ def main():
     print(
         f"{CITY} climb packer queue={len(QUEUE)} "
         f"max_free={MAX_OUR_PER_GPU_FREE} max_shared={MAX_OUR_PER_GPU_SHARED} "
-        f"(foreign except dl-box → shared) stop={STOP_SENTINEL}",
+        f"(foreign except dl-box → shared) stop={STOP_SENTINEL} | "
+        f"{resource_snapshot(ROOT / 'runs')}",
         flush=True,
     )
     while True:
         if stop_requested():
             print(f"STOP sentinel present ({STOP_SENTINEL}) — exit", flush=True)
             break
-        if not host_ram_ok():
-            print("host MemAvailable < 16GiB — skip launches this tick", flush=True)
+        if not host_ram_ok() or not disk_ok(ROOT / "runs"):
+            print(
+                f"resource gate — skip launches this tick | {resource_snapshot(ROOT / 'runs')}",
+                flush=True,
+            )
             time.sleep(45)
             continue
         # Cross-packer lock so BJ/PL don't race-launch past the GPU cap.
@@ -497,11 +485,14 @@ def main():
             fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
             try:
                 by_all, by_city, live, limits, foreign = scan_gpus(CITY)
-                free = gpu_free()
-                pending = [
-                    t for t in QUEUE
-                    if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
-                ]
+                free = gpu_free_mib()
+                if not host_ram_ok() or not disk_ok(ROOT / "runs"):
+                    pending = []
+                else:
+                    pending = [
+                        t for t in QUEUE
+                        if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
+                    ]
                 order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
                 for g in order:
                     lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
@@ -517,7 +508,7 @@ def main():
                         and free.get(g, 0) >= MIN_FREE_MIB
                         and pending
                     ):
-                        if stop_requested() or not host_ram_ok():
+                        if stop_requested() or not host_ram_ok() or not disk_ok(ROOT / "runs"):
                             break
                         tag = pending.pop(0)
                         launch(tag, g, lim)

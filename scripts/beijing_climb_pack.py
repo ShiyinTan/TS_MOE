@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Beijing Acc climb packer (parallel cities; dynamic GPU caps).
+"""Beijing Acc climb packer (active beat city; dynamic GPU caps).
 
-Policy: after a city beats STHGCN, start the next city but keep optimizing the
-winner. Per-GPU our-job caps via ``gpu_pack_limits``:
-  - 4 when GPU has no foreign users (``dl-box`` ignored)
-  - 4 when another user (e.g. camob) is on that GPU
-Total our jobs per GPU are capped; cities share via ``all_counts``.
-Over-limit only blocks new launches — never kills already-running jobs.
+Sequential beat policy (prefs 2026-11-25): finish BJ clear margin before
+starting next unfinished city. Per-GPU our-job caps via ``gpu_pack_limits``:
+  - **2** when GPU has no foreign users (``dl-box`` ignored)
+  - **2** when another user (e.g. camob) is on that GPU
+Also gate on host RAM / free VRAM / disk. Caps only block new launches —
+never kills already-running jobs (ours or foreign).
 
 Never touches foreign processes. Prefer configs under configs/beijing/climb_*.yaml.
 Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
@@ -25,14 +25,19 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from gpu_pack_limits import (  # noqa: E402
     MAX_OUR_PER_GPU_FREE,
     MAX_OUR_PER_GPU_SHARED,
+    MIN_FREE_VRAM_MIB,
     city_cap,
+    disk_ok,
+    gpu_free_mib,
+    host_ram_ok,
     peer_climb_packers_alive,
+    resource_snapshot,
     scan_gpus,
 )
 
 CITY = "beijing"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
-MIN_FREE_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "2500"))
+MIN_FREE_MIB = MIN_FREE_VRAM_MIB
 LOG = ROOT / "runs" / "packer_logs"
 PIDDIR = ROOT / "logs" / "multicity"
 STOP_SENTINEL = Path(
@@ -92,400 +97,6 @@ climb_s5g20_all_gauss020_wd005_w38_p80_explore08_ep3
 climb_s5g20_all_gauss020_wd005_w38_p70_soft0044_ep3
 climb_s5g20_all_gauss020_wd005_w38_p70_bpr205_ep3
 climb_s5g20_all_gauss020_wd005_w38_p70_explore08_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0028_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0032_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0036_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0040_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0045_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0050_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0055_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0060_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0065_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr008_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr011_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr014_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr017_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr020_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr023_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr026_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_bpr029_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_explore005_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_explore0075_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_explore009_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_explore0105_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_explore0125_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_explore015_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_tsb155_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_tsb168_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_tsb182_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_tsb195_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_tsb210_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_tsb230_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_seed35_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_seed43_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_seed44_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_seed55_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_seed69_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_seed70_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0045_session_ep3
-climb_s5g20_all_gauss020_wd005_w37_tgt_soft0055_session_ep3
-climb_s5g20_all_gauss020_wd005_w37_filt_soft0045_ep3
-climb_s5g20_all_gauss020_wd005_w37_filt_soft0055_ep3
-climb_s5g20_all_gauss020_wd005_w37_filt_bpr23_ep3
-climb_s5g20_all_gauss020_wd005_w37_filt_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w37_abl_soft0045_ep3
-climb_s5g20_all_gauss020_wd005_w37_abl_soft0055_ep3
-climb_s5g20_all_gauss020_wd005_w37_abl_bpr23_ep3
-climb_s5g20_all_gauss020_wd005_w37_abl_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w37_p80_soft005_ep3
-climb_s5g20_all_gauss020_wd005_w37_p80_bpr23_ep3
-climb_s5g20_all_gauss020_wd005_w37_p80_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w37_p70_soft005_ep3
-climb_s5g20_all_gauss020_wd005_w37_p70_bpr23_ep3
-climb_s5g20_all_gauss020_wd005_w37_p70_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0029_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0033_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0037_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0041_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0053_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0057_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0063_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr0085_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr010_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr013_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr016_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr019_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr022_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr025_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_bpr028_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_explore0055_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_explore007_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_explore0085_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_explore01_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_explore012_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_explore014_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_tsb16_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_tsb172_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_tsb188_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_tsb205_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_tsb215_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_tsb225_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_seed36_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_seed40_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_seed42_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_seed57_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_seed68_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0047_session_ep3
-climb_s5g20_all_gauss020_wd005_w36_tgt_soft0053_session_ep3
-climb_s5g20_all_gauss020_wd005_w36_filt_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w36_filt_soft0053_ep3
-climb_s5g20_all_gauss020_wd005_w36_filt_bpr22_ep3
-climb_s5g20_all_gauss020_wd005_w36_filt_explore085_ep3
-climb_s5g20_all_gauss020_wd005_w36_abl_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w36_abl_soft0053_ep3
-climb_s5g20_all_gauss020_wd005_w36_abl_bpr22_ep3
-climb_s5g20_all_gauss020_wd005_w36_abl_explore085_ep3
-climb_s5g20_all_gauss020_wd005_w36_p80_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w36_p80_bpr22_ep3
-climb_s5g20_all_gauss020_wd005_w36_p80_explore085_ep3
-climb_s5g20_all_gauss020_wd005_w36_p70_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w36_p70_bpr22_ep3
-climb_s5g20_all_gauss020_wd005_w36_p70_explore085_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0031_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0035_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0038_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0042_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0048_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0052_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0056_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0061_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr009_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr0105_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr0125_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr0155_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr0185_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr0215_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr0245_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_bpr0275_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_explore0065_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_explore008_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_explore0095_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_explore011_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_explore013_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_tsb165_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_tsb178_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_tsb192_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_tsb208_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_tsb222_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_seed37_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_seed41_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_seed58_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_seed65_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_seed66_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0048_session_ep3
-climb_s5g20_all_gauss020_wd005_w35_tgt_soft0052_session_ep3
-climb_s5g20_all_gauss020_wd005_w35_filt_soft0048_ep3
-climb_s5g20_all_gauss020_wd005_w35_filt_soft0052_ep3
-climb_s5g20_all_gauss020_wd005_w35_filt_bpr215_ep3
-climb_s5g20_all_gauss020_wd005_w35_filt_explore095_ep3
-climb_s5g20_all_gauss020_wd005_w35_abl_soft0048_ep3
-climb_s5g20_all_gauss020_wd005_w35_abl_soft0052_ep3
-climb_s5g20_all_gauss020_wd005_w35_abl_bpr215_ep3
-climb_s5g20_all_gauss020_wd005_w35_abl_explore095_ep3
-climb_s5g20_all_gauss020_wd005_w35_p80_soft005_ep3
-climb_s5g20_all_gauss020_wd005_w35_p80_bpr20_ep3
-climb_s5g20_all_gauss020_wd005_w35_p80_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w35_p70_soft005_ep3
-climb_s5g20_all_gauss020_wd005_w35_p70_bpr20_ep3
-climb_s5g20_all_gauss020_wd005_w35_p70_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0034_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0039_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0043_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0049_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0051_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0059_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_bpr0095_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_bpr0115_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_bpr0145_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_bpr0195_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_bpr0225_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_bpr0265_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_explore007_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_explore009_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_explore011_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_explore0125_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_tsb173_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_tsb187_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_tsb203_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_tsb218_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_seed38_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_seed62_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_seed63_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_seed64_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0049_session_ep3
-climb_s5g20_all_gauss020_wd005_w34_tgt_soft0051_session_ep3
-climb_s5g20_all_gauss020_wd005_w34_abl_soft0049_ep3
-climb_s5g20_all_gauss020_wd005_w34_abl_soft0051_ep3
-climb_s5g20_all_gauss020_wd005_w34_abl_bpr225_ep3
-climb_s5g20_all_gauss020_wd005_w34_abl_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w34_filt_soft0049_ep3
-climb_s5g20_all_gauss020_wd005_w34_filt_soft0051_ep3
-climb_s5g20_all_gauss020_wd005_w34_filt_bpr225_ep3
-climb_s5g20_all_gauss020_wd005_w34_filt_explore09_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0033_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0037_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0041_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0053_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0057_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_bpr0105_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_bpr0135_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_bpr0165_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_bpr0185_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_bpr0215_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_bpr0245_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_explore0065_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_explore008_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_explore01_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_explore012_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_tsb17_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_tsb182_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_tsb198_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_tsb212_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_seed39_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_seed59_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_seed60_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_seed61_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0047_session_ep3
-climb_s5g20_all_gauss020_wd005_w33_tgt_soft0053_session_ep3
-climb_s5g20_all_gauss020_wd005_w33_abl_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w33_abl_soft0053_ep3
-climb_s5g20_all_gauss020_wd005_w33_abl_bpr215_ep3
-climb_s5g20_all_gauss020_wd005_w33_abl_explore08_ep3
-climb_s5g20_all_gauss020_wd005_w33_filt_soft0047_ep3
-climb_s5g20_all_gauss020_wd005_w33_filt_soft0053_ep3
-climb_s5g20_all_gauss020_wd005_w33_filt_bpr215_ep3
-climb_s5g20_all_gauss020_wd005_w33_filt_explore08_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0032_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0036_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0044_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0046_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0054_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0062_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_bpr009_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_bpr0125_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_bpr0155_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_bpr0175_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_bpr0205_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_bpr0255_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_bpr029_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_explore0055_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_explore0075_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_explore0095_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_explore0115_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_explore0135_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_tsb168_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_tsb178_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_tsb192_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_tsb208_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_tsb225_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_seed40_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_seed54_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_seed56_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_seed57_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_seed58_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_wd0002_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_wd0007_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_wd001_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0044_session_ep3
-climb_s5g20_all_gauss020_wd005_w32_tgt_soft0054_session_ep3
-climb_s5g20_all_gauss020_wd005_w32_abl_soft0044_ep3
-climb_s5g20_all_gauss020_wd005_w32_abl_soft0054_ep3
-climb_s5g20_all_gauss020_wd005_w32_abl_bpr205_ep3
-climb_s5g20_all_gauss020_wd005_w32_abl_explore095_ep3
-climb_s5g20_all_gauss020_wd005_w32_abl_session_ep3
-climb_s5g20_all_gauss020_wd005_w32_filt_soft0044_ep3
-climb_s5g20_all_gauss020_wd005_w32_filt_soft0054_ep3
-climb_s5g20_all_gauss020_wd005_w32_filt_bpr205_ep3
-climb_s5g20_all_gauss020_wd005_w32_filt_explore095_ep3
-climb_s5g20_all_gauss020_wd005_w32_filt_session_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_soft0038_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_soft0042_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_soft0048_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_soft0052_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_soft0058_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_bpr011_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_bpr013_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_bpr017_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_bpr019_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_bpr023_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_bpr027_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_explore007_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_explore0085_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_explore0105_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_explore013_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_tsb165_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_tsb172_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_tsb188_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_tsb215_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_seed41_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_seed49_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_seed51_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_seed52_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_seed53_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_soft0048_session_ep3
-climb_s5g20_all_gauss020_wd005_w31_tgt_soft0052_session_ep3
-climb_s5g20_all_gauss020_wd005_w31_abl_soft0048_ep3
-climb_s5g20_all_gauss020_wd005_w31_abl_soft0052_ep3
-climb_s5g20_all_gauss020_wd005_w31_abl_bpr023_ep3
-climb_s5g20_all_gauss020_wd005_w31_abl_explore085_ep3
-climb_s5g20_all_gauss020_wd005_w31_filt_soft0048_ep3
-climb_s5g20_all_gauss020_wd005_w31_filt_soft0052_ep3
-climb_s5g20_all_gauss020_wd005_w31_filt_bpr023_ep3
-climb_s5g20_all_gauss020_wd005_w31_filt_explore085_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft0035_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft0045_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft0055_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft0065_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft007_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_bpr01_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_bpr014_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_bpr016_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_bpr02_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_bpr024_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_bpr026_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_bpr03_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_explore006_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_explore009_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_explore011_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_explore014_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_tsb17_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_tsb185_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_tsb195_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_tsb205_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_tsb22_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_ssb01_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_ssb015_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_ssb02_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_ssb025_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_ssb03_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_seed46_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_seed47_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_seed48_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_seed50_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_seed55_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_wd0003_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_wd0004_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_wd0006_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_wd0008_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft0045_session_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft0055_session_ep3
-climb_s5g20_all_gauss020_wd005_w30_tgt_soft0065_session_ep3
-climb_s5g20_all_gauss020_wd005_w30_abl_soft0045_ep3
-climb_s5g20_all_gauss020_wd005_w30_abl_soft0055_ep3
-climb_s5g20_all_gauss020_wd005_w30_abl_bpr02_ep3
-climb_s5g20_all_gauss020_wd005_w30_abl_bpr026_ep3
-climb_s5g20_all_gauss020_wd005_w30_abl_explore011_ep3
-climb_s5g20_all_gauss020_wd005_w30_abl_session_ep3
-climb_s5g20_all_gauss020_wd005_w30_filt_soft0045_ep3
-climb_s5g20_all_gauss020_wd005_w30_filt_soft0055_ep3
-climb_s5g20_all_gauss020_wd005_w30_filt_bpr02_ep3
-climb_s5g20_all_gauss020_wd005_w30_filt_bpr026_ep3
-climb_s5g20_all_gauss020_wd005_w30_filt_explore011_ep3
-climb_s5g20_all_gauss020_wd005_w30_filt_session_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft003_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft004_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft005_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft006_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft008_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_bpr012_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_bpr015_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_bpr018_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_bpr022_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_bpr028_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_bpr031_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_explore008_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_explore01_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_explore012_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_explore015_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_tsb18_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_tsb19_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_tsb20_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_tsb21_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_seed42_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_seed43_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_seed44_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_seed45_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft004_session_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft005_session_ep3
-climb_s5g20_all_gauss020_wd005_w29_tgt_soft006_session_ep3
-climb_s5g20_all_gauss020_wd005_w29_abl_soft004_ep3
-climb_s5g20_all_gauss020_wd005_w29_abl_soft005_ep3
-climb_s5g20_all_gauss020_wd005_w29_abl_soft006_ep3
-climb_s5g20_all_gauss020_wd005_w29_abl_explore010_ep3
-climb_s5g20_all_gauss020_wd005_w29_abl_bpr28_ep3
-climb_s5g20_all_gauss020_wd005_w29_filt_soft004_ep3
-climb_s5g20_all_gauss020_wd005_w29_filt_soft005_ep3
-climb_s5g20_all_gauss020_wd005_w29_filt_soft006_ep3
-climb_s5g20_all_gauss020_wd005_w29_filt_explore010_ep3
-climb_s5g20_all_gauss020_wd005_w29_filt_bpr28_ep3
-climb_s5g20_all_gauss020_wd005_w28_allf_seed101
-climb_s5g20_all_gauss020_wd005_w28_allf_seed102
-climb_s5g20_all_gauss020_wd005_w28_allf_seed103_ep3
-climb_s5g20_all_gauss020_wd005_w28_allf_soft048
-climb_s5g20_all_gauss020_wd005_w28_allf_soft052
-climb_s5g20_all_gauss020_wd005_w28_allf_explore010_ep3
-climb_s5g20_all_gauss020_wd005_w28_allf_session_ep3
-climb_s5g20_all_gauss020_wd005_w28_allf_hour012_ep3
-climb_s5g20_all_gauss020_wd005_w28_filt_session_ep3
-climb_s5g20_all_gauss020_wd005_w28_filt_soft050_ep3
-climb_s5g20_all_gauss020_wd005_w28_tgt_explore012_ep3
-climb_s5g20_all_gauss020_wd005_w28_tgt_session_ep3
-climb_s5g20_all_gauss020_wd005_w28_allf_tsb19_ep3
-climb_s5g20_all_gauss020_wd005_w28_allf_bpr31_ep3
-climb_s5g20_all_gauss020_wd005_w28_p70_session_ep3
-climb_s5g20_all_gauss020_wd005_w28_p80_soft050_session
 """.strip().splitlines()]
 
 
@@ -498,29 +109,8 @@ def stop_requested() -> bool:
     return False
 
 
-def gpu_free():
-    free = {}
-    for line in subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"], text=True
-    ).strip().splitlines():
-        i, m = [x.strip() for x in line.split(",")]
-        free[int(i)] = int(float(m))
-    return free
 
 
-def host_ram_ok() -> bool:
-    try:
-        meminfo = Path("/proc/meminfo").read_text()
-    except Exception:
-        return True
-    avail_kb = None
-    for line in meminfo.splitlines():
-        if line.startswith("MemAvailable:"):
-            avail_kb = int(line.split()[1])
-            break
-    if avail_kb is None:
-        return True
-    return avail_kb >= 16 * 1024 * 1024
 
 
 def failed(tag: str) -> bool:
@@ -618,15 +208,19 @@ def main():
     print(
         f"{CITY} climb packer queue={len(QUEUE)} "
         f"max_free={MAX_OUR_PER_GPU_FREE} max_shared={MAX_OUR_PER_GPU_SHARED} "
-        f"(foreign except dl-box → shared) stop={STOP_SENTINEL}",
+        f"(foreign except dl-box → shared) stop={STOP_SENTINEL} | "
+        f"{resource_snapshot(ROOT / 'runs')}",
         flush=True,
     )
     while True:
         if stop_requested():
             print(f"STOP sentinel present ({STOP_SENTINEL}) — exit", flush=True)
             break
-        if not host_ram_ok():
-            print("host MemAvailable < 16GiB — skip launches this tick", flush=True)
+        if not host_ram_ok() or not disk_ok(ROOT / "runs"):
+            print(
+                f"resource gate — skip launches this tick | {resource_snapshot(ROOT / 'runs')}",
+                flush=True,
+            )
             time.sleep(45)
             continue
         # Cross-packer lock so BJ/PL don't race-launch past the GPU cap.
@@ -638,11 +232,14 @@ def main():
             fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
             try:
                 by_all, by_city, live, limits, foreign = scan_gpus(CITY)
-                free = gpu_free()
-                pending = [
-                    t for t in QUEUE
-                    if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
-                ]
+                free = gpu_free_mib()
+                if not host_ram_ok() or not disk_ok(ROOT / "runs"):
+                    pending = []
+                else:
+                    pending = [
+                        t for t in QUEUE
+                        if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
+                    ]
                 order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
                 for g in order:
                     lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
@@ -658,7 +255,7 @@ def main():
                         and free.get(g, 0) >= MIN_FREE_MIB
                         and pending
                     ):
-                        if stop_requested() or not host_ram_ok():
+                        if stop_requested() or not host_ram_ok() or not disk_ok(ROOT / "runs"):
                             break
                         tag = pending.pop(0)
                         launch(tag, g, lim)
