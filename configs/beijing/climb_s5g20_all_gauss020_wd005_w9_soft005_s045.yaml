@@ -1,0 +1,7 @@
+# beijing wave9 · climb_s5g20_all_gauss020_wd005_w9_soft005_s045
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w9_soft005_s045
+recipe_id: climb_s5g20_all_gauss020_wd005_w9_soft005_s045
+description: "Beijing wave9 Acc climb · w9_soft005_s045"
+soft_target_beta: 0.05
+gauss_sigma_km: 0.45
