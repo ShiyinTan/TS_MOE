@@ -13,7 +13,8 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 | [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md) | **Model baseline** — Basic design & §19 starters |
 | [`docs/model-settings.md`](docs/model-settings.md) | **Added settings** vs Basic (router · WIN · Acc climb) |
 | [`docs/experiments.md`](docs/experiments.md) | **Experiment settings + Acc/R** · Keep/Discard |
-| [`docs/beijing-acc-climb-path.md`](docs/beijing-acc-climb-path.md) | **Beijing Acc climb path** (tables · vs STHGCN) |
+| [`results/beijing/`](results/beijing/README.md) | **Beijing Acc climb bundle** (path · settings summary · mean±std) |
+| [`docs/beijing-acc-climb-path.md`](docs/beijing-acc-climb-path.md) | Beijing Acc climb path (doc copy) |
 | [`docs/design-notes.md`](docs/design-notes.md) | **Why** — design intent of climb levers |
 | [`docs/runbook.md`](docs/runbook.md) | **Runnable commands** only (`python -m tsmoe …` / `--config`) |
 | [`configs/`](configs/) | Base / WIN / Peak YAML recipes per Massive-STEPS city |

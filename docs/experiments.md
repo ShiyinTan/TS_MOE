@@ -3,7 +3,7 @@
 **Protocol:** Tokyo · judge **`known_only` Acc@1** (Hit@1 / Recall@1) unless noted · cache usually `runs/tokyo/cache_abl_tgt_last` · seed 42 · ep1 · `--checkpoint-metric acc1`.  
 **Base model settings:** [`../TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](../TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md).  
 **Added knobs:** [`model-settings.md`](model-settings.md). **Why:** [`design-notes.md`](design-notes.md). **Commands:** [`runbook.md`](runbook.md).  
-**Multi-city Beijing climb path (tables):** [`beijing-acc-climb-path.md`](beijing-acc-climb-path.md).
+**Multi-city Beijing climb bundle:** [`../results/beijing/`](../results/beijing/README.md) (`climb_path` · `settings_summary` · `mean_std`). Doc copy: [`beijing-acc-climb-path.md`](beijing-acc-climb-path.md).
 
 Metrics live under `results/<run>/eval_*/{metrics.json,report.txt}` (gitignored). Checkpoints under `runs/`.
 

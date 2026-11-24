@@ -37,7 +37,7 @@
 | Soft target | β=0.05 · prior=`revisit` |
 | 空间先验 | **gauss_geo_bias=0.20** · σ=0.5 km · **geo_score_bias=0** |
 | 正则 | **weight_decay=0.005**（默认 0.01） |
-| Acc@1 / R@5 / R@10 / R@20 | **0.454545** / 0.625 / 0.727 / 0.784 |
+| Acc@1 / R@5 / R@10 / R@20 | **0.454545** / 0.659 / 0.727 / 0.784 |
 | 并列 | `climb_s5g20_all_gauss020_wd02`（wd=0.02，同 Acc） |
 
 启动：
@@ -84,3 +84,19 @@ python -m tsmoe train --config configs/beijing/climb_s5g20_all_gauss020_wd005.ya
 | **Beijing** | **0.4545** | 0.453 | **+0.0015** | `configs/beijing/climb_s5g20_all_gauss020_wd005.yaml` |
 
 下一城（按 check-in 从小到大）：**Palembang**（interim 0.2287 vs 0.246）。
+
+---
+
+## 6. 结果落盘位置
+
+机器可读摘要写在 **`results/beijing/`**（与各 run 的 `eval_test/` 同级）：
+
+| 文件 | 内容 |
+| --- | --- |
+| [`results/beijing/climb_path.md`](../results/beijing/climb_path.md) | 提升路径表格 |
+| [`results/beijing/settings_summary.md`](../results/beijing/settings_summary.md) / `.csv` | 各设定 known_only Acc / R |
+| [`results/beijing/mean_std.md`](../results/beijing/mean_std.md) / `.csv` | 同设定多次运行 mean±std |
+
+```bash
+python scripts/city_results_bundle.py --city beijing --sthgcn 0.453
+```
