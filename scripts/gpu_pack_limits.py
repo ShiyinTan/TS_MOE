@@ -99,11 +99,14 @@ def scan_gpus(city: str):
     return by_all, by_city, live, limits, dict(foreign)
 
 
-def city_cap(gpu_limit: int) -> int:
+def city_cap(gpu_limit: int, other_city_on_gpu: int = 0) -> int:
     """Per-city share so two city packers can run in parallel under the GPU cap.
 
     About half of the per-GPU our-job limit (ceil so odd limits are usable;
-    at least 1). Total our jobs still enforced via all_counts; never kills
-    over-limit runners.
+    at least 1). When the *other* city has no jobs on this GPU, allow the
+    full ``gpu_limit`` so capacity is not left idle. Total our jobs still
+    enforced via all_counts; never kills over-limit runners.
     """
+    if other_city_on_gpu <= 0:
+        return max(1, gpu_limit)
     return max(1, (gpu_limit + 1) // 2)

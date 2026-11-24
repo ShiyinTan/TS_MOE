@@ -248,7 +248,8 @@ def main():
                 order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
                 for g in order:
                     lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
-                    ccap = city_cap(lim)
+                    other = by_all[g] - by_city[g]
+                    ccap = city_cap(lim, other_city_on_gpu=other)
                     # Over-limit: skip new launches only — never kill already-running jobs.
                     if by_all[g] > lim:
                         over.append(f"gpu{g}:{by_all[g]}>lim{lim}")

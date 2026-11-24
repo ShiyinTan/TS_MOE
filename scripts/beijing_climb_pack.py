@@ -40,30 +40,30 @@ STOP_SENTINEL = Path(
 PACK_LOCK = PIDDIR / "packer_launch.lock"
 
 QUEUE = [line.strip() for line in """
-climb_s5g20_all_gauss020_wd005_w26_allf_soft049_tsb20
-climb_s5g20_all_gauss020_wd005_w26_allf_soft054_explore014
-climb_s5g20_all_gauss020_wd005_w26_allf_session_explore012
-climb_s5g20_all_gauss020_wd005_w26_allf_session_ssb258
-climb_s5g20_all_gauss020_wd005_w26_allf_hour014_ep3
-climb_s5g20_all_gauss020_wd005_w26_allf_user_pref_explore
-climb_s5g20_all_gauss020_wd005_w26_allf_bpr31_ep3
-climb_s5g20_all_gauss020_wd005_w26_allf_seed99
-climb_s5g20_all_gauss020_wd005_w26_allf_seed100_ep3
-climb_s5g20_all_gauss020_wd005_w26_allf_tr_pmi_session
-climb_s5g20_all_gauss020_wd005_w26_allf_geo_adapt_ep3
-climb_s5g20_all_gauss020_wd005_w26_allf_wd48_soft051
-climb_s5g20_all_gauss020_wd005_w26_tgt_session_explore012
-climb_s5g20_all_gauss020_wd005_w26_tgt_soft054_ep3
-climb_s5g20_all_gauss020_wd005_w26_tgt_seed101
-climb_s5g20_all_gauss020_wd005_w26_tgt_bpr_simce_session
-climb_s5g20_all_gauss020_wd005_w26_abl_session_explore012
-climb_s5g20_all_gauss020_wd005_w26_abl_soft054_ep3
-climb_s5g20_all_gauss020_wd005_w26_filt_session_ssb258
-climb_s5g20_all_gauss020_wd005_w26_filt_explore014
-climb_s5g20_all_gauss020_wd005_w26_p70_session_explore
-climb_s5g20_all_gauss020_wd005_w26_p80_soft054_session
-climb_s5g20_all_gauss020_wd005_w26_max_explore014_ep3
-climb_s5g20_all_gauss020_wd005_w26_allf_xattn_session
+climb_s5g20_all_gauss020_wd005_w27_allf_soft050_session
+climb_s5g20_all_gauss020_wd005_w27_allf_soft052_explore012
+climb_s5g20_all_gauss020_wd005_w27_allf_session_ep3_ssb255
+climb_s5g20_all_gauss020_wd005_w27_allf_hour010_session
+climb_s5g20_all_gauss020_wd005_w27_allf_bpr_simce_ep3
+climb_s5g20_all_gauss020_wd005_w27_allf_user_pref_ep3
+climb_s5g20_all_gauss020_wd005_w27_allf_seed102
+climb_s5g20_all_gauss020_wd005_w27_allf_seed103_ep3
+climb_s5g20_all_gauss020_wd005_w27_allf_wd50_ep3
+climb_s5g20_all_gauss020_wd005_w27_allf_tr_pmi_ep3
+climb_s5g20_all_gauss020_wd005_w27_allf_neg_adapt_ep3
+climb_s5g20_all_gauss020_wd005_w27_allf_xattn_ep3
+climb_s5g20_all_gauss020_wd005_w27_tgt_session_soft050
+climb_s5g20_all_gauss020_wd005_w27_tgt_explore012_ep3
+climb_s5g20_all_gauss020_wd005_w27_tgt_seed104
+climb_s5g20_all_gauss020_wd005_w27_tgt_bpr28_session
+climb_s5g20_all_gauss020_wd005_w27_abl_session_ep3
+climb_s5g20_all_gauss020_wd005_w27_abl_explore012
+climb_s5g20_all_gauss020_wd005_w27_filt_session_soft050
+climb_s5g20_all_gauss020_wd005_w27_filt_explore012_ep3
+climb_s5g20_all_gauss020_wd005_w27_p70_session_ep3
+climb_s5g20_all_gauss020_wd005_w27_p80_soft050_session
+climb_s5g20_all_gauss020_wd005_w27_max_session_explore
+climb_s5g20_all_gauss020_wd005_w27_allf_soft053_tsb19
 """.strip().splitlines()]
 
 
@@ -224,7 +224,8 @@ def main():
                 order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
                 for g in order:
                     lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
-                    ccap = city_cap(lim)
+                    other = by_all[g] - by_city[g]
+                    ccap = city_cap(lim, other_city_on_gpu=other)
                     # Over-limit: skip new launches only — never kill already-running jobs.
                     if by_all[g] > lim:
                         over.append(f"gpu{g}:{by_all[g]}>lim{lim}")
