@@ -1,0 +1,8 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w21_allf_ep3_soft_tsb
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w21_allf_ep3_soft_tsb
+recipe_id: climb_s5g20_all_gauss020_wd005_w21_allf_ep3_soft_tsb
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w21_allf_ep3_soft_tsb"
+cache: "runs/beijing/cache_all_filter_last"
+epochs: 3
+soft_target_prior: "tsb,revisit"
