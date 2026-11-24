@@ -3,5 +3,5 @@ out: runs/beijing/climb_s5g20_all_gauss020_wd005_w22_filt_soft_tsb_ssb255
 recipe_id: climb_s5g20_all_gauss020_wd005_w22_filt_soft_tsb_ssb255
 description: beijing climb · climb_s5g20_all_gauss020_wd005_w22_filt_soft_tsb_ssb255
 cache: runs/beijing/cache_filter_last
-soft_target_prior: tsb,revisit
+soft_target_prior: "tsb,revisit"
 surd_score_bias: 0.255

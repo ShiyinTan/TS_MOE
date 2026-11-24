@@ -3,5 +3,5 @@ out: runs/palembang/climb_tsb20_bpr020_filter_w9_abl_session_ep2
 recipe_id: climb_tsb20_bpr020_filter_w9_abl_session_ep2
 description: palembang climb · climb_tsb20_bpr020_filter_w9_abl_session_ep2
 cache: runs/palembang/cache_abl_tgt_last
-session_summary: on
+session_summary: "on"
 epochs: 2
