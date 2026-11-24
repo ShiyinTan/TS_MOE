@@ -3,8 +3,8 @@
 
 Policy: after a city beats STHGCN, start the next city but keep optimizing the
 winner. Per-GPU our-job caps via ``gpu_pack_limits``:
-  - 6 when GPU has no foreign users (``dl-box`` ignored)
-  - 5 when another user (e.g. camob) is on that GPU
+  - 4 when GPU has no foreign users (``dl-box`` ignored)
+  - 4 when another user (e.g. camob) is on that GPU
 Total our jobs per GPU are capped; cities share via ``all_counts``.
 Over-limit only blocks new launches — never kills already-running jobs.
 

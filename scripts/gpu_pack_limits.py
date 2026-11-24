@@ -1,10 +1,10 @@
 """Per-GPU launch caps for multi-city climb packers.
 
-Rules (prefs 2026-11-24; raised later same day):
-- Default: up to ``TSMOE_MAX_PER_GPU`` (default **6**) of *our* ``tsmoe`` jobs per GPU.
+Rules (prefs 2026-11-24; set to **4** later same day):
+- Default: up to ``TSMOE_MAX_PER_GPU`` (default **4**) of *our* ``tsmoe`` jobs per GPU.
 - If another user has a compute process on that GPU — except users listed in
-  ``TSMOE_IGNORE_FOREIGN_USERS`` (default **dl-box**) — cap drops to
-  ``TSMOE_MAX_PER_GPU_SHARED`` (default **5**; raised from 3 to fill free VRAM).
+  ``TSMOE_IGNORE_FOREIGN_USERS`` (default **dl-box**) — cap is
+  ``TSMOE_MAX_PER_GPU_SHARED`` (default **4**, same as free).
 - Caps only gate **new** launches. Never kill / stop / signal running jobs
   (ours or foreign) when a GPU is already over the limit — let them finish.
 """
@@ -23,10 +23,9 @@ IGNORE_FOREIGN_USERS = {
     for u in os.environ.get("TSMOE_IGNORE_FOREIGN_USERS", "dl-box").split(",")
     if u.strip()
 }
-MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "6"))
-# Default 5: camob ~17GiB/GPU leaves ~28GiB free; user 2026-11-24 asked to fill
-# unused capacity while shared. Override via TSMOE_MAX_PER_GPU_SHARED.
-MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "5"))
+MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "4"))
+# User 2026-11-24: per-GPU our-job run limit = 4 (free and shared).
+MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "4"))
 
 
 def proc_user(pid: int) -> str | None:
