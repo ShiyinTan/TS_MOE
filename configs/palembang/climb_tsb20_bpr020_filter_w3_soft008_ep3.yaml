@@ -1,0 +1,7 @@
+# palembang · climb_tsb20_bpr020_filter_w3_soft008_ep3
+extends: ./climb_tsb20_bpr020_filter_soft008.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w3_soft008_ep3
+recipe_id: climb_tsb20_bpr020_filter_w3_soft008_ep3
+description: "palembang climb · w3_soft008_ep3"
+soft_target_beta: 0.08
+epochs: 3

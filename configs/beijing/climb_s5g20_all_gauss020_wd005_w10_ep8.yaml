@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w10_ep8
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w10_ep8
+recipe_id: climb_s5g20_all_gauss020_wd005_w10_ep8
+description: "beijing climb · w10_ep8"
+epochs: 8

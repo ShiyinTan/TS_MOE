@@ -1,0 +1,7 @@
+# palembang · climb_tsb20_bpr020_filter_w3_soft008_bpr015
+extends: ./climb_tsb20_bpr020_filter_soft008.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w3_soft008_bpr015
+recipe_id: climb_tsb20_bpr020_filter_w3_soft008_bpr015
+description: "palembang climb · w3_soft008_bpr015"
+soft_target_beta: 0.08
+bpr_margin: 0.15
