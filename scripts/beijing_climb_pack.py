@@ -13,6 +13,7 @@ Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
 import sys
@@ -36,6 +37,7 @@ PIDDIR = ROOT / "logs" / "multicity"
 STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
+PACK_LOCK = PIDDIR / "packer_launch.lock"
 
 QUEUE = [line.strip() for line in """
 climb_s5g20_all_gauss020_wd005_w10_soft008
@@ -189,35 +191,43 @@ def main():
             print("host MemAvailable < 16GiB — skip launches this tick", flush=True)
             time.sleep(45)
             continue
-        by_all, by_city, live, limits, foreign = scan_gpus(CITY)
-        free = gpu_free()
-        pending = [
-            t for t in QUEUE
-            if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
-        ]
-        launched = 0
-        order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
-        over = []
-        for g in order:
-            lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
-            ccap = city_cap(lim)
-            # Over-limit: skip new launches only — never kill already-running jobs.
-            if by_all[g] > lim:
-                over.append(f"gpu{g}:{by_all[g]}>lim{lim}")
-            while (
-                by_all[g] < lim
-                and by_city[g] < ccap
-                and free.get(g, 0) >= MIN_FREE_MIB
-                and pending
-            ):
-                if stop_requested() or not host_ram_ok():
-                    break
-                tag = pending.pop(0)
-                launch(tag, g, lim)
-                by_all[g] += 1
-                by_city[g] += 1
-                free[g] = free.get(g, 0) - 2000
-                launched += 1
+        # Cross-packer lock so BJ/PL don't race-launch past the GPU cap.
+        # Over-limit still never kills — lock only serializes new launches.
+        PIDDIR.mkdir(parents=True, exist_ok=True)
+        with open(PACK_LOCK, "a+", encoding="utf-8") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            try:
+                by_all, by_city, live, limits, foreign = scan_gpus(CITY)
+                free = gpu_free()
+                pending = [
+                    t for t in QUEUE
+                    if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
+                ]
+                launched = 0
+                order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
+                over = []
+                for g in order:
+                    lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
+                    ccap = city_cap(lim)
+                    # Over-limit: skip new launches only — never kill already-running jobs.
+                    if by_all[g] > lim:
+                        over.append(f"gpu{g}:{by_all[g]}>lim{lim}")
+                    while (
+                        by_all[g] < lim
+                        and by_city[g] < ccap
+                        and free.get(g, 0) >= MIN_FREE_MIB
+                        and pending
+                    ):
+                        if stop_requested() or not host_ram_ok():
+                            break
+                        tag = pending.pop(0)
+                        launch(tag, g, lim)
+                        by_all[g] += 1
+                        by_city[g] += 1
+                        free[g] = free.get(g, 0) - 2000
+                        launched += 1
+            finally:
+                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
         if over:
             print(
                 f"over-limit (leave running, no kill): {', '.join(over)}",
