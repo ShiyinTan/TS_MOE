@@ -1,0 +1,7 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w26_filt_session_ssb258
+recipe_id: climb_s5g20_all_gauss020_wd005_w26_filt_session_ssb258
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w26_filt_session_ssb258"
+cache: "runs/beijing/cache_filter_last"
+session_summary: "on"
+surd_score_bias: 0.258
