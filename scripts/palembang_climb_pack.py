@@ -26,6 +26,7 @@ from gpu_pack_limits import (  # noqa: E402
     MAX_OUR_PER_GPU_FREE,
     MAX_OUR_PER_GPU_SHARED,
     city_cap,
+    peer_climb_packers_alive,
     scan_gpus,
 )
 
@@ -249,7 +250,8 @@ def main():
                 for g in order:
                     lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
                     other = by_all[g] - by_city[g]
-                    ccap = city_cap(lim, other_city_on_gpu=other)
+                    peers = peer_climb_packers_alive(CITY)
+                    ccap = city_cap(lim, other_city_on_gpu=other, peer_packers=peers)
                     # Over-limit: skip new launches only — never kill already-running jobs.
                     if by_all[g] > lim:
                         over.append(f"gpu{g}:{by_all[g]}>lim{lim}")

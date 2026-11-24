@@ -101,14 +101,38 @@ def scan_gpus(city: str):
     return by_all, by_city, live, limits, dict(foreign)
 
 
-def city_cap(gpu_limit: int, other_city_on_gpu: int = 0) -> int:
-    """Per-city share so two city packers can run in parallel under the GPU cap.
+def peer_climb_packers_alive(self_city: str) -> bool:
+    """True if another ``*_climb_pack.py`` process is running (not this city)."""
+    try:
+        out = subprocess.check_output(["ps", "-eo", "args="], text=True, errors="ignore")
+    except Exception:
+        return False
+    needle_self = f"{self_city}_climb_pack.py"
+    for line in out.splitlines():
+        if "_climb_pack.py" not in line:
+            continue
+        if needle_self in line:
+            continue
+        # ignore editors / grep noise
+        if "python" not in line:
+            continue
+        return True
+    return False
+
+
+def city_cap(
+    gpu_limit: int,
+    other_city_on_gpu: int = 0,
+    peer_packers: bool = False,
+) -> int:
+    """Per-city share so multi-city packers can run in parallel under the GPU cap.
 
     About half of the per-GPU our-job limit (ceil so odd limits are usable;
-    at least 1). When the *other* city has no jobs on this GPU, allow the
-    full ``gpu_limit`` so capacity is not left idle. Total our jobs still
-    enforced via all_counts; never kills over-limit runners.
+    at least 1). Full ``gpu_limit`` only when this packer is alone *and* no
+    peer climb packer is alive — otherwise a deep queue monopolizes forever
+    and newer cities never get a foothold. Total our jobs still enforced via
+    all_counts; never kills over-limit runners.
     """
-    if other_city_on_gpu <= 0:
+    if other_city_on_gpu <= 0 and not peer_packers:
         return max(1, gpu_limit)
     return max(1, (gpu_limit + 1) // 2)
