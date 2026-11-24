@@ -1,0 +1,7 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w20_allf_dtbins
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w20_allf_dtbins
+recipe_id: climb_s5g20_all_gauss020_wd005_w20_allf_dtbins
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w20_allf_dtbins"
+cache: "runs/beijing/cache_all_filter_last"
+transition_dt_bins: "1h,6h,24h"
