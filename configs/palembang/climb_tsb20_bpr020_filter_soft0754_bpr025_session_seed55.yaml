@@ -1,0 +1,10 @@
+# Palembang Acc lift Acc@1=0.259690 (eval_test known_only)
+# Source: climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr025
+# Was 0.257106; STHGCN 0.246 → margin +0.0137 — continue climb
+extends: ./climb_tsb20_bpr020_filter_soft0754_bpr027_session_seed55.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55
+recipe_id: climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55
+description: "palembang Acc lift · soft0754+bpr025+session seed55 Acc@1=0.259690"
+soft_target_beta: 0.0754
+lambda_bpr: 0.25
+seed: 55

@@ -1,3 +1,4 @@
+# Superseded by tgt_soft0078_session_seed40_win Acc@1=0.168277
 # Melbourne Acc lift Acc@1=0.161836 (eval_test known_only)
 # Source: climb_bpr020_soft010_w4_tgt_seed43_soft008_session_tsb18 · cache_tgt_all_eval_last
 # Was 0.158615; STHGCN 0.168 → gap −0.0062; continue climb

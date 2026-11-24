@@ -1,0 +1,9 @@
+extends: ./climb_bpr020_soft010_tgt_soft0078_session_seed40_win.yaml
+out: runs/melbourne/climb_bpr020_soft010_w7_tgt_seed40_soft0078_session_explore003
+recipe_id: climb_bpr020_soft010_w7_tgt_seed40_soft0078_session_explore003
+description: "melbourne climb · climb_bpr020_soft010_w7_tgt_seed40_soft0078_session_explore003 · densify Acc 0.168277"
+cache: "runs/melbourne/cache_tgt_all_eval_last"
+soft_target_beta: 0.078
+session_summary: "on"
+seed: 40
+explore_score_bias: 0.03
