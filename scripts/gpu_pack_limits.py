@@ -1,10 +1,10 @@
 """Per-GPU launch caps for multi-city climb packers.
 
-Rules (prefs 2026-11-24):
-- Default: up to ``TSMOE_MAX_PER_GPU`` (default **4**) of *our* ``tsmoe`` jobs per GPU.
+Rules (prefs 2026-11-24; raised later same day):
+- Default: up to ``TSMOE_MAX_PER_GPU`` (default **6**) of *our* ``tsmoe`` jobs per GPU.
 - If another user has a compute process on that GPU — except users listed in
   ``TSMOE_IGNORE_FOREIGN_USERS`` (default **dl-box**) — cap drops to
-  ``TSMOE_MAX_PER_GPU_SHARED`` (default **2**).
+  ``TSMOE_MAX_PER_GPU_SHARED`` (default **3**).
 - Caps only gate **new** launches. Never kill / stop / signal running jobs
   (ours or foreign) when a GPU is already over the limit — let them finish.
 """
@@ -23,8 +23,8 @@ IGNORE_FOREIGN_USERS = {
     for u in os.environ.get("TSMOE_IGNORE_FOREIGN_USERS", "dl-box").split(",")
     if u.strip()
 }
-MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "4"))
-MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "2"))
+MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "6"))
+MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "3"))
 
 
 def proc_user(pid: int) -> str | None:
@@ -102,7 +102,8 @@ def scan_gpus(city: str):
 def city_cap(gpu_limit: int) -> int:
     """Per-city share so two city packers can run in parallel under the GPU cap.
 
-    Half of the per-GPU our-job limit (at least 1). Total our jobs still
-    enforced via all_counts; never kills over-limit runners.
+    About half of the per-GPU our-job limit (ceil so odd limits are usable;
+    at least 1). Total our jobs still enforced via all_counts; never kills
+    over-limit runners.
     """
-    return max(1, gpu_limit // 2)
+    return max(1, (gpu_limit + 1) // 2)
