@@ -1,0 +1,7 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w37_tgt_soft0060_ep3
+recipe_id: climb_s5g20_all_gauss020_wd005_w37_tgt_soft0060_ep3
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w37_tgt_soft0060_ep3 · wall densify w37"
+cache: "runs/beijing/cache_tgt_all_eval_last"
+soft_target_beta: 0.06
+epochs: 3
