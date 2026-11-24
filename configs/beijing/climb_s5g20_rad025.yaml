@@ -1,0 +1,8 @@
+# beijing · stronger radiation replace geo
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_rad025
+recipe_id: climb_s5g20_rad025
+description: "s5g20 + radiation_score_bias=0.25 (geo off)"
+geo_score_bias: 0.0
+radiation_score_bias: 0.25
+radiation_kernel: hard

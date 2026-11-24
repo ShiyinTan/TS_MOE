@@ -1,0 +1,9 @@
+# beijing · soft radiation kernel replace geo
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_rad015_soft
+recipe_id: climb_s5g20_rad015_soft
+description: "s5g20 + radiation 0.15 soft kernel (geo off)"
+geo_score_bias: 0.0
+radiation_score_bias: 0.15
+radiation_kernel: soft
+radiation_soft_km: 0.25

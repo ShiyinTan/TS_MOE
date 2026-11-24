@@ -1,0 +1,8 @@
+# beijing · gaussian proximity replaces geo
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_gauss015
+recipe_id: climb_s5g20_gauss015
+description: "s5g20 + gauss_geo_bias=0.15 σ=0.5 (geo off)"
+geo_score_bias: 0.0
+gauss_geo_bias: 0.15
+gauss_sigma_km: 0.5

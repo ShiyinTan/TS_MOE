@@ -1,0 +1,7 @@
+# beijing · combine two 0.420455 ties: user_pref + pmi_score_bias
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_upref_pmisb015
+recipe_id: climb_s5g20_upref_pmisb015
+description: "s5g20 + user_pref=on + pmi_score_bias=0.15"
+user_pref: "on"
+pmi_score_bias: 0.15

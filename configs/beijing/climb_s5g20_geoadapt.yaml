@@ -1,0 +1,7 @@
+# beijing · sparse geo-adapt when transition thin
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_geoadapt
+recipe_id: climb_s5g20_geoadapt
+description: "s5g20 + geo_adapt=sparse"
+geo_adapt: sparse
+geo_adapt_temp: 1.0
