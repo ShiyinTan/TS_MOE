@@ -1,0 +1,5 @@
+extends: ./climb_bpr020_soft010_filt_win.yaml
+out: runs/melbourne/climb_bpr020_soft010_w2_filt_geo005
+recipe_id: climb_bpr020_soft010_w2_filt_geo005
+description: "melbourne climb · climb_bpr020_soft010_w2_filt_geo005"
+geo_score_bias: 0.05

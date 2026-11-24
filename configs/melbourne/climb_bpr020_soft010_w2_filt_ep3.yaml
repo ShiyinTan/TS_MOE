@@ -1,0 +1,5 @@
+extends: ./climb_bpr020_soft010_filt_win.yaml
+out: runs/melbourne/climb_bpr020_soft010_w2_filt_ep3
+recipe_id: climb_bpr020_soft010_w2_filt_ep3
+description: "melbourne climb · climb_bpr020_soft010_w2_filt_ep3"
+epochs: 3
