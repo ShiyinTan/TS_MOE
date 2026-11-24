@@ -1,0 +1,6 @@
+extends: ./climb_tsb20_bpr020_filter_last.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_soft012
+recipe_id: climb_tsb20_bpr020_filter_soft012
+description: "city-best + soft_target_beta=0.12"
+soft_target_beta: 0.12
+soft_target_prior: revisit

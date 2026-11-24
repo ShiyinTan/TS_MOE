@@ -1,0 +1,8 @@
+extends: ./climb_tsb20_bpr020_filter_last.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_gauss005
+recipe_id: climb_tsb20_bpr020_filter_gauss005
+description: "city-best + light gauss=0.05"
+gauss_geo_bias: 0.05
+gauss_sigma_km: 0.5
+geo_score_bias: 0.0
+candidate_context: "on"

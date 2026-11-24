@@ -23,21 +23,51 @@ STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 
-# Wave: unused spatial/structure priors on city-best soft005_geo020 (0.420455).
-QUEUE = [
-    "climb_s5g20_all_gauss020_drop05",
-    "climb_s5g20_all_gauss020_drop20",
-    "climb_s5g20_all_gauss020_wd005",
-    "climb_s5g20_all_gauss020_wd02",
-    "climb_s5g20_all_gauss020_neg31",
-    "climb_s5g20_all_gauss020_neg127",
-    "climb_s5g20_all_gauss020_bs16",
-    "climb_s5g20_all_gauss020_bs64",
-    "climb_s5g20_all_gauss020_ep4",
-    "climb_s5g20_all_gauss020_ep5_lr5e4",
-    "climb_s5g20_all_gauss020_layers3",
-    "climb_s5g20_all_gauss020_heads16",
-]
+# Wave7: post-WIN Acc climb around gauss020_wd005 (0.454545 vs STHGCN 0.453).
+QUEUE = [line.strip() for line in """
+climb_s5g20_all_gauss020_wd001
+climb_s5g20_all_gauss020_wd003
+climb_s5g20_all_gauss020_wd004
+climb_s5g20_all_gauss020_wd006
+climb_s5g20_all_gauss020_wd007
+climb_s5g20_all_gauss020_wd008
+climb_s5g20_all_gauss020_wd015
+climb_s5g20_all_gauss020_wd005_soft004
+climb_s5g20_all_gauss020_wd005_soft045
+climb_s5g20_all_gauss020_wd005_soft055
+climb_s5g20_all_gauss020_wd005_soft006
+climb_s5g20_all_gauss020_wd005_soft007
+climb_s5g20_all_gauss020_wd005_g017
+climb_s5g20_all_gauss020_wd005_g018
+climb_s5g20_all_gauss020_wd005_g019
+climb_s5g20_all_gauss020_wd005_g021
+climb_s5g20_all_gauss020_wd005_g022
+climb_s5g20_all_gauss020_wd005_g023
+climb_s5g20_all_gauss020_wd005_s035
+climb_s5g20_all_gauss020_wd005_s040
+climb_s5g20_all_gauss020_wd005_s060
+climb_s5g20_all_gauss020_wd005_s075
+climb_s5g20_all_gauss020_wd005_ep3
+climb_s5g20_all_gauss020_wd005_ep4
+climb_s5g20_all_gauss020_wd005_lr5e4
+climb_s5g20_all_gauss020_wd005_lr2e3
+climb_s5g20_all_gauss020_wd005_drop05
+climb_s5g20_all_gauss020_wd005_drop15
+climb_s5g20_all_gauss020_wd005_neg31
+climb_s5g20_all_gauss020_wd005_neg127
+climb_s5g20_all_gauss020_wd005_bpr015
+climb_s5g20_all_gauss020_wd005_bpr025
+climb_s5g20_all_gauss020_wd005_rev005
+climb_s5g20_all_gauss020_wd005_rev010
+climb_s5g20_all_gauss020_wd005_geo005
+climb_s5g20_all_gauss020_wd005_seed43
+climb_s5g20_all_gauss020_wd005_seed44
+climb_s5g20_all_gauss020_wd005_seed45
+climb_s5g20_all_gauss020_wd005_seed46
+climb_s5g20_all_gauss020_wd005_s004_g021
+climb_s5g20_all_gauss020_wd005_s006_g019
+climb_s5g20_all_gauss020_wd005_s0055_g0205
+""".strip().splitlines()]
 
 
 def stop_requested() -> bool:
@@ -107,6 +137,19 @@ def host_ram_ok() -> bool:
         return True
     # Keep ≥16 GiB free for OS + camob + Jupyter.
     return avail_kb >= 16 * 1024 * 1024
+
+
+def failed(tag: str) -> bool:
+    """Skip configs that hard-failed CLI validation (avoid relaunch loops)."""
+    city = "beijing" if "beijing" in Path(__file__).name else "palembang"
+    log = LOG / f"{city}_{tag}.log"
+    if not log.exists():
+        return False
+    try:
+        tail = log.read_text(errors="ignore")[-4000:]
+    except Exception:
+        return False
+    return "__main__.py: error:" in tail or "error: --" in tail
 
 
 def done(tag: str) -> bool:
@@ -187,7 +230,7 @@ def main():
         uu = uuid_map()
         by, live = our_by_gpu(uu)
         free = gpu_free()
-        pending = [t for t in QUEUE if not done(t) and not running(t, live) and cache_ready(t)]
+        pending = [t for t in QUEUE if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)]
         launched = 0
         order = sorted(range(4), key=lambda g: (by[g], -free.get(g, 0)))
         for g in order:

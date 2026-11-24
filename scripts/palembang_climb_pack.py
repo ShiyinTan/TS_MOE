@@ -23,21 +23,52 @@ STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 
-# Wave: unused spatial/structure priors on city-best soft005_geo020 (0.420455).
-QUEUE = [
-    "climb_bjxfer_gauss020_wd005",
-    "climb_bjxfer_gauss020",
-    "climb_bjxfer_gauss015",
-    "climb_bjxfer_gauss025_wd005",
-    "climb_bjxfer_gauss020_wd02",
-    "climb_bjxfer_gauss020_wd005_filter",
-    "climb_tsb20_bpr020_all_gauss020",
-    "climb_tsb20_bpr020_all_gauss020_wd005",
-    "climb_tsb20_bpr020_filter_gauss020",
-    "climb_tsb20_bpr020_filter_wd005",
-    "climb_peak_all_gauss020_wd005",
-    "climb_win_all_gauss020_wd005",
-]
+# Wave2: densify around city-best filter_last (0.2287 vs STHGCN 0.246).
+QUEUE = [line.strip() for line in """
+climb_tsb20_bpr020_filter_soft003
+climb_tsb20_bpr020_filter_soft005
+climb_tsb20_bpr020_filter_soft008
+climb_tsb20_bpr020_filter_soft010
+climb_tsb20_bpr020_filter_soft012
+climb_tsb20_bpr020_filter_geo005
+climb_tsb20_bpr020_filter_geo010
+climb_tsb20_bpr020_filter_geo015
+climb_tsb20_bpr020_filter_geo020
+climb_tsb20_bpr020_filter_gauss005
+climb_tsb20_bpr020_filter_gauss008
+climb_tsb20_bpr020_filter_gauss010
+climb_tsb20_bpr020_filter_gauss012
+climb_tsb20_bpr020_filter_gauss015
+climb_tsb20_bpr020_filter_wd003
+climb_tsb20_bpr020_filter_wd007
+climb_tsb20_bpr020_filter_wd02
+climb_tsb20_bpr020_filter_wd001
+climb_tsb20_bpr020_filter_bpr015
+climb_tsb20_bpr020_filter_bpr018
+climb_tsb20_bpr020_filter_bpr022
+climb_tsb20_bpr020_filter_bpr025
+climb_tsb20_bpr020_filter_bpr030
+climb_tsb20_bpr020_filter_tsb15
+climb_tsb20_bpr020_filter_tsb18
+climb_tsb20_bpr020_filter_tsb22
+climb_tsb20_bpr020_filter_tsb25
+climb_tsb20_bpr020_filter_rev005
+climb_tsb20_bpr020_filter_rev008
+climb_tsb20_bpr020_filter_rev010
+climb_tsb20_bpr020_filter_rev015
+climb_tsb20_bpr020_filter_soft005_geo010
+climb_tsb20_bpr020_filter_soft005_gauss010
+climb_tsb20_bpr020_filter_soft008_wd005
+climb_tsb20_bpr020_filter_geo010_wd005
+climb_tsb20_bpr020_filter_soft005_bpr022
+climb_tsb20_bpr020_filter_ep3
+climb_tsb20_bpr020_filter_ep4
+climb_tsb20_bpr020_filter_trbias
+climb_tsb20_bpr020_filter_trbias_soft005
+climb_tsb20_bpr020_filter_trbias_soft005_geo010
+climb_bjxfer_filter_soft005_gauss010_wd005
+climb_bjxfer_filter_soft005_geo015_wd005
+""".strip().splitlines()]
 
 
 def stop_requested() -> bool:
@@ -107,6 +138,19 @@ def host_ram_ok() -> bool:
         return True
     # Keep ≥16 GiB free for OS + camob + Jupyter.
     return avail_kb >= 16 * 1024 * 1024
+
+
+def failed(tag: str) -> bool:
+    """Skip configs that hard-failed CLI validation (avoid relaunch loops)."""
+    city = "beijing" if "beijing" in Path(__file__).name else "palembang"
+    log = LOG / f"{city}_{tag}.log"
+    if not log.exists():
+        return False
+    try:
+        tail = log.read_text(errors="ignore")[-4000:]
+    except Exception:
+        return False
+    return "__main__.py: error:" in tail or "error: --" in tail
 
 
 def done(tag: str) -> bool:
@@ -187,7 +231,7 @@ def main():
         uu = uuid_map()
         by, live = our_by_gpu(uu)
         free = gpu_free()
-        pending = [t for t in QUEUE if not done(t) and not running(t, live) and cache_ready(t)]
+        pending = [t for t in QUEUE if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)]
         launched = 0
         order = sorted(range(4), key=lambda g: (by[g], -free.get(g, 0)))
         for g in order:

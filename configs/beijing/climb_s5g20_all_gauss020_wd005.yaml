@@ -1,5 +1,5 @@
 # beijing · climb_s5g20_all_gauss020_wd005 — CITY BEST / BEATS STHGCN
-# Acc@1=0.454545 (40/88) · R5=0.625 · R10=0.727 · R20=0.784 · STHGCN 0.453 · Δ +0.0015
+# Acc@1=0.454545 (40/88) · R5=0.659 · R10=0.727 · R20=0.784 · STHGCN 0.453 · Δ +0.0015
 # soft005+trbias + gauss0.20 (geo off) on cache_tgt_all_eval_last + weight_decay=0.005
 # Measured 2026-11-24 known_only eval_test seed42
 extends: ./climb_s5g20_all_gauss020.yaml
