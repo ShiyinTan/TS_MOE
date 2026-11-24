@@ -100,5 +100,9 @@ def scan_gpus(city: str):
 
 
 def city_cap(gpu_limit: int) -> int:
-    """Per-city soft cap. Same as GPU limit; total our jobs still capped via all_counts."""
-    return gpu_limit
+    """Per-city share so two city packers can run in parallel under the GPU cap.
+
+    Half of the per-GPU our-job limit (at least 1). Total our jobs still
+    enforced via all_counts; never kills over-limit runners.
+    """
+    return max(1, gpu_limit // 2)
