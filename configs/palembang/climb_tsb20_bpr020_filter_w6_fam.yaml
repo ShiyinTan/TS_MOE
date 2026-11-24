@@ -7,3 +7,5 @@ fam_area_blend: "on"
 fam_radius_km: 0.5
 fam_explore_bias: 0.1
 fam_return_bias: 0.05
+candidate_context: "on"
+candidate_context_time: "last_slot"

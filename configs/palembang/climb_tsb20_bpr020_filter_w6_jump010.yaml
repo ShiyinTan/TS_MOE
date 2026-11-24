@@ -5,3 +5,5 @@ recipe_id: climb_tsb20_bpr020_filter_w6_jump010
 description: "palembang climb · climb_tsb20_bpr020_filter_w6_jump010"
 jump_length_bias: 0.1
 jump_dist: "lognormal"
+candidate_context: "on"
+candidate_context_time: "last_slot"

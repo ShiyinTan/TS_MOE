@@ -106,10 +106,20 @@ def failed(tag: str) -> bool:
     if not log.exists():
         return False
     try:
-        tail = log.read_text(errors="ignore")[-4000:]
+        text = log.read_text(errors="ignore")
     except Exception:
         return False
-    return "__main__.py: error:" in tail or "error: --" in tail
+    # Only judge the latest launch segment (log is append-only across retries).
+    marker = f"# {CITY}_climb_pack "
+    idx = text.rfind(marker)
+    tail = text[idx:] if idx >= 0 else text[-4000:]
+    # Catch argparse errors and runtime ValueError (e.g. missing candidate_context).
+    return (
+        "__main__.py: error:" in tail
+        or "error: --" in tail
+        or "ValueError:" in tail
+        or "Traceback (most recent call last):" in tail
+    )
 
 
 def done(tag: str) -> bool:
@@ -126,11 +136,17 @@ def running(tag: str, live_cmds: set[str]) -> bool:
     if pf.exists():
         pid = pf.read_text().strip()
         if pid and Path(f"/proc/{pid}").exists():
+            # Zombies / empty cmdline are not live workers — clear pid and retry.
             try:
-                cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\\0", b" ").decode(errors="ignore")
+                stat = open(f"/proc/{pid}/stat").read().split()
+                state = stat[2] if len(stat) > 2 else ""
+            except Exception:
+                state = ""
+            try:
+                cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="ignore")
             except Exception:
                 cmd = ""
-            if tag in cmd:
+            if state != "Z" and tag in cmd:
                 return True
             try:
                 pf.unlink()

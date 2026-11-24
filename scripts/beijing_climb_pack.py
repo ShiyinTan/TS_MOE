@@ -40,30 +40,30 @@ STOP_SENTINEL = Path(
 PACK_LOCK = PIDDIR / "packer_launch.lock"
 
 QUEUE = [line.strip() for line in """
-climb_s5g20_all_gauss020_wd005_w15_hh005
-climb_s5g20_all_gauss020_wd005_w15_hh010
-climb_s5g20_all_gauss020_wd005_w15_hh015
-climb_s5g20_all_gauss020_wd005_w15_hh020
-climb_s5g20_all_gauss020_wd005_w15_revrec010
-climb_s5g20_all_gauss020_wd005_w15_revrec015_t5
-climb_s5g20_all_gauss020_wd005_w15_revrec020_t24
-climb_s5g20_all_gauss020_wd005_w15_jump010
-climb_s5g20_all_gauss020_wd005_w15_jump015
-climb_s5g20_all_gauss020_wd005_w15_fam
-climb_s5g20_all_gauss020_wd005_w15_retgate_g010
-climb_s5g20_all_gauss020_wd005_w15_retgate_g015
-climb_s5g20_all_gauss020_wd005_w15_hopk2
-climb_s5g20_all_gauss020_wd005_w15_hopk3
-climb_s5g20_all_gauss020_wd005_w15_rad015
-climb_s5g20_all_gauss020_wd005_w15_rad020
-climb_s5g20_all_gauss020_wd005_w15_hh010_rad010
-climb_s5g20_all_gauss020_wd005_w15_hopk2_hh010
-climb_s5g20_all_gauss020_wd005_w15_2hop03
-climb_s5g20_all_gauss020_wd005_w15_pmisb012
-climb_s5g20_all_gauss020_wd005_w15_seed59
-climb_s5g20_all_gauss020_wd005_w15_seed60
-climb_s5g20_all_gauss020_wd005_w15_seed61
-climb_s5g20_all_gauss020_wd005_w15_seed62_hh010
+climb_s5g20_all_gauss020_wd005_w16_soft048
+climb_s5g20_all_gauss020_wd005_w16_soft052
+climb_s5g20_all_gauss020_wd005_w16_g0195
+climb_s5g20_all_gauss020_wd005_w16_g0205
+climb_s5g20_all_gauss020_wd005_w16_tsb195
+climb_s5g20_all_gauss020_wd005_w16_tsb205
+climb_s5g20_all_gauss020_wd005_w16_ssb255
+climb_s5g20_all_gauss020_wd005_w16_ssb265
+climb_s5g20_all_gauss020_wd005_w16_wd0045
+climb_s5g20_all_gauss020_wd005_w16_wd0055
+climb_s5g20_all_gauss020_wd005_w16_bpr028
+climb_s5g20_all_gauss020_wd005_w16_bpr030
+climb_s5g20_all_gauss020_wd005_w16_rev009
+climb_s5g20_all_gauss020_wd005_w16_rev011
+climb_s5g20_all_gauss020_wd005_w16_temp095
+climb_s5g20_all_gauss020_wd005_w16_temp105
+climb_s5g20_all_gauss020_wd005_w16_dt_edges
+climb_s5g20_all_gauss020_wd005_w16_soft05_g0205
+climb_s5g20_all_gauss020_wd005_w16_ssb26_tsb205
+climb_s5g20_all_gauss020_wd005_w16_seed63
+climb_s5g20_all_gauss020_wd005_w16_seed64
+climb_s5g20_all_gauss020_wd005_w16_seed65
+climb_s5g20_all_gauss020_wd005_w16_seed66
+climb_s5g20_all_gauss020_wd005_w16_seed67_ssb255
 """.strip().splitlines()]
 
 
@@ -106,10 +106,20 @@ def failed(tag: str) -> bool:
     if not log.exists():
         return False
     try:
-        tail = log.read_text(errors="ignore")[-4000:]
+        text = log.read_text(errors="ignore")
     except Exception:
         return False
-    return "__main__.py: error:" in tail or "error: --" in tail
+    # Only judge the latest launch segment (log is append-only across retries).
+    marker = f"# {CITY}_climb_pack "
+    idx = text.rfind(marker)
+    tail = text[idx:] if idx >= 0 else text[-4000:]
+    # Catch argparse errors and runtime ValueError (e.g. missing candidate_context).
+    return (
+        "__main__.py: error:" in tail
+        or "error: --" in tail
+        or "ValueError:" in tail
+        or "Traceback (most recent call last):" in tail
+    )
 
 
 def done(tag: str) -> bool:
@@ -126,11 +136,17 @@ def running(tag: str, live_cmds: set[str]) -> bool:
     if pf.exists():
         pid = pf.read_text().strip()
         if pid and Path(f"/proc/{pid}").exists():
+            # Zombies / empty cmdline are not live workers — clear pid and retry.
             try:
-                cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\\0", b" ").decode(errors="ignore")
+                stat = open(f"/proc/{pid}/stat").read().split()
+                state = stat[2] if len(stat) > 2 else ""
+            except Exception:
+                state = ""
+            try:
+                cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="ignore")
             except Exception:
                 cmd = ""
-            if tag in cmd:
+            if state != "Z" and tag in cmd:
                 return True
             try:
                 pf.unlink()
