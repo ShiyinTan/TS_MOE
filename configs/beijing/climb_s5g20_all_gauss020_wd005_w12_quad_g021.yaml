@@ -1,0 +1,10 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w12_quad_g021
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w12_quad_g021
+recipe_id: climb_s5g20_all_gauss020_wd005_w12_quad_g021
+description: "beijing climb · w12_quad_g021"
+negatives: 63
+lr: 0.001
+dropout: 0.1
+surd_score_bias: 0.25
+gauss_geo_bias: 0.21
