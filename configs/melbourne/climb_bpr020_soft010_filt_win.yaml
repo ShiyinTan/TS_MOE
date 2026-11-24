@@ -1,3 +1,4 @@
+# Superseded by tgt_soft008_session_win Acc@1=0.155395
 # Melbourne Acc lift Acc@1=0.154157 (eval_test known_only)
 # Source: climb_bpr020_soft010_w1_filt_win · cache_filter_last
 # Prior best 0.152979; STHGCN Melbourne Acc@1=0.168 → gap −0.0138; continue climb
