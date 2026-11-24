@@ -194,6 +194,8 @@ def main():
         # Cross-packer lock so BJ/PL don't race-launch past the GPU cap.
         # Over-limit still never kills — lock only serializes new launches.
         PIDDIR.mkdir(parents=True, exist_ok=True)
+        launched = 0
+        over = []
         with open(PACK_LOCK, "a+", encoding="utf-8") as lockf:
             fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
             try:
@@ -203,9 +205,7 @@ def main():
                     t for t in QUEUE
                     if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
                 ]
-                launched = 0
                 order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
-                over = []
                 for g in order:
                     lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
                     ccap = city_cap(lim)
@@ -227,6 +227,9 @@ def main():
                         free[g] = free.get(g, 0) - 2000
                         launched += 1
             finally:
+                # Let nvidia-smi see new PIDs before the other packer scans.
+                if launched:
+                    time.sleep(2)
                 fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
         if over:
             print(
