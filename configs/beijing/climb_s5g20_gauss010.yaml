@@ -1,0 +1,7 @@
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_gauss010
+recipe_id: climb_s5g20_gauss010
+description: "s5g20 + gauss 0.10 σ=0.5 (geo off)"
+geo_score_bias: 0.0
+gauss_geo_bias: 0.10
+gauss_sigma_km: 0.5

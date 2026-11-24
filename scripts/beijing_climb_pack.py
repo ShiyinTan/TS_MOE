@@ -25,18 +25,18 @@ STOP_SENTINEL = Path(
 
 # Wave: unused spatial/structure priors on city-best soft005_geo020 (0.420455).
 QUEUE = [
-    "climb_s5g20_rad015",
-    "climb_s5g20_rad025",
-    "climb_s5g20_rad015_soft",
-    "climb_s5g20_gauss015",
-    "climb_s5g20_gauss020_s10",
-    "climb_s5g20_jump015",
-    "climb_s5g20_cat015_pop010",
-    "climb_s5g20_retgate_gauss",
-    "climb_s5g20_fam_blend",
-    "climb_s5g20_geoadapt",
-    "climb_s5g20_upref_pmisb015",
-    "climb_s5g20_rad015_upref",
+    "climb_s5g20_gauss010",
+    "climb_s5g20_gauss012",
+    "climb_s5g20_geo020_gauss005",
+    "climb_s5g20_dim512",
+    "climb_s5g20_lr5e4",
+    "climb_s5g20_lr2e3",
+    "climb_s5g20_tsb_hk2",
+    "climb_s5g20_tsb_hk3",
+    "climb_s5g20_dtbins",
+    "climb_s5g20_temp07",
+    "climb_s5g20_filter_gauss015",
+    "climb_s5g20_all_gauss015",
 ]
 
 

@@ -1,0 +1,6 @@
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_tsb_hk2
+recipe_id: climb_s5g20_tsb_hk2
+description: "s5g20 tsb_history_k=2"
+tsb_history_k: 2
+tsb_history_decay: 0.5
