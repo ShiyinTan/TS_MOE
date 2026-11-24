@@ -25,18 +25,18 @@ STOP_SENTINEL = Path(
 
 # Wave: unused spatial/structure priors on city-best soft005_geo020 (0.420455).
 QUEUE = [
-    "climb_s5g20_all_gauss019",
-    "climb_s5g20_all_gauss021",
-    "climb_s5g20_all_gauss022",
-    "climb_s5g20_all_gauss023",
-    "climb_s5g20_all_gauss025",
-    "climb_s5g20_all_gauss020_s035",
-    "climb_s5g20_all_gauss020_s040",
-    "climb_s5g20_all_gauss020_s060",
-    "climb_s5g20_all_gauss020_s075",
-    "climb_s5g20_all_gauss020_soft004",
-    "climb_s5g20_all_gauss020_soft006",
-    "climb_s5g20_all_gauss020_rev012",
+    "climb_s5g20_allf_gauss020",
+    "climb_s5g20_allp80_gauss020",
+    "climb_s5g20_allp70_gauss020",
+    "climb_s5g20_allmax_gauss020",
+    "climb_s5g20_all_gauss020_pmisb010",
+    "climb_s5g20_all_gauss020_cat010",
+    "climb_s5g20_all_gauss020_hopk2",
+    "climb_s5g20_all_gauss020_sess",
+    "climb_s5g20_all_gauss020_simce",
+    "climb_s5g20_all_gauss020_geoadapt",
+    "climb_s5g20_all_gauss020_2hop03",
+    "climb_s5g20_all_gauss020_hpop10",
 ]
 
 
