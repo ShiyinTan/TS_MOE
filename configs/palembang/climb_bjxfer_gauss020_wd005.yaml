@@ -1,0 +1,15 @@
+# palembang · transfer Beijing WIN pattern (gauss020+wd005 on all-targets cache)
+extends: ../recipes/peak.yaml
+city: palembang
+cache: runs/palembang/cache_tgt_all_eval_last
+out: runs/palembang/climb_bjxfer_gauss020_wd005
+recipe_id: climb_bjxfer_gauss020_wd005
+description: "Peak+trbias soft005 + gauss0.20 + wd0.005 on tgt_all_eval_last (Beijing WIN transfer)"
+transition_attn: bias
+epochs: 2
+soft_target_beta: 0.05
+soft_target_prior: revisit
+geo_score_bias: 0.0
+gauss_geo_bias: 0.20
+gauss_sigma_km: 0.5
+weight_decay: 0.005

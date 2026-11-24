@@ -1,5 +1,6 @@
+# beijing · climb_s5g20_all_gauss020_wd02 — tied city best Acc@1=0.454545 (same as wd005)
 extends: ./climb_s5g20_all_gauss020.yaml
 out: runs/beijing/climb_s5g20_all_gauss020_wd02
 recipe_id: climb_s5g20_all_gauss020_wd02
-description: "gauss020 train hyper fine"
+description: "tied Beijing WIN vs STHGCN · weight_decay=0.02"
 weight_decay: 0.02

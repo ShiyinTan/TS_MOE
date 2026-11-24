@@ -1,0 +1,10 @@
+extends: ./climb_tsb20_bpr020.yaml
+cache: runs/palembang/cache_tgt_all_eval_last
+out: runs/palembang/climb_tsb20_bpr020_all_gauss020
+recipe_id: climb_tsb20_bpr020_all_gauss020
+description: "city-best stack + gauss020 on tgt_all"
+geo_score_bias: 0.0
+gauss_geo_bias: 0.20
+gauss_sigma_km: 0.5
+candidate_context: "on"
+candidate_context_time: last_slot

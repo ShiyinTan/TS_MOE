@@ -1,0 +1,5 @@
+extends: ./climb_bjxfer_gauss020_wd005.yaml
+out: runs/palembang/climb_bjxfer_gauss025_wd005
+recipe_id: climb_bjxfer_gauss025_wd005
+description: "Beijing transfer gauss0.25 + wd005"
+gauss_geo_bias: 0.25

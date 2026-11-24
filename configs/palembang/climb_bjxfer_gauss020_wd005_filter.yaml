@@ -1,0 +1,5 @@
+extends: ./climb_bjxfer_gauss020_wd005.yaml
+cache: runs/palembang/cache_filter_last
+out: runs/palembang/climb_bjxfer_gauss020_wd005_filter
+recipe_id: climb_bjxfer_gauss020_wd005_filter
+description: "Beijing WIN transfer on filter_last"
