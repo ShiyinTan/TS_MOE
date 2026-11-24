@@ -1,0 +1,8 @@
+# Palembang WIN vs STHGCN Acc@1=0.248062 (eval_test known_only)
+# Source: climb_tsb20_bpr020_filter_w11_p80_soft076_session_seed55
+# STHGCN Palembang Acc@1=0.246 → BEAT by +0.00206
+extends: ./climb_tsb20_bpr020_filter_soft076_session_p80.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_soft076_session_seed55
+recipe_id: climb_tsb20_bpr020_filter_soft076_session_seed55
+description: "palembang WIN · soft076+session seed55 on cand_p80 Acc@1=0.248062"
+seed: 55

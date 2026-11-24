@@ -4,7 +4,7 @@ Rules (prefs 2026-11-24; raised later same day):
 - Default: up to ``TSMOE_MAX_PER_GPU`` (default **6**) of *our* ``tsmoe`` jobs per GPU.
 - If another user has a compute process on that GPU — except users listed in
   ``TSMOE_IGNORE_FOREIGN_USERS`` (default **dl-box**) — cap drops to
-  ``TSMOE_MAX_PER_GPU_SHARED`` (default **3**).
+  ``TSMOE_MAX_PER_GPU_SHARED`` (default **5**; raised from 3 to fill free VRAM).
 - Caps only gate **new** launches. Never kill / stop / signal running jobs
   (ours or foreign) when a GPU is already over the limit — let them finish.
 """
@@ -24,7 +24,9 @@ IGNORE_FOREIGN_USERS = {
     if u.strip()
 }
 MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "6"))
-MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "3"))
+# Default 5: camob ~17GiB/GPU leaves ~28GiB free; user 2026-11-24 asked to fill
+# unused capacity while shared. Override via TSMOE_MAX_PER_GPU_SHARED.
+MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "5"))
 
 
 def proc_user(pid: int) -> str | None:
