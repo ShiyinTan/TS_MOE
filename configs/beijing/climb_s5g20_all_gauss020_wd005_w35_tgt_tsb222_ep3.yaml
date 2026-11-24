@@ -1,0 +1,7 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w35_tgt_tsb222_ep3
+recipe_id: climb_s5g20_all_gauss020_wd005_w35_tgt_tsb222_ep3
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w35_tgt_tsb222_ep3 · wall densify w35"
+cache: "runs/beijing/cache_tgt_all_eval_last"
+transition_score_bias: 2.22
+epochs: 3
