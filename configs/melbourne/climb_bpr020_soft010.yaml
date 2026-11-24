@@ -1,0 +1,9 @@
+# melbourne · climb_bpr020_soft010 — Acc climb toward STHGCN (wave3)
+extends: ../recipes/peak.yaml
+city: melbourne
+cache: runs/melbourne/cache_abl_tgt_last
+out: runs/melbourne/climb_bpr020_soft010
+recipe_id: climb_bpr020_soft010
+lambda_bpr: 0.20
+soft_target_beta: 0.10
+soft_target_prior: "revisit"

@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_bprmax — densify around soft005_geo020 / pmisb015 plateau
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_bprmax
+recipe_id: climb_s5g20_bprmax
+description: "densify bpr_mode=bpr_max"
+bpr_mode: "bpr_max"

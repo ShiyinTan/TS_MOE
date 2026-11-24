@@ -1,0 +1,6 @@
+# beijing · climb_ep2_trbias_all_eval_last — alt-cache follow-up
+extends: ./climb_ep2_trbias.yaml
+cache: runs/beijing/cache_tgt_all_eval_last
+out: runs/beijing/climb_ep2_trbias_all_eval_last
+recipe_id: climb_ep2_trbias_all_eval_last
+description: "ep2_trbias on cache_tgt_all_eval_last"

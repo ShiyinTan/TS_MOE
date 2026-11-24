@@ -1,0 +1,6 @@
+# tangerang · climb_soft010_bpr035 — compose soft010 city best with λ_bpr=0.35
+extends: ./climb_soft010.yaml
+out: runs/tangerang/climb_soft010_bpr035
+recipe_id: climb_soft010_bpr035
+description: "WIN + soft010 + λ_bpr=0.35 compose toward STHGCN"
+lambda_bpr: 0.35

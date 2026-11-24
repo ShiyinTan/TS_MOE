@@ -1739,6 +1739,8 @@ class TestCandidateContextOverlays(unittest.TestCase):
         ctx = gather_batch_context(
             tables, data, idx, cand_lists, int(valid.shape[1]),
             update=False, transition_pmi=True)
+        self.assertIn("poi_pmi_last", ctx)
+        self.assertEqual(tuple(ctx["poi_pmi_last"].shape), (len(idx), n_pois))
         poi_cat = build_poi_cat_table(data, n_pois)
         coords = torch.zeros(n_pois, 2, dtype=torch.float64)
         side = gather_side_features(
@@ -1759,6 +1761,37 @@ class TestCandidateContextOverlays(unittest.TestCase):
                         prior, conf, count_ctx=ctx, details=True)
         self.assertTrue(torch.isfinite(out["score"]).all())
         torch.testing.assert_close(out["logits"], torch.log1p(15 * out["mass"]))
+
+    def test_pmi_score_bias_default_off_and_opt_in(self):
+        """--pmi-score-bias default 0; when >0 shifts scores, not hard_prior."""
+        from dataclasses import replace
+        data, n_pois, n_cats = TestCausalCounts()._tiny_split()
+        tables = CausalCountTables(n_pois, n_cats, visit_bins=4)
+        tables.fit_visit_bins(data, 4)
+        tables.replay(data)
+        idx = chronological_indices(data)[:2]
+        h, valid, _ = make_batch(data, idx)
+        cand_lists = [list(range(n_pois)) for _ in idx.tolist()]
+        ctx = gather_batch_context(
+            tables, data, idx, cand_lists, int(valid.shape[1]),
+            update=False, transition_pmi=False)
+        prior = torch.zeros(len(idx), n_pois, 26)
+        prior[..., 0] = 1.0
+        conf = torch.ones(len(idx), n_pois)
+        rows = torch.arange(n_pois).expand(len(idx), -1)
+        base_cfg = ModelConfig(
+            8, 2, 1, 0., 2, router_mode="hard_prior", causal_counts=True,
+            transition_attn="bias", visit_bins=4)
+        self.assertEqual(base_cfg.pmi_score_bias, 0.0)
+        m0 = TSMoE(n_pois, n_cats, 4, base_cfg).eval()
+        m1 = TSMoE(n_pois, n_cats, 4, replace(base_cfg, pmi_score_bias=0.5)).eval()
+        m1.load_state_dict(m0.state_dict())
+        with torch.no_grad():
+            s0 = m0(h, valid, rows, prior, conf, count_ctx=ctx)["score"]
+            s1 = m1(h, valid, rows, prior, conf, count_ctx=ctx, details=True)
+        self.assertTrue(torch.isfinite(s1["score"]).all())
+        self.assertFalse(torch.allclose(s0, s1["score"]))
+        torch.testing.assert_close(s1["logits"], torch.log1p(15 * s1["mass"]))
 
     def test_expert_cross_attn_hybrid_and_full_smoke(self):
         torch.manual_seed(5)

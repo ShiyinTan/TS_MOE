@@ -1,0 +1,9 @@
+# beijing · climb_ep2_trbias_s5g20_filter_last — wave4 around soft005_geo020 0.420455
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_ep2_trbias_s5g20_filter_last
+recipe_id: climb_ep2_trbias_s5g20_filter_last
+description: "wave4 soft_target_beta=0.05, soft_target_prior=revisit, geo_score_bias=0.2, cache=runs/beijing/cache_filter_last"
+soft_target_beta: 0.05
+soft_target_prior: "revisit"
+geo_score_bias: 0.2
+cache: runs/beijing/cache_filter_last

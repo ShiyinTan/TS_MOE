@@ -1,0 +1,8 @@
+# beijing · climb_s5g20_focal1 — Acc climb on soft005_geo020 (opt-in)
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_focal1
+recipe_id: climb_s5g20_focal1
+description: "fix soft_target_beta=0.0, soft_target_prior=off, ce_focal_gamma=1.0"
+soft_target_beta: 0.0
+soft_target_prior: "off"
+ce_focal_gamma: 1.0

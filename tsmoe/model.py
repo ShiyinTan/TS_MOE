@@ -153,6 +153,9 @@ class ModelConfig:
     cat_stage_bias: float = 0.
     # 2-hop transition Acc@1 prior (#4): λ·log1p((A^2)_{last,cand}); 0 = off.
     transition_2hop_bias: float = 0.
+    # Additive last→cand PMI score prior (keeps raw-count tsb/attn). 0 = off.
+    # Distinct from --transition-pmi (which replaces transition tensors with PMI).
+    pmi_score_bias: float = 0.
     # Hour×POI popularity Acc@1 prior (#8): λ·log1p(global_poi_hour[cand, hour]); 0 = off.
     hour_pop_score_bias: float = 0.
     # Multiply transition-score-bias by exp(−Δt_hours/τ); 0 = off (no time decay).
@@ -265,6 +268,8 @@ class ModelConfig:
             raise ValueError("cat_stage_bias must be nonnegative")
         if self.transition_2hop_bias < 0:
             raise ValueError("transition_2hop_bias must be nonnegative")
+        if self.pmi_score_bias < 0:
+            raise ValueError("pmi_score_bias must be nonnegative")
         if self.hour_pop_score_bias < 0:
             raise ValueError("hour_pop_score_bias must be nonnegative")
         if self.return_gate == "on":
@@ -911,6 +916,12 @@ class TSMoE(nn.Module):
             hop2 = count_ctx["transition_2hop_log1p"][:, :rows.shape[1]].to(score.device)
             hop2 = apply_surd_gate(hop2, cand_gate, gate_mode)
             score = score + th2 * hop2.clamp_min(0)
+        # PMI score prior: λ · last→cand PMI (signed). Leaves raw-count tsb/attn intact.
+        pmi_b = float(getattr(self.cfg, "pmi_score_bias", 0.0) or 0.0)
+        if pmi_b > 0 and count_ctx is not None and "poi_pmi_last" in count_ctx:
+            pmi = count_ctx["poi_pmi_last"][:, :rows.shape[1]].to(score.device)
+            pmi = apply_surd_gate(pmi, cand_gate, gate_mode)
+            score = score + pmi_b * pmi
         # Hour×POI popularity (#8): λ·log1p(global visits of cand at tip hour).
         hpb = float(getattr(self.cfg, "hour_pop_score_bias", 0.0) or 0.0)
         if hpb > 0 and count_ctx is not None and "hour_pop_log1p" in count_ctx:

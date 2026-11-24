@@ -1,0 +1,7 @@
+# beijing · climb_s5g20_pmisb020_geo021 — pmi_score_bias opt-in on soft005_geo020 (default λ=0 unchanged)
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_pmisb020_geo021
+recipe_id: climb_s5g20_pmisb020_geo021
+description: "pmisb pmi_score_bias=0.2, geo_score_bias=0.21"
+pmi_score_bias: 0.2
+geo_score_bias: 0.21

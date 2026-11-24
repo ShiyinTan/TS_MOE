@@ -1,0 +1,6 @@
+# shanghai · WIN+geo0.10 on filter-unknown last cache
+extends: climb_win_geo010.yaml
+cache: runs/shanghai/cache_filter_last
+out: runs/shanghai/climb_win_geo010_filter_last
+recipe_id: climb_win_geo010_filter_last
+description: "WIN + geo 0.10 on cache_filter_last"

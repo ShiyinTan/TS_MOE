@@ -225,6 +225,7 @@ def model_config_from_checkpoint(raw):
     cfg.setdefault("tsb_dt_edges", ())
     cfg.setdefault("cat_stage_bias", 0.0)
     cfg.setdefault("transition_2hop_bias", 0.0)
+    cfg.setdefault("pmi_score_bias", 0.0)
     cfg.setdefault("hour_pop_score_bias", 0.0)
     cfg.setdefault("tsb_decay_hours", 0.0)
     cfg.setdefault("tsb_session_gap_hours", 0.0)
@@ -1621,11 +1622,14 @@ def train(args):
     tsb_dt_edges = tuple(parse_dt_bin_edges(getattr(args, "transition_dt_bins", "off")))
     cat_stage_bias = float(getattr(args, "cat_stage_bias", 0.0) or 0.0)
     transition_2hop_bias = float(getattr(args, "transition_2hop_bias", 0.0) or 0.0)
+    pmi_score_bias = float(getattr(args, "pmi_score_bias", 0.0) or 0.0)
     hour_pop_score_bias = float(getattr(args, "hour_pop_score_bias", 0.0) or 0.0)
     tsb_decay_hours = float(getattr(args, "tsb_decay_hours", 0.0) or 0.0)
     tsb_session_gap_hours = float(getattr(args, "tsb_session_gap_hours", 0.0) or 0.0)
     if transition_2hop_bias < 0:
         raise ValueError("--transition-2hop-bias must be nonnegative")
+    if pmi_score_bias < 0:
+        raise ValueError("--pmi-score-bias must be nonnegative")
     if hour_pop_score_bias < 0:
         raise ValueError("--hour-pop-score-bias must be nonnegative")
     if geo_score_power <= 0:
@@ -1777,6 +1781,8 @@ def train(args):
         raise ValueError("--candidate-context-time causal_slot requires causal counts")
     if transition_pmi == "on" and not causal_counts:
         raise ValueError("--transition-pmi on requires causal counts")
+    if pmi_score_bias > 0 and not causal_counts:
+        raise ValueError("--pmi-score-bias > 0 requires causal counts")
     if transition_score_bias > 0 and not causal_counts:
         raise ValueError("--transition-score-bias > 0 requires causal counts")
     if category_score_bias > 0 and not causal_counts:
@@ -1864,6 +1870,7 @@ def train(args):
                       tsb_dt_edges=tsb_dt_edges,
                       cat_stage_bias=cat_stage_bias,
                       transition_2hop_bias=transition_2hop_bias,
+                      pmi_score_bias=pmi_score_bias,
                       hour_pop_score_bias=hour_pop_score_bias,
                       tsb_decay_hours=tsb_decay_hours,
                       tsb_session_gap_hours=tsb_session_gap_hours,
@@ -1962,6 +1969,8 @@ def train(args):
             cfg, "_transition_a2_log1p",
             build_transition_a2_log1p(data, len(cache.pois)))
         print(f"transition_2hop_bias={transition_2hop_bias}", flush=True)
+    if pmi_score_bias > 0:
+        print(f"pmi_score_bias={pmi_score_bias}", flush=True)
     if hour_pop_score_bias > 0:
         print(f"hour_pop_score_bias={hour_pop_score_bias}", flush=True)
     # Shared train-all SURD table for train / val / test (no fold-specific priors).
@@ -2009,6 +2018,7 @@ def train(args):
     settings["tsb_dt_edges"] = list(cfg.tsb_dt_edges)
     settings["cat_stage_bias"] = cfg.cat_stage_bias
     settings["transition_2hop_bias"] = cfg.transition_2hop_bias
+    settings["pmi_score_bias"] = cfg.pmi_score_bias
     settings["hour_pop_score_bias"] = cfg.hour_pop_score_bias
     settings["tsb_decay_hours"] = cfg.tsb_decay_hours
     settings["tsb_session_gap_hours"] = cfg.tsb_session_gap_hours

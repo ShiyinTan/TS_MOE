@@ -129,7 +129,7 @@ Tried on soft10r (= Base+WIN+peak) unless noted. Defaults are **off / 0**. Mecha
 | Family | Flags |
 | --- | --- |
 | Soft-target variants | `--soft-target-beta` · `--soft-target-prior` ∈ {revisit, tsb, tsb+revisit, ema} |
-| Score biases | `--revisit-score-bias` · `--geo-score-bias` · `--geo-score-power` · `--hour-pop-score-bias` · `--transition-2hop-bias` · `--cat-stage-bias` · `--history-hit-bias` · `--revisit-recency-bias` · radiation / jump / explore / gauss / … |
+| Score biases | `--revisit-score-bias` · `--geo-score-bias` · `--geo-score-power` · `--hour-pop-score-bias` · `--transition-2hop-bias` · `--pmi-score-bias` · `--cat-stage-bias` · `--history-hit-bias` · `--revisit-recency-bias` · radiation / jump / explore / gauss / … |
 | SURD / tsb gates | `--surd-bias-gate` · `--surd-score-bias` · `--tsb-gate-mode` · `--surd-attn-gate` · `--tsb-session-gap-hours` · `--tsb-decay-hours` |
 | Aux / loss | `--lambda-bpr` · `--lambda-cat-aux` · `--lambda-kd` · `--poi-geo-laplace` · focal / BPR-max |
 | Eval-only | `--score-temperature` · Platt / gamma calib · `--mc-dropout` · TTA |

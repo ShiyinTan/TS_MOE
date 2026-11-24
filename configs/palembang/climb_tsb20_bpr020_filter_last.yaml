@@ -1,0 +1,7 @@
+# palembang · BEST TEST Acc@1=0.228682 (was 0.2274 on abl_tgt_last; STHGCN 0.246)
+# Measured 2026-11-23 on cache_filter_last · known_only eval_test
+extends: ./climb_tsb20_bpr020.yaml
+cache: runs/palembang/cache_filter_last
+out: runs/palembang/climb_tsb20_bpr020_filter_last
+recipe_id: climb_tsb20_bpr020_filter_last
+description: "tsb20+bpr020 on cache_filter_last (Palembang city best)"

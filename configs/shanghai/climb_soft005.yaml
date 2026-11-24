@@ -1,0 +1,10 @@
+# shanghai · climb_soft005 — BEST TEST Acc@1=0.196226 (> STHGCN 0.193)
+# Measured 2026-11-23 on cache_abl_tgt_last · known_only eval_test
+extends: ../recipes/win.yaml
+city: shanghai
+cache: runs/shanghai/cache_abl_tgt_last
+out: runs/shanghai/climb_soft005
+recipe_id: climb_soft005
+description: "WIN + soft-target β=0.05 prior=revisit (Shanghai best vs STHGCN)"
+soft_target_beta: 0.05
+soft_target_prior: "revisit"

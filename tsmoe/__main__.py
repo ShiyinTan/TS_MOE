@@ -365,6 +365,10 @@ def main(argv=None):
         help="add λ·log1p((A²)_{last,cand}) 2-hop transition prior (#4); "
              "A from train consecutive hops (default 0 = off). Try 0.3–0.5")
     t.add_argument(
+        "--pmi-score-bias", type=float, default=0.0,
+        help="add λ·PMI(last_poi→cand) to ranking scores (default 0 = off). "
+             "Keeps raw-count tsb/attn; distinct from --transition-pmi. Try 0.1–0.5")
+    t.add_argument(
         "--hour-pop-score-bias", type=float, default=0.0,
         help="add λ·log1p(global_poi_hour[cand, tip_hour]) (#8); "
              "needs causal counts (default 0 = off). Try 0.1–0.2")

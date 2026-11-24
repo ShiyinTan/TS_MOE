@@ -1,0 +1,7 @@
+# beijing · climb_s5g20_topk3 — structure/overlay Acc climb on soft005_geo020 (0.420455)
+# Opt-in switches only; does NOT change configs/recipes/{base,win,peak}.yaml defaults.
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_topk3
+recipe_id: climb_s5g20_topk3
+description: "struct top_k=3"
+top_k: 3

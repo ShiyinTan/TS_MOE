@@ -1,0 +1,9 @@
+# shanghai · climb_soft010_rev010 — Acc climb toward STHGCN (wave3)
+extends: ../recipes/win.yaml
+city: shanghai
+cache: runs/shanghai/cache_abl_tgt_last
+out: runs/shanghai/climb_soft010_rev010
+recipe_id: climb_soft010_rev010
+soft_target_beta: 0.10
+soft_target_prior: "revisit"
+revisit_score_bias: 0.10

@@ -1,0 +1,9 @@
+# tangerang · climb_soft010 — CITY BEST TEST Acc@1=0.280029 (vs bpr035 0.276443; STHGCN 0.293)
+extends: ../recipes/win.yaml
+city: tangerang
+cache: runs/tangerang/cache_abl_tgt_last
+out: runs/tangerang/climb_soft010
+recipe_id: climb_soft010
+description: "WIN + soft-target β=0.10 prior=revisit (Tangerang city best vs STHGCN gap −0.0130)"
+soft_target_beta: 0.10
+soft_target_prior: "revisit"

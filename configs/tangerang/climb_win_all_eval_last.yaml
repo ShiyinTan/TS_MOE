@@ -1,0 +1,7 @@
+# tangerang · WIN on train-all/eval-last cache
+extends: ../recipes/win.yaml
+city: tangerang
+cache: runs/tangerang/cache_tgt_all_eval_last
+out: runs/tangerang/climb_win_all_eval_last
+recipe_id: climb_win_all_eval_last
+description: "WIN on cache_tgt_all_eval_last"

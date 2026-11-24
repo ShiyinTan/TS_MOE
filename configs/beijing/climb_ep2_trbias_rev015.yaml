@@ -1,0 +1,5 @@
+extends: ./climb_ep2_trbias.yaml
+out: runs/beijing/climb_ep2_trbias_rev015
+recipe_id: climb_ep2_trbias_rev015
+description: "ep2_trbias + revisit_score_bias=0.15"
+revisit_score_bias: 0.15

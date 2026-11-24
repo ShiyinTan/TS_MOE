@@ -1,0 +1,7 @@
+# beijing · climb_s5g20_laplace — Acc climb on soft005_geo020 (opt-in)
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_laplace
+recipe_id: climb_s5g20_laplace
+description: "fix poi_geo_laplace=0.1, geo_knn=8"
+poi_geo_laplace: 0.1
+geo_knn: 8
