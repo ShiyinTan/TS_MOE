@@ -1,0 +1,5 @@
+# tokyo · peak — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/peak.yaml
+city: tokyo
+cache: runs/tokyo/cache_abl_tgt_last
+out: runs/tokyo/on_rev_soft10r

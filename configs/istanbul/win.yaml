@@ -1,0 +1,5 @@
+# istanbul · win — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/win.yaml
+city: istanbul
+cache: runs/istanbul/cache_abl_tgt_last
+out: runs/istanbul/win

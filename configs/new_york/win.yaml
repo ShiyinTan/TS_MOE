@@ -1,0 +1,5 @@
+# new_york · win — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/win.yaml
+city: new_york
+cache: runs/new_york/cache_abl_tgt_last
+out: runs/new_york/win

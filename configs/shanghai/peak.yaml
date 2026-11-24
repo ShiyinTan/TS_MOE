@@ -1,0 +1,5 @@
+# shanghai · peak — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/peak.yaml
+city: shanghai
+cache: runs/shanghai/cache_abl_tgt_last
+out: runs/shanghai/peak

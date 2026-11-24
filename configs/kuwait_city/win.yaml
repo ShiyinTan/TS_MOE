@@ -1,0 +1,5 @@
+# kuwait_city · win — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/win.yaml
+city: kuwait_city
+cache: runs/kuwait_city/cache_abl_tgt_last
+out: runs/kuwait_city/win

@@ -1,0 +1,5 @@
+# istanbul · base — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/base.yaml
+city: istanbul
+cache: runs/istanbul/cache_abl_tgt_last
+out: runs/istanbul/base

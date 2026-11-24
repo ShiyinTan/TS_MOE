@@ -14,7 +14,8 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 | [`docs/model-settings.md`](docs/model-settings.md) | **Added settings** vs Basic (router · WIN · Acc climb) |
 | [`docs/experiments.md`](docs/experiments.md) | **Experiment settings + Acc/R** · Keep/Discard |
 | [`docs/design-notes.md`](docs/design-notes.md) | **Why** — design intent of climb levers |
-| [`docs/runbook.md`](docs/runbook.md) | **Runnable commands** only (`python -m tsmoe …`) |
+| [`docs/runbook.md`](docs/runbook.md) | **Runnable commands** only (`python -m tsmoe …` / `--config`) |
+| [`configs/`](configs/) | Base / WIN / Peak YAML recipes per Massive-STEPS city |
 | *This README* | Install, data, CLI catalog, layout |
 
 **Feature deep-dives:** [`docs/candidates.md`](docs/candidates.md) (pools + overlays A–E) · [`docs/causal-counts.md`](docs/causal-counts.md).  
@@ -625,6 +626,7 @@ TS_MOE/
   docs/experiments.md         # Acc/R · Keep/Discard · results layout
   docs/design-notes.md        # why / design intent
   docs/runbook.md             # runnable python -m tsmoe commands
+  configs/<city>/{base,win,peak}.yaml  # Acc recipe launches (--config)
   docs/candidates.md          # pools + overlays A–E
   docs/causal-counts.md       # 因果在线计数 + --transition-attn
   docs/ablation_log.template.md  # 结果表模板（可复制到 results/）

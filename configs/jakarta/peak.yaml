@@ -1,0 +1,5 @@
+# jakarta · peak — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/peak.yaml
+city: jakarta
+cache: runs/jakarta/cache_abl_tgt_last
+out: runs/jakarta/peak

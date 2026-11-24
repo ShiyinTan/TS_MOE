@@ -3,7 +3,7 @@
 Install / data / full CLI catalog: [`../README.md`](../README.md).  
 Settings → [`model-settings.md`](model-settings.md) · results → [`experiments.md`](experiments.md).
 
-No overnight/leftover wave shell scripts. Use `python -m tsmoe …` directly.
+No overnight/leftover wave shell scripts. Prefer **config files** for Base / WIN / Peak.
 
 ---
 
@@ -12,8 +12,60 @@ No overnight/leftover wave shell scripts. Use `python -m tsmoe …` directly.
 ```bash
 cd TS_MOE
 conda activate tsmoe   # or: conda env create -f environment.yml
+pip install 'pyyaml>=6,<7'   # if env predates PyYAML
 python -c "import torch; assert torch.cuda.is_available()"
 ```
+
+---
+
+## Config recipes (preferred)
+
+Committed under `configs/`:
+
+| Path | Meaning |
+| --- | --- |
+| `configs/recipes/{base,win,peak}.yaml` | Shared knobs (WIN/Peak `extends` Base) |
+| `configs/<city>/{base,win,peak}.yaml` | City `cache` + `out` + `extends` recipe |
+
+Keys use argparse dest names (`lambda_bpr`, `transition_score_bias`, …). Meta: `recipe`, `recipe_id`, `city`, `description`, `extends`.
+
+```bash
+# LOCKED WIN (Tokyo)
+python -m tsmoe train --config configs/tokyo/win.yaml
+
+# Acc peak
+python -m tsmoe train --config configs/tokyo/peak.yaml
+
+# Multi-city Base / WIN / Peak
+python -m tsmoe train --config configs/beijing/base.yaml
+python -m tsmoe train --config configs/shanghai/win.yaml
+python -m tsmoe train --config configs/melbourne/peak.yaml
+
+# CLI overrides win over the file (last flag wins)
+python -m tsmoe train --config configs/tokyo/win.yaml --device cuda:1
+
+# Evaluate: config supplies cache/device only; pass --checkpoint
+python -m tsmoe evaluate \
+  --config configs/tokyo/peak.yaml \
+  --checkpoint runs/tokyo/on_rev_soft10r/best.pt \
+  --split test
+```
+
+→ metrics under `results/<run>/eval_test/` (`known_only` Acc@1).
+
+One-factor Acc climb: start from a recipe config, override `--out` and **one** Extra flag.
+
+```bash
+python -m tsmoe train --config configs/tokyo/peak.yaml \
+  --out runs/tokyo/my_abl --geo-score-power 1.5
+```
+
+Pack free GPU memory; ≤8 of our jobs/GPU; do not kill foreign jobs.
+
+Multi-city dense packer (`scripts/multicity_dense_pack.py` on the GPU box) launches
+Base/WIN/Peak with `--config configs/<city>/{base,win,peak}.yaml` and overrides
+`--out` to the packer tag (`mc_*` / `tune_*`). Do not kill running Acc jobs when
+retargeting; restart the packer process only so *new* launches pick up configs.
 
 ---
 
@@ -26,11 +78,11 @@ python -m tsmoe prepare \
   --train-targets last --eval-targets last
 ```
 
-Reuse this `--cache` for WIN / soft10r / leftover trains (no re-prepare for score-bias / soft-target / dim changes).
+Reuse this `--cache` for WIN / soft10r / leftover trains (no re-prepare for score-bias / soft-target / dim changes). Same pattern for other Massive-STEPS cities (`runs/<city>/cache_abl_tgt_last`).
 
 ---
 
-## Train LOCKED WIN
+## Train LOCKED WIN (equivalent flag soup)
 
 ```bash
 python -m tsmoe train \
@@ -45,11 +97,17 @@ python -m tsmoe train \
   --epochs 1 --checkpoint-metric acc1
 ```
 
+Prefer: `python -m tsmoe train --config configs/tokyo/win.yaml`
+
 → `results/tokyo/hc_sg_Atime_bpr029_ssb026/eval_test/metrics.json` (`known_only`)
 
 ---
 
 ## Train Acc peak (`on_rev_soft10r`)
+
+Prefer: `python -m tsmoe train --config configs/tokyo/peak.yaml`
+
+Equivalent flags:
 
 ```bash
 python -m tsmoe train \
@@ -67,19 +125,6 @@ python -m tsmoe train \
   --soft-target-beta 0.10 --soft-target-prior revisit \
   --epochs 1 --checkpoint-metric acc1
 ```
-
----
-
-## One-factor ablations on soft10r
-
-Same flags as peak; change `--out` and add **one** Extra flag. Leftover Acc queue is **exhausted** (see [`experiments.md`](experiments.md)); keep this pattern for future one-factor runs only.
-
-```bash
-# example Extra only — do not expect Acc lift from already-Discarded leftovers
-... soft10r flags ... --out runs/tokyo/my_abl --geo-score-power 1.5
-```
-
-Pack free GPU memory; do not kill foreign jobs.
 
 ---
 

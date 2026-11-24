@@ -1,0 +1,5 @@
+# beijing · win — Massive-STEPS Acc protocol (cache_abl_tgt_last)
+extends: ../recipes/win.yaml
+city: beijing
+cache: runs/beijing/cache_abl_tgt_last
+out: runs/beijing/win
