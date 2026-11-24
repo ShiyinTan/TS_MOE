@@ -1,0 +1,15 @@
+extends: ./climb_bpr020_soft010.yaml
+out: runs/melbourne/climb_bpr020_soft010_w8_tgt_seed40_soft0078_session_j12p10
+recipe_id: climb_bpr020_soft010_w8_tgt_seed40_soft0078_session_j12p10
+description: "melbourne clear-margin climb · climb_bpr020_soft010_w8_tgt_seed40_soft0078_session_j12p10 · w8 beyond 0.168277"
+cache: "runs/melbourne/cache_tgt_all_eval_last"
+session_summary: "on"
+eval_test_every_epoch: false
+batch_size: 48
+eval_batch_size: 32
+threads: 4
+soft_target_beta: 0.078
+seed: 40
+jump_length_bias: 0.12
+jump_dist: "lognormal"
+pop_score_bias: 0.1

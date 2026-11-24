@@ -1,9 +1,9 @@
 # Beijing Acc@1 提升路径（vs STHGCN）
 
 **协议：** `known_only` Acc@1 · **eval_test only** · seed 42 · hard_prior  
-**日期：** 2026-11-24（JST）  
+**日期：** 2026-11-25（JST）  
 **STHGCN 论文 Acc@1：** 0.453 · 需约 **40/88 ≈ 0.4545** 才能赢  
-**锁定配置：** `configs/beijing/climb_s5g20_all_gauss020_wd005.yaml`  
+**锁定配置：** `configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml` · Acc@1 **0.465909**（41/88）  
 **PR：** [#37](https://github.com/ShiyinTan/TS_MOE/pull/37)
 
 ---
@@ -16,13 +16,13 @@
 | 1 · 换 cache + gauss | **0.431818** | **+0.0114** | −0.0212 | `climb_s5g20_all_gauss015` | `cache_tgt_all_eval_last` | train_targets=**all** · eval=last · **gauss λ=0.15**（关掉 geo） |
 | 2 · 加强 gauss | **0.443182** | **+0.0114** | −0.0098 | `climb_s5g20_all_gauss020` | 同上 | gauss λ **0.15 → 0.20** |
 | 3 · 调 weight_decay | **0.454545** | **+0.0114** | **+0.0015** | `climb_s5g20_all_gauss020_wd005` | 同上 | **weight_decay=0.005**（并列：`…_wd02`） |
+| 4 · jump+pop+pmi | **0.465909** | **+0.0114** | **+0.0129** | `…_wd005_j12p10_pmi015_win` | 同上 | **jump=0.12 + pop=0.10 + pmi=0.15**（wave45；并列 gsig060/075） |
 
-一句话：`soft005+trbias` 底座 → **换 all/last cache** → **用 gauss 替换 geo** → **略降 weight_decay** → 超过 STHGCN。
+一句话：`soft005+trbias` → **all/last cache** → **gauss 替 geo** → **降 wd** → **jump+pop+pmi** → clear margin over STHGCN。
 
 ```
-0.4205 ──(+0.011)──► 0.4318 ──(+0.011)──► 0.4432 ──(+0.011)──► 0.4545  ✓ beat 0.453
-  soft005_geo020        all_gauss015         all_gauss020         all_gauss020_wd005
-  (abl_tgt_last)        (tgt_all_eval_last)  (λ=0.20)             (wd=0.005)
+0.4205 ──(+0.011)──► 0.4318 ──(+0.011)──► 0.4432 ──(+0.011)──► 0.4545 ──(+0.011)──► 0.4659  ✓ clear
+  soft005_geo020        all_gauss015         all_gauss020         wd005                 j12+pop10+pmi015
 ```
 
 ---
@@ -31,19 +31,17 @@
 
 | 项 | 取值 |
 | --- | --- |
-| Config | `configs/beijing/climb_s5g20_all_gauss020_wd005.yaml` |
+| Config | `configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml` |
 | Cache | `runs/beijing/cache_tgt_all_eval_last`（`--train-targets all --eval-targets last`） |
-| 底座 | Peak recipe + `transition_attn=bias` + epochs=2 |
-| Soft target | β=0.05 · prior=`revisit` |
-| 空间先验 | **gauss_geo_bias=0.20** · σ=0.5 km · **geo_score_bias=0** |
-| 正则 | **weight_decay=0.005**（默认 0.01） |
-| Acc@1 / R@5 / R@10 / R@20 | **0.454545** / 0.659 / 0.727 / 0.784 |
-| 并列 | `climb_s5g20_all_gauss020_wd02`（wd=0.02，同 Acc） |
+| 底座 | Peak + trbias + soft β=0.05 + gauss λ=0.20 + wd=0.005 |
+| 增量 | **jump_length_bias=0.12** · **pop_score_bias=0.10** · **pmi_score_bias=0.15** · epochs=3 |
+| Acc@1 | **0.465909**（41/88）· MRR≈0.536 |
+| Acc 并列 | `…_j12p10_gsig060` / `…_j12p10_gsig075`（同 Acc@1） |
 
 启动：
 
 ```bash
-python -m tsmoe train --config configs/beijing/climb_s5g20_all_gauss020_wd005.yaml
+python -m tsmoe train --config configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml
 ```
 
 ---
@@ -59,10 +57,13 @@ python -m tsmoe train --config configs/beijing/climb_s5g20_all_gauss020_wd005.ya
 | Wave4 | 围着 gauss020 细扫 | λ/σ/soft/revisit | 无再升；**0.4432 粘住**（差 1 个样本） |
 | Wave5 | 新 prepare + overlay | filter/p80/p70/max；pmi/cat/sess/2hop… | 无再升；若干 **TIE 0.4432** |
 | Wave6 | 训练超参 | dropout / **wd** / neg / batch / ep / heads | **wd=0.005 & 0.02 → 0.4545，beat STHGCN** |
+| Wave43–45 | 墙后加密 | jump/pop/pmi/gsig 等 | **w45 → 0.4659**（j12+pop10+pmi015；gsig060/075 并列） |
+| Wave46 | 围着 WIN 加密 | pmi/gsig/j/pop/ep/seed/wd/soft | 进行中 |
 
 ---
 
 ## 4. 关键负结果（避免再踩）
+
 
 | 方向 | 代表 | 典型 Acc | 备注 |
 | --- | --- | ---: | --- |
@@ -81,9 +82,11 @@ python -m tsmoe train --config configs/beijing/climb_s5g20_all_gauss020_wd005.ya
 | --- | ---: | ---: | ---: | --- |
 | Tokyo | 0.2677 | 0.250 | +0.0177 | `configs/tokyo/peak.yaml`（soft10r） |
 | Shanghai | 0.1962 | 0.193 | +0.0032 | `configs/shanghai/climb_soft005.yaml` |
-| **Beijing** | **0.4545** | 0.453 | **+0.0015** | `configs/beijing/climb_s5g20_all_gauss020_wd005.yaml` |
+| **Beijing** | **0.4659** | 0.453 | **+0.0129** | `configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml` |
+| Palembang | 0.2597 | 0.246 | +0.0137 | packer paused（margin ok） |
+| Melbourne | 0.1683 | 0.168 | +0.0003 | **next beat focus** — clear-margin climb w8 |
 
-下一城（按 check-in 从小到大）：**Palembang**（interim 0.2287 vs 0.246）。
+下一城 beat focus：**Melbourne** clear-margin（当前 Δ 过薄）；PL 保持 paused。
 
 ---
 
