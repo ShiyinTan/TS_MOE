@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w18_session_on
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w18_session_on
+recipe_id: climb_s5g20_all_gauss020_wd005_w18_session_on
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w18_session_on"
+session_summary: "on"
