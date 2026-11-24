@@ -1,0 +1,8 @@
+# palembang · CITY BEST TEST Acc@1=0.237726 (was 0.232558 soft008; STHGCN 0.246) · Δ −0.0083
+# Measured 2026-11-24 known_only eval_test · soft β=0.08 + transition_score_bias=1.8 on cache_filter_last
+extends: ./climb_tsb20_bpr020_filter_soft008.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_soft008_tsb18
+recipe_id: climb_tsb20_bpr020_filter_soft008_tsb18
+description: "LOCKED interim Palembang best · Acc@1 0.237726 · soft008+tsb18"
+soft_target_beta: 0.08
+transition_score_bias: 1.8

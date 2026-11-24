@@ -1,7 +1,7 @@
-# palembang · climb_tsb20_bpr020_filter_w3_soft008_tsb18
+# palembang · wave3 WIN · Acc@1=0.237726 · locked copy: soft008_tsb18.yaml
 extends: ./climb_tsb20_bpr020_filter_soft008.yaml
 out: runs/palembang/climb_tsb20_bpr020_filter_w3_soft008_tsb18
 recipe_id: climb_tsb20_bpr020_filter_w3_soft008_tsb18
-description: "palembang climb · w3_soft008_tsb18"
+description: "wave3 WIN Palembang · Acc@1 0.237726 · soft008+tsb18"
 soft_target_beta: 0.08
 transition_score_bias: 1.8
