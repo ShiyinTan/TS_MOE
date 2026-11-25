@@ -421,18 +421,18 @@ def main(argv=None):
         "--large-city-fast", choices=ON_OFF, default="off",
         help="when on *and* city is Bandung-or-larger: shrink model structure "
              "(dim128/heads4, transition-attn=bias, no last_slot/session) and "
-             "validation candidate pool C via geo top-M=2048. Final test keeps "
-             "full constructed pool. No-op on small cities. See tsmoe/city_scale.py")
+             "val+test candidate pool via mix top-M=512 (geo/pop/user/hist/hour; "
+             "GT always included). No-op on small cities. See tsmoe/city_scale.py")
     t.add_argument(
         "--candidate-spatial-prior", type=str, default="off",
-        choices=("off", "geo", "gravity", "radiation"),
-        help="train validation pool shrink (#10): keep top-M by geo/gravity/"
-             "radiation (GT always included). large_city_fast defaults to geo "
-             "on Bandung-or-larger; final test keeps full pool")
+        choices=("off", "geo", "gravity", "radiation", "mix"),
+        help="train val+test pool shrink (#10): keep top-M by geo/gravity/"
+             "radiation/mix (GT always included). large_city_fast defaults to "
+             "mix on Bandung-or-larger")
     t.add_argument(
         "--candidate-prior-top-m", type=int, default=0,
         help="top-M for --candidate-spatial-prior (0 = off). "
-             "large_city_fast default on large cities: 2048 for val only")
+             "large_city_fast default on large cities: 512 for val+test")
     t.add_argument(
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
@@ -523,9 +523,9 @@ def main(argv=None):
         help="λ for --score-calib feature term (Acc-aware; default 0)")
     e.add_argument(
         "--candidate-spatial-prior", type=str, default="off",
-        choices=("off", "geo", "gravity", "radiation"),
+        choices=("off", "geo", "gravity", "radiation", "mix"),
         help="eval-only Acc@1 pool shrink (#10): keep top-M by geo/gravity/"
-             "radiation prior (always force-include GT; log natural coverage)")
+             "radiation/mix prior (always force-include GT; log natural coverage)")
     e.add_argument(
         "--candidate-prior-top-m", type=int, default=0,
         help="top-M kept by --candidate-spatial-prior (0 = off)")

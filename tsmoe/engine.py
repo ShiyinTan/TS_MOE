@@ -34,7 +34,10 @@ from .model import (
 )
 from .prepare import digest_json, dump_json, verify_files
 from .resource_monitor import ResourceMonitor
-from .city_scale import apply_large_city_fast, resolve_city_name, val_pool_shrink_kwargs
+from .city_scale import (
+    apply_large_city_fast, eval_pool_shrink_kwargs, resolve_city_name,
+    val_pool_shrink_kwargs,
+)
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
 
@@ -683,6 +686,25 @@ class Cache:
                 self.user_frequent = {str(k): list(v) for k, v in raw.items()}
             else:
                 self.user_frequent = {}
+        self._poi_hour = None
+
+    def poi_hour_matrix(self):
+        """Train-split global POI×hour visit counts ``[V, 24]`` (lazy; for mix shortlist)."""
+        if self._poi_hour is not None:
+            return self._poi_hour
+        from .features import us_to_hour_weekday
+        train = self.split("train")
+        mat = torch.zeros((len(self.pois), 24), dtype=torch.float64)
+        tokens = train["poi_token"]
+        us = train["us"]
+        for i in range(len(tokens)):
+            row = int(tokens[i]) - 2
+            if row < 0:
+                continue
+            hour, _wd = us_to_hour_weekday(int(us[i]))
+            mat[row, int(hour) % 24] += 1.0
+        self._poi_hour = mat
+        return mat
 
     def load(self, name):
         verify_files(self.path, {name: self.meta["files"][name]})
@@ -1388,21 +1410,25 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
         if cache.uses_full_catalog_pools():
             raise ValueError("--candidate-spatial-prior requires constructed pools "
                              "(not full-catalog cache)")
+        hour_mat = cache.poi_hour_matrix() if prior == "mix" else None
         pools, pool_shrink_stats = shrink_pools_spatial_prior(
             data, pools, cache.poi_coords,
             prior=prior, top_m=top_m,
             popularity=cache.popularity,
-            gravity_beta=float(candidate_prior_gravity_beta or 1.0))
+            gravity_beta=float(candidate_prior_gravity_beta or 1.0),
+            user_frequent=cache.user_frequent,
+            poi_hour=hour_mat)
         cov = pool_shrink_stats.get("natural_gt_coverage")
         print(
             f"candidate_spatial_prior={prior} top_m={top_m} "
             f"natural_gt_coverage={cov} "
-            f"size_after_mean={pool_shrink_stats.get('size_after_mean')}",
+            f"size_after_mean={pool_shrink_stats.get('size_after_mean')} "
+            f"(GT always force-included)",
             flush=True)
         if cov is not None and cov < 0.98:
             print(
-                f"WARNING: natural GT coverage {cov:.4f} < 0.98 — Acc@1 may be "
-                "unfair if force-include rescues many targets",
+                f"NOTE: natural GT coverage {cov:.4f} < 0.98 — Acc@1 is shortlist "
+                "Acc (GT force-included; not full-pool comparable)",
                 flush=True)
     use_counts = count_tables is not None and model.cfg.causal_counts
     use_side = needs_side_features(model.cfg)
@@ -1899,13 +1925,13 @@ def train(args):
             f"large_city_fast=on city={_city_name} changes={_fast_report.get('changes')}",
             flush=True,
         )
-        _vp = _fast_report.get("val_pool") or {}
+        _vp = _fast_report.get("eval_pool") or _fast_report.get("val_pool") or {}
         if _vp.get("candidate_prior_top_m"):
             print(
-                f"large_city_fast val pool shrink "
+                f"large_city_fast eval pool shrink "
                 f"prior={_vp.get('candidate_spatial_prior')} "
                 f"top_m={_vp.get('candidate_prior_top_m')} "
-                f"(final test keeps full constructed pool)",
+                f"(val+test; GT always force-included)",
                 flush=True,
             )
     elif _fast_report.get("requested"):
@@ -2072,7 +2098,8 @@ def train(args):
     settings["large_city_fast"] = getattr(args, "large_city_fast", "off")
     settings["candidate_spatial_prior"] = getattr(args, "candidate_spatial_prior", "off")
     settings["candidate_prior_top_m"] = int(getattr(args, "candidate_prior_top_m", 0) or 0)
-    settings["val_pool_shrink"] = bool(val_pool_shrink_kwargs(args))
+    settings["eval_pool_shrink"] = bool(eval_pool_shrink_kwargs(args))
+    settings["val_pool_shrink"] = settings["eval_pool_shrink"]  # alias
     settings["dim"] = cfg.dim
     settings["heads"] = cfg.heads
     settings["layers"] = cfg.layers
@@ -2402,10 +2429,10 @@ def train(args):
         if cfg.causal_counts:
             train_end_state = online_tables.state_dict()
         # Pass category_frequency so val (and saved best) always include groups + Acc@1.
-        _val_pool_kw = val_pool_shrink_kwargs(args)
+        _eval_pool_kw = eval_pool_shrink_kwargs(args)
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
                            category_frequency, desc=f"val ep{epoch}", count_tables=val_tables,
-                           **_val_pool_kw)
+                           **_eval_pool_kw)
         row = metrics["all_targets"]
         if checkpoint_metric == "acc1":
             score = row["Acc@1"]
@@ -2426,7 +2453,8 @@ def train(args):
             epoch_test_tables = online_tables.clone() if cfg.causal_counts else None
             epoch_test = evaluate(
                 model, final, test, cache, args.eval_batch_size, args.chunk,
-                category_frequency, desc=f"test ep{epoch}", count_tables=epoch_test_tables)
+                category_frequency, desc=f"test ep{epoch}", count_tables=epoch_test_tables,
+                **_eval_pool_kw)
             record["test"] = epoch_test
             results_epoch["test"] = primary_metric_snapshot(epoch_test)
             test_eval_dir.mkdir(parents=True, exist_ok=True)
@@ -2507,7 +2535,8 @@ def train(args):
                     visit_bin_edges=None if edges is None else torch.tensor(edges))
         test_metrics = evaluate(model, final, test, cache, args.eval_batch_size,
                                 args.chunk, category_frequency, desc="eval test",
-                                count_tables=test_tables)
+                                count_tables=test_tables,
+                                **eval_pool_shrink_kwargs(args))
         test_payload = build_eval_payload(args, cache, test_metrics, device,
                                           checkpoint_path=best_path, checkpoint=checkpoint)
         test_payload["split"] = "test"

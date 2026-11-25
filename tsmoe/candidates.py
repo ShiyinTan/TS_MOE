@@ -585,13 +585,18 @@ def shrink_pools_spatial_prior(
         top_m: int = 64,
         popularity: torch.Tensor | None = None,
         gravity_beta: float = 1.0,
-        radiation_soft_km: float = 0.25):
-    """Coverage-safe Acc@1 shortlist (#10): keep top-M by spatial prior + always GT.
+        radiation_soft_km: float = 0.25,
+        user_frequent: Mapping[str, Sequence[int]] | None = None,
+        poi_hour: torch.Tensor | None = None,
+        mix_weights: Mapping[str, float] | None = None):
+    """Coverage-safe Acc@1 shortlist (#10): keep top-M by prior + always GT.
 
     ``prior``:
       - ``geo``: nearest by haversine (−km)
       - ``gravity``: ``log1p(pop) − β·log1p(km)`` (visit mass from ``popularity``)
       - ``radiation``: Simini hard intervening-opportunity over the pool
+      - ``mix``: weighted sum of geo / global-pop / user-frequent / history-revisit /
+        tip-hour POI mass (see ``mix_weights``). Missing signals contribute 0.
 
     Returns ``(new_pools, stats)`` where ``stats['natural_gt_coverage']`` is the
     fraction of in-catalog GT that already sat in the natural top-M (before the
@@ -599,8 +604,8 @@ def shrink_pools_spatial_prior(
     append the target when missing.
     """
     prior = str(prior or "geo").lower()
-    if prior not in ("geo", "gravity", "radiation"):
-        raise ValueError("candidate spatial prior must be geo|gravity|radiation")
+    if prior not in ("geo", "gravity", "radiation", "mix"):
+        raise ValueError("candidate spatial prior must be geo|gravity|radiation|mix")
     top_m = int(top_m)
     if top_m < 1:
         raise ValueError("candidate-prior-top-m must be >= 1")
@@ -614,8 +619,27 @@ def shrink_pools_spatial_prior(
             raise ValueError("popularity must align with catalog_coords")
     if prior in ("gravity", "radiation") and pop is None:
         raise ValueError(f"prior={prior} requires catalog popularity/visit mass")
+    hour_mat = None
+    if poi_hour is not None:
+        hour_mat = torch.as_tensor(poi_hour, dtype=torch.float64)
+        if hour_mat.ndim != 2 or hour_mat.shape[0] != coords.shape[0] or hour_mat.shape[1] != 24:
+            raise ValueError("poi_hour must be [V, 24] aligned with catalog_coords")
+    weights = {
+        "geo": 1.0,
+        "pop": 0.5,
+        "user": 1.0,
+        "hist": 1.0,
+        "hour": 0.5,
+    }
+    if mix_weights:
+        for key, value in mix_weights.items():
+            if key in weights:
+                weights[key] = float(value)
 
     ends = data["end"]
+    starts = data.get("start")
+    trails = data.get("trails")
+    trail_idx = data.get("trail")
     lats, lons = data["lat"], data["lon"]
     n_events = len(data["poi_token"])
     new_pools = []
@@ -657,7 +681,7 @@ def shrink_pools_spatial_prior(
         elif prior == "gravity":
             mass = pop[idx].clamp_min(0)
             score = torch.log1p(mass) - float(gravity_beta) * torch.log1p(km.clamp_min(0))
-        else:
+        elif prior == "radiation":
             # Hard radiation over this pool (origin mass = median cand mass).
             mass = pop[idx].clamp_min(0)
             m_i = float(mass.median().item()) if mass.numel() else 0.0
@@ -674,6 +698,33 @@ def shrink_pools_spatial_prior(
                 - torch.log((m_i + s_ij).clamp_min(eps))
                 - torch.log((m_i + mass + s_ij).clamp_min(eps))
             )
+        else:  # mix
+            score = weights["geo"] * (-torch.log1p(km.clamp_min(0)))
+            if pop is not None and weights["pop"] != 0:
+                score = score + weights["pop"] * torch.log1p(pop[idx].clamp_min(0))
+            if weights["user"] != 0 and user_frequent and trails is not None and trail_idx is not None:
+                user = str(trails[int(trail_idx[prev])][0])
+                uf = user_frequent.get(user) or []
+                uf_map = {int(r): 1.0 / (rank + 1.0) for rank, r in enumerate(uf)}
+                user_s = torch.tensor([uf_map.get(int(r), 0.0) for r in rows],
+                                      dtype=torch.float64)
+                score = score + weights["user"] * torch.log1p(user_s)
+            if weights["hist"] != 0 and starts is not None:
+                s0 = int(starts[i])
+                hist = data["poi_token"][s0:end]
+                hist_rows = (hist.long() - 2).tolist()
+                hist_count: dict[int, int] = {}
+                for hr in hist_rows:
+                    if hr >= 0:
+                        hist_count[hr] = hist_count.get(hr, 0) + 1
+                hist_s = torch.tensor([float(hist_count.get(int(r), 0)) for r in rows],
+                                      dtype=torch.float64)
+                score = score + weights["hist"] * torch.log1p(hist_s)
+            if hour_mat is not None and weights["hour"] != 0:
+                from .features import us_to_hour_weekday
+                tip_hour, _wd = us_to_hour_weekday(int(data["us"][prev]))
+                hour_s = hour_mat[idx, int(tip_hour) % 24].clamp_min(0)
+                score = score + weights["hour"] * torch.log1p(hour_s)
         # Stable top-M: higher score first.
         keep_n = min(top_m, len(rows))
         top_idx = torch.argsort(score, descending=True, stable=True)[:keep_n].tolist()
@@ -693,6 +744,7 @@ def shrink_pools_spatial_prior(
         prior=prior,
         top_m=top_m,
         gravity_beta=float(gravity_beta),
+        mix_weights=dict(weights) if prior == "mix" else None,
         n=len(new_pools),
         known_targets=known,
         natural_gt_hits=natural_hits,
