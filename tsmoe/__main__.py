@@ -418,6 +418,11 @@ def main(argv=None):
              "activity-center→last distance) added to shared base/context "
              "(default off; never hard_prior)")
     t.add_argument(
+        "--large-city-fast", choices=ON_OFF, default="off",
+        help="when on *and* city is Bandung-or-larger: shrink model structure for "
+             "speed (dim128/heads4, transition-attn=bias, candidate-context-time=off, "
+             "session-summary=off). No-op on small cities. See tsmoe/city_scale.py")
+    t.add_argument(
         "--user-pref", choices=ON_OFF, default="off",
         help="causal user–cat / user–hour preference MLP into base/context "
              "(default off; requires causal counts; never hard_prior)")
