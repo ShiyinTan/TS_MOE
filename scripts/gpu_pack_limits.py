@@ -36,16 +36,22 @@ MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "3"))
 # Bandung-or-larger Massive-STEPS cities (raw data/ CSV ≥ Bandung ≈57MB): tighter
 # per-GPU cap to avoid host RAM / VRAM pressure. Override with TSMOE_MAX_PER_GPU_LARGE.
 MAX_OUR_PER_GPU_LARGE = int(os.environ.get("TSMOE_MAX_PER_GPU_LARGE", "2"))
-LARGE_CITIES = {
-    # ≥ Bandung by data/ CSV footprint on the GPU box (2026-11-26).
-    "bandung",
-    "kuwait_city",
-    "sao_paulo",
-    "new_york",
-    "jakarta",
-    "petaling_jaya",
-    "istanbul",
-}
+try:
+    # Single source of truth with train-time large_city_fast gating.
+    from tsmoe.city_scale import LARGE_CITIES as _LARGE_CITIES  # type: ignore
+
+    LARGE_CITIES = set(_LARGE_CITIES)
+except Exception:
+    LARGE_CITIES = {
+        # ≥ Bandung by data/ CSV footprint on the GPU box (2026-11-26).
+        "bandung",
+        "kuwait_city",
+        "sao_paulo",
+        "new_york",
+        "jakarta",
+        "petaling_jaya",
+        "istanbul",
+    }
 # Leave headroom so a new train does not OOM the host / GPU.
 MIN_HOST_RAM_GIB = float(os.environ.get("TSMOE_MIN_HOST_RAM_GIB", "24"))
 MIN_FREE_VRAM_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "5000"))

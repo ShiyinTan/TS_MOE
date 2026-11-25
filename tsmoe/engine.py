@@ -34,6 +34,7 @@ from .model import (
 )
 from .prepare import digest_json, dump_json, verify_files
 from .resource_monitor import ResourceMonitor
+from .city_scale import apply_large_city_fast, resolve_city_name
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
 
@@ -1882,6 +1883,27 @@ def train(args):
         raise ValueError("--surd-attn-gate ≠ off requires causal counts")
     if surd_attn_gate != "off" and transition_attn != "bias":
         raise ValueError("--surd-attn-gate only applies to --transition-attn bias")
+    # Optional structure shrink for Bandung-or-larger cities (YAML/CLI switch).
+    _fast_locals = {
+        "transition_attn": transition_attn,
+        "candidate_context_time": candidate_context_time,
+        "session_summary": session_summary,
+    }
+    _city_name = resolve_city_name(args, cache)
+    _fast_report = apply_large_city_fast(args, city=_city_name, locals_map=_fast_locals)
+    transition_attn = _fast_locals["transition_attn"]
+    candidate_context_time = _fast_locals["candidate_context_time"]
+    session_summary = _fast_locals["session_summary"]
+    if _fast_report.get("applied"):
+        print(
+            f"large_city_fast=on city={_city_name} changes={_fast_report.get('changes')}",
+            flush=True,
+        )
+    elif _fast_report.get("requested"):
+        print(
+            f"large_city_fast skipped city={_city_name} reason={_fast_report.get('skipped')}",
+            flush=True,
+        )
     cfg = ModelConfig(args.dim, args.heads, args.layers, args.dropout, args.top_k,
                       args.temperature, args.lambda_prior, use_surd=not args.no_surd,
                       router_mode=args.router_mode, hybrid_lambda=args.hybrid_lambda,
@@ -2038,6 +2060,12 @@ def train(args):
     settings["max_train_candidates"] = args.max_train_candidates
     settings["causal_counts"] = cfg.causal_counts
     settings["transition_attn"] = cfg.transition_attn
+    settings["large_city_fast"] = getattr(args, "large_city_fast", "off")
+    settings["dim"] = cfg.dim
+    settings["heads"] = cfg.heads
+    settings["layers"] = cfg.layers
+    settings["candidate_context_time"] = cfg.candidate_context_time
+    settings["session_summary"] = cfg.session_summary
     settings["transition_lambda"] = cfg.transition_lambda
     settings["transition_score_bias"] = cfg.transition_score_bias
     settings["category_score_bias"] = cfg.category_score_bias
