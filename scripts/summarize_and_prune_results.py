@@ -89,27 +89,48 @@ KEEP_ROOT_NAMES = {
 }
 
 
+_SKIP_TAGS = {
+    "eval_test",
+    "known_only",
+    "cache_abl_tgt_last",
+    "cache_tgt_all_eval_last",
+    "configs",
+    "docs",
+    "results",
+    "runs",
+    "scripts",
+}
+
+
 def parse_keep_from_climb_path(path: Path) -> set[str]:
+    """Extract keep tags from climb_path backticks (prefer results/<city>/<tag>/…)."""
     if not path.exists():
         return set()
     text = path.read_text(errors="ignore")
     tags: set[str] = set()
-    # `results/<city>/<tag>/...` or bare `tag` in backticks that look like run dirs
-    for m in re.finditer(r"`(?:results/[^`]+/)?([A-Za-z0-9][A-Za-z0-9_.-]{2,})(?:/[^`]*)?`", text):
-        tag = m.group(1)
-        if tag.endswith((".yaml", ".md", ".csv", ".json", ".py")):
-            continue
-        if tag in {"eval_test", "known_only", "cache_abl_tgt_last", "cache_tgt_all_eval_last"}:
-            continue
-        if "/" in tag:
-            continue
-        tags.add(tag)
-    return tags
+    # Prefer explicit results paths: results/<city>/<tag>/...
+    for m in re.finditer(r"`results/[A-Za-z0-9_.-]+/([A-Za-z0-9][A-Za-z0-9_.-]{2,})(?:/[^`]*)?`", text):
+        tags.add(m.group(1))
+    # Also accept long climb_* / mc_* / on_* / hc_* / tune_* / win run-like tags
+    for m in re.finditer(
+        r"`((?:climb|mc|on|hc|tune|cal|abl)_[A-Za-z0-9_.-]{3,}|win|peak)`",
+        text,
+    ):
+        tags.add(m.group(1))
+    return {t for t in tags if t not in _SKIP_TAGS and not t.endswith((".yaml", ".md", ".csv", ".json", ".py"))}
 
 
-def summarize(city_dir: Path, city: str, sthgcn: float) -> list[dict]:
+def summarize(city_dir: Path, city: str, sthgcn: float, *, allow_empty: bool = False) -> list[dict]:
     run_dirs = sorted(p for p in city_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
     rows = [load_row(d) for d in run_dirs]
+    ok_rows = [r for r in rows if r["status"] == "ok"]
+    # Do not clobber an existing rich summary with an empty rewrite (e.g. local checkout
+    # that only has climb_path.md and no run dirs).
+    if not ok_rows and not allow_empty:
+        existing = city_dir / "settings_summary.csv"
+        if existing.exists() and existing.stat().st_size > 50:
+            print(f"  skip summary rewrite: 0 ok dirs but {existing.name} already present")
+            return []
     ok = write_settings_summary(city_dir, city, sthgcn, rows)
     write_mean_std(city_dir, city, ok)
     win = ok[0] if ok else None
