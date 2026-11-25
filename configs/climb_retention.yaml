@@ -6,6 +6,8 @@
 #   python scripts/sync_climb_retention.py --apply
 #
 # Prune tools read this file (do not hardcode city WIN lists in two places).
+# Intermediate densify waves (*_wNN_*) are gitignored; only lock WIN configs belong in git.
+# Promote with: python scripts/promote_climb_config.py --city … --config … --acc … --git-add
 
 sthgcn:
   tokyo: 0.250
@@ -101,7 +103,7 @@ cities:
       - base.yaml
       - peak.yaml
       - win.yaml
-      - climb_tsb20_bpr020_filter.yaml
+      - climb_tsb20_bpr020.yaml
       - climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml
     keep_results:
       - climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr025
