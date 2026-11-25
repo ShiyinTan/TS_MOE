@@ -13,6 +13,7 @@ import argparse
 import glob
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,7 +56,7 @@ def main() -> None:
 
     if args.refresh:
         subprocess.call(
-            [str(ROOT / "scripts" / "mel_climb_autonomy.py"), "--status"],
+            [sys.executable, str(ROOT / "scripts" / "mel_climb_autonomy.py"), "--status"],
             cwd=str(ROOT),
         )
 
