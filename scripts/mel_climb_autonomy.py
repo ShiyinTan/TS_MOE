@@ -105,6 +105,11 @@ def fingerprint(overrides: dict[str, Any]) -> str:
     return json.dumps(overrides, sort_keys=True, separators=(",", ":"))
 
 
+def is_real_lift(acc: float, lock: float) -> bool:
+    """TIE ≠ lift. Compare known_only Acc@1 at 6 decimal places."""
+    return round(float(acc), 6) > round(float(lock), 6)
+
+
 def stem_for(policy: dict[str, Any], wave: str, tag: str) -> str:
     return f"{policy['stem_prefix']}_{wave}_{policy['stem_mid']}_{tag}"
 
@@ -154,12 +159,12 @@ def scan_wave_metrics(wave: str, city: str = "melbourne") -> dict[str, Any]:
             continue
         acc_f = float(acc)
         done += 1
-        row = {"tag": stem, "acc": acc_f, "lift": acc_f > lock}
+        row = {"tag": stem, "acc": acc_f, "lift": is_real_lift(acc_f, lock)}
         rows.append(row)
         if acc_f > top:
             top = acc_f
             best = stem
-        if acc_f > lock:
+        if is_real_lift(acc_f, lock):
             lifts += 1
     rows.sort(key=lambda r: -r["acc"])
     return {
@@ -343,7 +348,7 @@ def advance_wave_if_needed(force: bool = False) -> dict[str, Any]:
     top = float(summary["top"] or 0.0)
     best = summary["best"]
     lock = float(policy["lock_acc"])
-    lifted = top > lock
+    lifted = is_real_lift(top, lock)
     snapshot["event"] = "wave_complete"
     snapshot["lifted"] = lifted
     write_harvest(snapshot)
@@ -356,13 +361,15 @@ def advance_wave_if_needed(force: bool = False) -> dict[str, Any]:
         apply_lift_to_state(state, wave, best, top)
         state["best_acc"] = top
         state["best_tag"] = best
-        if top >= float(policy["target_acc"]):
+        if round(top, 6) >= round(float(policy["target_acc"]), 6):
             state["target_met"] = True
             save_state(state)
             snapshot["event"] = "target_met"
             write_harvest({**snapshot, "event": "target_met", "lock_acc": top})
             return snapshot
     else:
+        # Keep canonical lock (do not bump on TIE float noise).
+        state["lock_acc"] = round(lock, 6)
         state["best_acc"] = max(float(state.get("best_acc") or 0.0), top)
         if best and not state.get("best_tag"):
             state["best_tag"] = best

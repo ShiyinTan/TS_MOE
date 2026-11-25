@@ -96,7 +96,8 @@ def main() -> None:
             wave = h.get("wave") or wave
             lock = float(h.get("lock_acc") or lock)
             event = h.get("event") or "-"
-            flag = "LIFT" if lifts else "flat"
+            # TIE at lock is flat (compare at 6 dp)
+            flag = "LIFT" if top > 0 and round(top, 6) > round(lock, 6) else "flat"
             print(
                 f"MEL {wave} {done}/{total} TOP={top:.6f} lifts={lifts} {flag} "
                 f"jobs={trains} pack={pack_s} availRAM={avail:.0f}G diskFree={disk}G "
@@ -136,7 +137,7 @@ def main() -> None:
         if float(a) > lock:
             lifts += 1
 
-    flag = "LIFT" if lifts else "flat"
+    flag = "LIFT" if top > 0 and round(top, 6) > round(lock, 6) else "flat"
     print(
         f"MEL {wave} {done}/{total} TOP={top:.6f} lifts={lifts} {flag} "
         f"jobs={trains} pack={pack_s} availRAM={avail:.0f}G diskFree={disk}G "
