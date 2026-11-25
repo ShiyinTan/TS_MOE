@@ -179,12 +179,20 @@ def main():
         policy = effective_policy()
         state = load_state()
         if state.get("target_met"):
+            # Do not leave GPUs idle during harvest waits — hand off to next city.
             print(
-                f"target_met Acc≥{policy.get('target_acc')} — idle (STOP to exit permanently)",
+                f"target_met Acc≥{policy.get('target_acc')} — handoff next city (no idle)",
                 flush=True,
             )
-            time.sleep(120)
-            continue
+            try:
+                subprocess.check_call(
+                    [PY, str(ROOT / "scripts" / "city_climb_handoff.py"), "--from", CITY],
+                    cwd=str(ROOT),
+                )
+            except Exception as e:
+                print(f"handoff error: {e!r}", flush=True)
+            # Melbourne packer exits after handoff; next city packer owns the box.
+            break
 
         wave, queue = ensure_active_wave_ready()
 

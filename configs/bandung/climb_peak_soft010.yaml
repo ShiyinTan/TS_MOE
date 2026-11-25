@@ -1,0 +1,11 @@
+# bandung · climb foundation — peak stack on tgt_all_eval_last cache
+extends: ./peak.yaml
+city: bandung
+cache: runs/bandung/cache_tgt_all_eval_last
+out: runs/bandung/climb_peak_soft010
+recipe_id: climb_peak_soft010
+session_summary: on
+eval_test_every_epoch: false
+batch_size: 48
+eval_batch_size: 32
+threads: 4

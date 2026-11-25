@@ -1,0 +1,19 @@
+# Melbourne clear-margin WIN · known_only Acc@1 0.173108 (≥ target 0.172, STHGCN 0.168)
+# Source densify: w21 soft095_jump09 · promoted 2026-11-25
+extends: ./climb_bpr020_soft010.yaml
+cache: runs/melbourne/cache_tgt_all_eval_last
+session_summary: on
+eval_test_every_epoch: false
+batch_size: 48
+eval_batch_size: 32
+threads: 4
+soft_target_beta: 0.095
+seed: 46
+lambda_bpr: 0.205
+jump_length_bias: 0.09
+jump_dist: lognormal
+pmi_score_bias: 0.05
+epochs: 2
+out: runs/melbourne/climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win
+recipe_id: climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win
+description: "Melbourne clear-margin WIN Acc@1=0.173108 · softβ0.095 · jump0.09 · ep2"
