@@ -5,7 +5,8 @@ Wave configs are gitignored. After ``git pull``, regenerate::
 
     python scripts/gen_mel_wave_local.py --wave w17
 
-Packer calls ``ensure_wave_configs()`` so missing files are written before launch.
+Packer / ``mel_climb_autonomy`` call ``ensure_wave_configs()`` so missing files
+are written before launch. Base knobs come from ``scripts/data/mel_climb_policy.json``.
 """
 from __future__ import annotations
 
@@ -14,9 +15,10 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+POLICY_PATH = ROOT / "scripts" / "data" / "mel_climb_policy.json"
 
-# Shared WIN baseline fields for mel w17 densify.
-W17_BASE = {
+# Fallback if policy missing (w17 WIN stack).
+DEFAULT_BASE = {
     "extends": "./climb_bpr020_soft010.yaml",
     "cache": "runs/melbourne/cache_tgt_all_eval_last",
     "session_summary": "on",
@@ -32,16 +34,35 @@ W17_BASE = {
     "pmi_score_bias": 0.05,
 }
 
-WAVE_SOURCES = {
-    "w17": ROOT / "scripts" / "data" / "mel_w17_overrides.json",
-}
+
+def load_base() -> dict:
+    # Prefer GPU-local state base (updated on Acc lift); else committed policy.
+    state_path = ROOT / "runs" / "climb_state" / "melbourne.json"
+    if state_path.is_file():
+        try:
+            st = json.loads(state_path.read_text())
+            if st.get("base"):
+                return dict(st["base"])
+        except Exception:
+            pass
+    if POLICY_PATH.is_file():
+        try:
+            base = json.loads(POLICY_PATH.read_text()).get("base") or {}
+            if base:
+                return dict(base)
+        except Exception:
+            pass
+    return dict(DEFAULT_BASE)
+
+
+def overrides_path(wave: str) -> Path:
+    return ROOT / "scripts" / "data" / f"mel_{wave}_overrides.json"
 
 
 def _fmt(v) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, float):
-        # keep readable floats
         s = f"{v:.6f}".rstrip("0").rstrip(".")
         return s
     if isinstance(v, int):
@@ -49,8 +70,8 @@ def _fmt(v) -> str:
     return json.dumps(str(v))
 
 
-def write_one(stem: str, overrides: dict, city_dir: Path) -> Path:
-    cfg = dict(W17_BASE)
+def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = None) -> Path:
+    cfg = dict(base or load_base())
     cfg.update(overrides or {})
     cfg["out"] = f"runs/melbourne/{stem}"
     cfg["recipe_id"] = stem
@@ -75,7 +96,6 @@ def write_one(stem: str, overrides: dict, city_dir: Path) -> Path:
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")
-    # remaining overrides (gauss, geo, epochs, …)
     for k in sorted(cfg.keys()):
         if k in ("out", "recipe_id", "description"):
             continue
@@ -89,40 +109,48 @@ def write_one(stem: str, overrides: dict, city_dir: Path) -> Path:
 
 
 def ensure_wave_configs(wave: str = "w17", city: str = "melbourne") -> int:
-    src = WAVE_SOURCES.get(wave)
-    if src is None or not src.is_file():
+    src = overrides_path(wave)
+    if not src.is_file():
         raise FileNotFoundError(f"no overrides for wave={wave}: {src}")
     recipes = json.loads(src.read_text())
     city_dir = ROOT / "configs" / city
     city_dir.mkdir(parents=True, exist_ok=True)
+    base = load_base()
     n = 0
     for stem, ov in recipes.items():
         path = city_dir / f"{stem}.yaml"
         if path.is_file():
             continue
-        write_one(stem, ov, city_dir)
+        write_one(stem, ov, city_dir, base=base)
         n += 1
     return n
 
 
 def rewrite_all(wave: str = "w17", city: str = "melbourne") -> int:
-    src = WAVE_SOURCES[wave]
+    src = overrides_path(wave)
     recipes = json.loads(src.read_text())
     city_dir = ROOT / "configs" / city
     city_dir.mkdir(parents=True, exist_ok=True)
+    base = load_base()
     for stem, ov in recipes.items():
-        write_one(stem, ov, city_dir)
+        write_one(stem, ov, city_dir, base=base)
     return len(recipes)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--wave", default="w17")
+    ap.add_argument("--wave", default=None, help="default: policy.active_wave")
     ap.add_argument("--city", default="melbourne")
     ap.add_argument("--force", action="store_true", help="Rewrite even if files exist")
     args = ap.parse_args()
-    n = rewrite_all(args.wave, args.city) if args.force else ensure_wave_configs(args.wave, args.city)
-    print(f"{args.city} {args.wave}: wrote/ensured {n} local yamls under configs/{args.city}/")
+    wave = args.wave
+    if wave is None:
+        if POLICY_PATH.is_file():
+            wave = json.loads(POLICY_PATH.read_text()).get("active_wave", "w17")
+        else:
+            wave = "w17"
+    n = rewrite_all(wave, args.city) if args.force else ensure_wave_configs(wave, args.city)
+    print(f"{args.city} {wave}: wrote/ensured {n} local yamls under configs/{args.city}/")
 
 
 if __name__ == "__main__":
