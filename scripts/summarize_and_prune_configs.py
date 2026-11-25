@@ -39,45 +39,19 @@ except ImportError as e:  # pragma: no cover
     raise SystemExit("PyYAML required: pip install pyyaml") from e
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from climb_retention import city_keep_configs, load_retention  # noqa: E402
 
 CORE_NAMES = {"base.yaml", "peak.yaml", "win.yaml"}
 
-# Locked WIN / ladder configs to retain for STOPPED / active cities.
-DEFAULT_KEEP = {
-    "tokyo": {"base.yaml", "peak.yaml", "win.yaml"},
-    "shanghai": {
-        "base.yaml",
-        "peak.yaml",
-        "win.yaml",
-        "climb_soft005.yaml",
-        "climb_soft005_filter_last.yaml",
-    },
-    "beijing": {
-        "base.yaml",
-        "peak.yaml",
-        "win.yaml",
-        "climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml",
-        "climb_s5g20_all_gauss020_wd005.yaml",
-        "climb_s5g20_all_gauss020.yaml",
-        "climb_s5g20_all_gauss015.yaml",
-        "climb_ep2_trbias_soft005_geo020.yaml",
-    },
-    "melbourne": {
-        "base.yaml",
-        "peak.yaml",
-        "win.yaml",
-        "climb_bpr020_soft010.yaml",
-        "climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml",
-        "climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_win.yaml",
-    },
-    "palembang": {
-        "base.yaml",
-        "peak.yaml",
-        "win.yaml",
-        "climb_tsb20_bpr020_filter.yaml",
-        "climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml",
-    },
-}
+
+def default_keep(city: str) -> set[str]:
+    """Prefer ``configs/climb_retention.yaml``; fall back to core names only."""
+    try:
+        return city_keep_configs(city) | CORE_NAMES
+    except Exception:
+        return set(CORE_NAMES)
 
 WAVE_RE = re.compile(r"_w(\d+[a-z]?)_")
 
@@ -285,6 +259,7 @@ def prune_city(
     aggressive: bool,
     dry_run: bool,
     summarize_only: bool,
+    aggressive_cli: bool = False,
 ) -> None:
     city_dir = repo / "configs" / city
     if not city_dir.is_dir():
@@ -299,19 +274,32 @@ def prune_city(
     if summarize_only:
         return
 
-    keep = set(DEFAULT_KEEP.get(city, CORE_NAMES))
+    keep = set(default_keep(city))
     keep |= set(keep_extra)
     keep |= parse_keep_from_climb_path(repo, city)
     keep |= CORE_NAMES
-    # Always keep any *current* locked file ending with _win.yaml that is listed in DEFAULT_KEEP
-    # plus explicit --keep-wave files' non-wave parents via closure
-    keep_waves_set = {w.lstrip("w") if w.startswith("w") and w[1:].isalnum() else w for w in keep_waves}
-    # normalize: accept w17 or 17
+    # normalize: accept w17 or 17; if CLI empty, use climb_retention.yaml
     keep_waves_norm: set[str] = set()
-    for w in keep_waves:
-        keep_waves_norm.add(w[1:] if w.startswith("w") else w)
+    waves_in = list(keep_waves)
+    if not waves_in:
+        try:
+            from climb_retention import city_keep_wave
 
-    # seed keep with all non-wave files that kept waves extend? handled by closure after adding wave files
+            w = city_keep_wave(city)
+            if w:
+                waves_in.append(w)
+        except Exception:
+            pass
+    for w in waves_in:
+        keep_waves_norm.add(w[1:] if w.startswith("w") else w)
+    if not aggressive_cli:
+        try:
+            from climb_retention import city_aggressive
+
+            aggressive = city_aggressive(city)
+        except Exception:
+            pass
+    # seed keep with wave files we retain
     for p in yamls:
         w = wave_of(p.name)
         if w is not None and w in keep_waves_norm:
@@ -380,6 +368,7 @@ def main() -> None:
             aggressive=args.aggressive,
             dry_run=args.dry_run,
             summarize_only=args.summarize_only,
+            aggressive_cli=bool(args.aggressive),
         )
 
 
