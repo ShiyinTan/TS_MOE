@@ -3,7 +3,7 @@
 **Protocol:** `known_only` Acc@1 · **eval_test** · PR [#37](https://github.com/ShiyinTan/TS_MOE/pull/37)  
 **Updated:** 2026-11-25 19:00 JST  
 **Repo branch:** `cursor/beijing-sthgcn-climb-7a66`  
-**Retention:** beat/STOPPED cities → this file + short `results/<city>/climb_path.md` only; MEL keeps active wave detail.
+**Retention:** beat/STOPPED cities → this file + `results/<city>/climb_path.md` + summary/stat files + WIN eval dirs; individual non-WIN config result folders may be deleted. MEL keeps WIN + in-flight wave dirs.
 
 STHGCN paper Acc@1 baselines (Massive-STEPS): Beijing **0.453** · Melbourne **0.168** · Palembang **0.246** · (Tokyo 0.250 · Shanghai 0.193).
 
