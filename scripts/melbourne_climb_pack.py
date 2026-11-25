@@ -38,6 +38,7 @@ from mel_climb_autonomy import (  # noqa: E402
     effective_policy,
     ensure_active_wave_ready,
     load_state,
+    prefetch_next_wave,
     scan_wave_metrics,
     write_harvest,
 )
@@ -289,6 +290,23 @@ def main():
                 except Exception as e:
                     print(f"autonomy error: {e!r}", flush=True)
                 time.sleep(10)
+                continue
+            # Draining: jobs still run but nothing launchable → free GPUs go idle.
+            under = any(
+                by_all[g] < limits.get(g, MAX_OUR_PER_GPU_FREE) for g in range(4)
+            )
+            if under:
+                print(
+                    f"{CITY} wave {wave} draining (still={len(still)}) with free GPU "
+                    f"slots all={ [by_all[g] for g in range(4)] } — prefetch next wave",
+                    flush=True,
+                )
+                try:
+                    out = prefetch_next_wave()
+                    print(f"prefetch: {out.get('event')} {out}", flush=True)
+                except Exception as e:
+                    print(f"prefetch error: {e!r}", flush=True)
+                time.sleep(5)
                 continue
             if waiting_cache and not any(running(t, live) for t in queue):
                 print(f"waiting cache for {waiting_cache[:5]}…", flush=True)

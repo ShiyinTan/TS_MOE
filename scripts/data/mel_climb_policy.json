@@ -4,7 +4,7 @@
   "target_acc": 0.172,
   "sthgcn": 0.168,
   "active_wave": "w17",
-  "wave_size": 28,
+  "wave_size": 40,
   "auto_advance": true,
   "stem_prefix": "climb_bpr020_soft010",
   "stem_mid": "tgt_seed46_soft0078_session_bpr205_jump010_pmi05",

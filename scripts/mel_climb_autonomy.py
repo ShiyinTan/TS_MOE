@@ -364,6 +364,53 @@ def build_next_wave_recipes(
     return recipes
 
 
+def prefetch_next_wave() -> dict[str, Any]:
+    """Open the next densify wave early while the current wave is still draining.
+
+    Keeps GPU slots full: when launchable pending hits 0 but jobs are still
+    running, synthesize/switch to ``wN+1`` without waiting for full completion.
+    """
+    from gen_mel_wave_local import ensure_wave_configs
+
+    state = load_state()
+    policy = effective_policy()
+    wave = policy["active_wave"]
+    nxt = next_wave_id(wave)
+
+    if load_overrides(nxt):
+        state["active_wave"] = nxt
+        save_state(state)
+        n = ensure_wave_configs(nxt, "melbourne")
+        out = {
+            "event": "prefetch_switch",
+            "from_wave": wave,
+            "new_wave": nxt,
+            "new_total": len(load_overrides(nxt)),
+            "ensured_yamls": n,
+        }
+        write_harvest(out)
+        return out
+
+    # Build next wave from lever rank now (current wave fps already in tried).
+    recipes = build_next_wave_recipes(policy, state, nxt, use_lever_rank=True)
+    if not recipes:
+        return {"event": "prefetch_failed_empty", "wave": wave}
+    save_overrides(nxt, recipes)
+    state["active_wave"] = nxt
+    save_state(state)
+    n = ensure_wave_configs(nxt, "melbourne")
+    out = {
+        "event": "prefetch_advanced",
+        "from_wave": wave,
+        "new_wave": nxt,
+        "new_total": len(recipes),
+        "ensured_yamls": n,
+        "ban_keys": state.get("lever_ban_keys"),
+    }
+    write_harvest(out)
+    return out
+
+
 def rebuild_active_wave(*, keep_done: bool = True) -> dict[str, Any]:
     """Replace the active wave queue with a lever-pruned set (GPU-local).
 
