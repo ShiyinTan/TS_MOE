@@ -24,45 +24,36 @@ from gpu_pack_limits import (  # noqa: E402
     resource_snapshot,
     scan_gpus,
 )
-from gen_bdg_wave_local import ensure_wave_configs, overrides_path  # noqa: E402
+from city_climb_autonomy import (  # noqa: E402
+    advance_wave_if_needed,
+    effective_policy,
+    load_overrides,
+    load_state,
+    prefetch_next_wave,
+    save_state,
+    scan_wave_metrics,
+    write_harvest,
+)
+from gen_bdg_wave_local import ensure_wave_configs  # noqa: E402
 
 CITY = "bandung"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
 MIN_FREE_MIB = MIN_FREE_VRAM_MIB
 LOG = ROOT / "runs" / "packer_logs"
 PIDDIR = ROOT / "logs" / "multicity"
-STATE_DIR = ROOT / "runs" / "climb_state"
-POLICY_PATH = ROOT / "scripts" / "data" / "bdg_climb_policy.json"
-STATE_PATH = STATE_DIR / "bandung.json"
 STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 PACK_LOCK = PIDDIR / "packer_launch.lock"
 
 
-def load_policy() -> dict:
-    return json.loads(POLICY_PATH.read_text())
-
-
-def load_state() -> dict:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    if STATE_PATH.is_file():
-        return json.loads(STATE_PATH.read_text())
-    pol = load_policy()
-    st = {
-        "city": CITY,
-        "lock_acc": float(pol["lock_acc"]),
-        "target_acc": float(pol["target_acc"]),
-        "active_wave": pol["active_wave"],
-        "target_met": False,
-        "auto_advance": True,
-    }
-    STATE_PATH.write_text(json.dumps(st, indent=2) + "\n")
-    return st
-
-
-def save_state(st: dict) -> None:
-    STATE_PATH.write_text(json.dumps(st, indent=2) + "\n")
+def ensure_active_wave_ready() -> tuple[str, list[str]]:
+    pol = effective_policy(CITY)
+    st = load_state(CITY)
+    wave = st.get("active_wave") or pol["active_wave"]
+    ensure_wave_configs(wave, CITY)
+    recipes = load_overrides(CITY, wave)
+    return wave, sorted(recipes.keys())
 
 
 def stop_requested() -> bool:
@@ -126,35 +117,6 @@ def cache_ready(tag: str) -> bool:
     return (ROOT / cache / "manifest.json").exists()
 
 
-def queue_for(wave: str) -> list[str]:
-    path = overrides_path(wave)
-    if not path.is_file():
-        return []
-    return sorted(json.loads(path.read_text()).keys())
-
-
-def scan_top(wave: str) -> tuple[float, str | None, int, int]:
-    recipes = json.loads(overrides_path(wave).read_text()) if overrides_path(wave).is_file() else {}
-    top = 0.0
-    best = None
-    done_n = 0
-    for stem in recipes:
-        p = ROOT / "results" / CITY / stem / "eval_test" / "metrics.json"
-        if not p.is_file():
-            continue
-        try:
-            a = (json.loads(p.read_text()).get("known_only") or {}).get("Acc@1")
-        except Exception:
-            continue
-        if a is None:
-            continue
-        done_n += 1
-        if float(a) > top:
-            top = float(a)
-            best = stem
-    return top, best, done_n, len(recipes)
-
-
 def launch(tag: str, gpu: int, gpu_limit: int, wave: str) -> int:
     LOG.mkdir(parents=True, exist_ok=True)
     PIDDIR.mkdir(parents=True, exist_ok=True)
@@ -181,32 +143,9 @@ def launch(tag: str, gpu: int, gpu_limit: int, wave: str) -> int:
     return proc.pid
 
 
-def maybe_handoff_or_idle(st: dict, pol: dict) -> None:
-    top, best, done_n, total = scan_top(st["active_wave"])
-    lock = float(st.get("lock_acc") or pol["lock_acc"])
-    target = float(pol["target_acc"])
-    if round(top, 6) > round(lock, 6):
-        st["lock_acc"] = top
-        st["best_tag"] = best
-        st["best_acc"] = top
-    if round(top, 6) >= round(target, 6):
-        st["target_met"] = True
-        save_state(st)
-        print(f"{CITY} target_met Acc={top:.6f} ≥ {target} — handoff next city", flush=True)
-        subprocess.call([PY, str(ROOT / "scripts" / "city_climb_handoff.py"), "--from", CITY], cwd=ROOT)
-        return
-    # advance wave: reuse mel autonomy-style by synthesizing via policy densify in handoff later;
-    # for now stay on w1 until complete then handoff only on target; if flat complete, bump wave id + rebuild
-    if done_n >= total and total > 0:
-        print(f"{CITY} wave {st['active_wave']} complete top={top:.6f} — stay densify / wait handoff logic", flush=True)
-
-
 def main() -> None:
-    pol = load_policy()
-    st = load_state()
-    wave = st.get("active_wave") or pol["active_wave"]
-    ensure_wave_configs(wave, CITY)
-    queue = queue_for(wave)
+    wave, queue = ensure_active_wave_ready()
+    pol = effective_policy(CITY)
     print(
         f"{CITY} climb packer wave={wave} queue={len(queue)} "
         f"max_free={MAX_OUR_PER_GPU_FREE} target={pol['target_acc']} sthgcn={pol['sthgcn']} | "
@@ -217,15 +156,23 @@ def main() -> None:
         if stop_requested():
             print("STOP — exit", flush=True)
             break
-        st = load_state()
-        pol = load_policy()
+        pol = effective_policy(CITY)
+        st = load_state(CITY)
         if st.get("target_met"):
-            maybe_handoff_or_idle(st, pol)
-            time.sleep(120)
-            continue
-        wave = st.get("active_wave") or pol["active_wave"]
-        ensure_wave_configs(wave, CITY)
-        queue = queue_for(wave)
+            print(
+                f"target_met Acc≥{pol.get('target_acc')} — handoff next city (no idle)",
+                flush=True,
+            )
+            try:
+                subprocess.check_call(
+                    [PY, str(ROOT / "scripts" / "city_climb_handoff.py"), "--from", CITY],
+                    cwd=str(ROOT),
+                )
+            except Exception as e:
+                print(f"handoff error: {e!r}", flush=True)
+            break
+
+        wave, queue = ensure_active_wave_ready()
         if not host_ram_ok() or not disk_ok(ROOT / "runs"):
             time.sleep(45)
             continue
@@ -278,23 +225,55 @@ def main() -> None:
             f"pending~={len(pending)}",
             flush=True,
         )
-        top, best, done_n, total = scan_top(wave)
+        summary: dict = {}
+        try:
+            summary = scan_wave_metrics(CITY, wave)
+            write_harvest(
+                {
+                    "event": "tick",
+                    "wave": wave,
+                    "lock_acc": float(pol["lock_acc"]),
+                    "target_acc": float(pol["target_acc"]),
+                    **summary,
+                },
+                CITY,
+            )
+        except Exception as e:
+            print(f"harvest snapshot skip: {e!r}", flush=True)
+
+        top = float(summary.get("top") or 0.0)
+        best = summary.get("best")
         if round(top, 6) >= round(float(pol["target_acc"]), 6):
             st["target_met"] = True
             st["lock_acc"] = top
             st["best_tag"] = best
-            save_state(st)
+            save_state(CITY, st)
             print(f"TARGET HIT {top:.6f} best={best}", flush=True)
             subprocess.call([PY, str(ROOT / "scripts" / "city_climb_handoff.py"), "--from", CITY], cwd=ROOT)
-            time.sleep(30)
-            continue
+            break
+
         if not pending and launched == 0:
             still = [t for t in queue if not done(t)]
             if not still:
-                print(f"{CITY} wave {wave} DONE top={top:.6f} — continue densify later / handoff if target", flush=True)
-                # keep city active; synthesize is future work — for now sleep and re-check
-                time.sleep(60)
+                print(f"{CITY} wave {wave} DONE — autonomy advance", flush=True)
+                try:
+                    out = advance_wave_if_needed(CITY, force=False)
+                    print(f"autonomy: {out.get('event')} {out}", flush=True)
+                except Exception as e:
+                    print(f"autonomy error: {e!r}", flush=True)
+                time.sleep(10)
                 continue
+            under = any(by_all[g] < limits.get(g, MAX_OUR_PER_GPU_FREE) for g in range(4))
+            if under:
+                print(
+                    f"{CITY} wave {wave} draining (still={len(still)}) with free GPU — prefetch",
+                    flush=True,
+                )
+                try:
+                    out = prefetch_next_wave(CITY)
+                    print(f"prefetch: {out.get('event')} {out}", flush=True)
+                except Exception as e:
+                    print(f"prefetch error: {e!r}", flush=True)
         time.sleep(45)
 
 

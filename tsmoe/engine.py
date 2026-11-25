@@ -33,6 +33,7 @@ from .model import (
     soft_ema_targets, soft_prior_targets, top_k_kd_loss,
 )
 from .prepare import digest_json, dump_json, verify_files
+from .resource_monitor import ResourceMonitor
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
 
@@ -2133,6 +2134,54 @@ def train(args):
     # Persist pool-size audit under results/ (not beside checkpoints).
     stats_dir = results_run_dir(out)
     stats_dir.mkdir(parents=True, exist_ok=True)
+    # Peak host/GPU memory + util + wall time → resource_stats.json + summaries.
+    resource_mon = ResourceMonitor(interval_s=5.0).start()
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(0)
+    except Exception:
+        pass
+
+    def _flush_resource_stats():
+        if getattr(resource_mon, "_flushed", False):
+            return
+        try:
+            resource_stats = resource_mon.stop()
+        except Exception as e:
+            resource_stats = {"error": repr(e)}
+        resource_mon._flushed = True
+        try:
+            dump_json(resource_stats, stats_dir / "resource_stats.json")
+            dump_json(resource_stats, out / "resource_stats.json")
+            print(
+                f"resource_stats wall={resource_stats.get('wall_time_hms')} "
+                f"peak_rss_mib={resource_stats.get('peak_rss_mib')} "
+                f"peak_gpu_mem_mib={resource_stats.get('peak_gpu_mem_mib')} "
+                f"peak_gpu_util_pct={resource_stats.get('peak_gpu_util_pct')}",
+                flush=True,
+            )
+            for hist_path in (out / "history.json", stats_dir / "history.json"):
+                if hist_path.is_file():
+                    try:
+                        blob = json.loads(hist_path.read_text(encoding="utf-8"))
+                        blob["resource_stats"] = resource_stats
+                        dump_json(blob, hist_path)
+                    except Exception:
+                        pass
+            for split in ("test", "validation"):
+                mj = resolve_train_eval_dir(out, split) / "metrics.json"
+                if mj.is_file():
+                    try:
+                        blob = json.loads(mj.read_text(encoding="utf-8"))
+                        blob["resource_stats"] = resource_stats
+                        dump_json(blob, mj)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"resource_stats write failed: {e!r}", flush=True)
+
+    import atexit as _atexit
+    _atexit.register(_flush_resource_stats)
     dump_json(dict(
         candidate_construction=cache.candidate_construction,
         catalog_size=len(cache.pois),
@@ -2443,6 +2492,7 @@ def train(args):
             ),
             out,
         )
+    _flush_resource_stats()
 
 
 def load_model(args):

@@ -1,0 +1,53 @@
+{
+  "city": "<city>",
+  "lock_acc": 0.0,
+  "target_acc": 0.0,
+  "sthgcn": 0.0,
+  "active_wave": "w1",
+  "wave_size": 28,
+  "auto_advance": true,
+  "stem_prefix": "climb_peak_soft010",
+  "stem_mid": "tgt",
+  "ban_keys": [
+    "seed",
+    "transition_2hop_bias",
+    "pop_score_bias",
+    "hour_pop_score_bias",
+    "gauss_geo_bias"
+  ],
+  "base": {
+    "extends": "./climb_peak_soft010.yaml",
+    "cache": "runs/<city>/cache_tgt_all_eval_last",
+    "session_summary": "on",
+    "eval_test_every_epoch": false,
+    "batch_size": 48,
+    "eval_batch_size": 32,
+    "threads": 4,
+    "soft_target_beta": 0.1,
+    "soft_target_prior": "revisit",
+    "transition_attn": "gate",
+    "geo_score_bias": 0.15,
+    "revisit_score_bias": 0.1,
+    "lambda_bpr": 0.25,
+    "jump_length_bias": 0.1,
+    "jump_dist": "lognormal",
+    "pmi_score_bias": 0.05
+  },
+  "densify_families": [
+    {"tag": "soft", "key": "soft_target_beta", "values": [0.08, 0.09, 0.095, 0.1, 0.11, 0.12]},
+    {"tag": "bpr", "key": "lambda_bpr", "values": [0.22, 0.25, 0.27, 0.29]},
+    {"tag": "jump", "key": "jump_length_bias", "values": [0.08, 0.09, 0.1, 0.11, 0.12]},
+    {"tag": "pmi", "key": "pmi_score_bias", "values": [0.04, 0.05, 0.06, 0.08]},
+    {"tag": "rev", "key": "revisit_score_bias", "values": [0.08, 0.1, 0.12]},
+    {"tag": "geo", "key": "geo_score_bias", "values": [0.12, 0.15, 0.18]},
+    {"tag": "ep", "key": "epochs", "values": [2, 3]}
+  ],
+  "combo_recipes": [
+    {"tag": "soft095_jump09", "overrides": {"soft_target_beta": 0.095, "jump_length_bias": 0.09}},
+    {"tag": "soft11_jump10", "overrides": {"soft_target_beta": 0.11, "jump_length_bias": 0.1}},
+    {"tag": "jump10_pmi05", "overrides": {"jump_length_bias": 0.1, "pmi_score_bias": 0.05}},
+    {"tag": "soft095_jump09_pmi05", "overrides": {"soft_target_beta": 0.095, "jump_length_bias": 0.09, "pmi_score_bias": 0.05}},
+    {"tag": "ep2_soft11", "overrides": {"epochs": 2, "soft_target_beta": 0.11}}
+  ],
+  "notes": "Copy to scripts/data/<alias>_climb_policy.json. Priors from MEL climb (climb_lever_priors.json). Wire packer → city_climb_autonomy."
+}

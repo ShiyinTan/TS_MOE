@@ -21,6 +21,11 @@ DEFAULT_BASE = {
     "transition_attn": "gate",
     "geo_score_bias": 0.15,
     "revisit_score_bias": 0.1,
+    # MEL climb priors: jump+pmi+bpr on foundation before densify.
+    "lambda_bpr": 0.25,
+    "jump_length_bias": 0.1,
+    "jump_dist": "lognormal",
+    "pmi_score_bias": 0.05,
 }
 
 
@@ -81,6 +86,8 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "jump_length_bias",
         "jump_dist",
         "pmi_score_bias",
+        "weight_decay",
+        "epochs",
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")
