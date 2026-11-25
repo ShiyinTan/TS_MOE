@@ -29,6 +29,14 @@ FAST_STRUCTURE: dict[str, Any] = {
     "session_summary": "off",
 }
 
+# Eval candidate-pool shrink (C) for *validation only* under large_city_fast.
+# Final test / eval_test keeps the full constructed pool so Acc@1 stays
+# comparable to Massive-STEPS / STHGCN. GT is always force-included (#10).
+FAST_VAL_POOL: dict[str, Any] = {
+    "candidate_spatial_prior": "geo",
+    "candidate_prior_top_m": 2048,
+}
+
 
 def is_large_city(city: str | None) -> bool:
     return bool(city) and str(city).strip().lower() in LARGE_CITIES
@@ -80,12 +88,16 @@ def apply_large_city_fast(
     ``locals_map`` should contain keys used to build ``ModelConfig``:
     dim/heads/layers come from ``args``; transition_attn / candidate_context_time /
     session_summary are local variables in ``train()``.
+
+    Also fills default val-only pool shrink (``FAST_VAL_POOL``) when spatial prior
+    is still off / top-M unset — final test stays full-pool in ``train()``.
     """
     report: dict[str, Any] = {
         "requested": large_city_fast_enabled(args),
         "city": city,
         "applied": False,
         "changes": {},
+        "val_pool": {},
     }
     if not report["requested"]:
         return report
@@ -118,8 +130,40 @@ def apply_large_city_fast(
             locals_map[key] = new
             after[key] = new
 
+    # Val pool shrink defaults (do not override explicit user settings).
+    prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
+    top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+    val_pool: dict[str, Any] = {}
+    if prior in ("", "off", "none") and top_m <= 0:
+        for key, new in FAST_VAL_POOL.items():
+            old = getattr(args, key, None)
+            before[key] = old
+            setattr(args, key, new)
+            after[key] = new
+            val_pool[key] = new
+    else:
+        val_pool = {
+            "candidate_spatial_prior": prior,
+            "candidate_prior_top_m": top_m,
+        }
+
     report["applied"] = True
     report["before"] = before
     report["after"] = {**before, **after}
     report["changes"] = after
+    report["val_pool"] = val_pool
     return report
+
+
+def val_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
+    """Kwargs for ``evaluate()`` validation pool shrink (empty ⇒ full pool)."""
+    prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
+    top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+    if prior in ("", "off", "none") or top_m < 1:
+        return {}
+    return {
+        "candidate_spatial_prior": prior,
+        "candidate_prior_top_m": top_m,
+        "candidate_prior_gravity_beta": float(
+            getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0),
+    }
