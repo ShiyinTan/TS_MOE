@@ -54,5 +54,5 @@
     {"tag": "pmi06_jump10", "overrides": {"pmi_score_bias": 0.06, "jump_length_bias": 0.1}},
     {"tag": "soft085_bpr202_jump11", "overrides": {"soft_target_beta": 0.085, "lambda_bpr": 0.202, "jump_length_bias": 0.11}}
   ],
-  "notes": "Lever-pruned densify: ban seed/hop/pop/hpop/gauss; wave_size~28; mel_lever_rank.py refreshes runs/climb_state/lever_rank.json before each advance/rebuild."
+  "notes": "STOPPED clear-margin WIN Acc@1=0.173108. Lessons → climb_lever_priors.json + city_climb_autonomy. Ban seed/hop/pop/hpop/gauss; soft×jump×pmi highest ROI; TIE≠lift@6dp."
 }

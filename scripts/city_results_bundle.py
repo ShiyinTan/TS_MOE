@@ -84,6 +84,28 @@ def mean_std(vals: list[float]) -> tuple[float, float | None, int]:
     return mu, math.sqrt(var), n
 
 
+def _load_resource_stats(run_dir: Path, metrics: dict | None = None) -> dict:
+    """Prefer metrics.json resource_stats, else results/<run>/resource_stats.json / history."""
+    import json
+
+    rs = (metrics or {}).get("resource_stats") if isinstance(metrics, dict) else None
+    if isinstance(rs, dict) and rs:
+        return rs
+    for name in ("resource_stats.json", "history.json"):
+        p = run_dir / name
+        if not p.is_file():
+            continue
+        try:
+            blob = json.loads(p.read_text())
+        except Exception:
+            continue
+        if name == "resource_stats.json" and isinstance(blob, dict):
+            return blob
+        if isinstance(blob, dict) and isinstance(blob.get("resource_stats"), dict):
+            return blob["resource_stats"]
+    return {}
+
+
 def load_row(run_dir: Path) -> dict:
     import json
 
@@ -102,6 +124,11 @@ def load_row(run_dir: Path) -> dict:
         "cache": "",
         "status": "missing",
         "known_targets": "",
+        "wall_time_s": "",
+        "wall_time_hms": "",
+        "peak_rss_mib": "",
+        "peak_gpu_mem_mib": "",
+        "peak_gpu_util_pct": "",
     }
     if mj is None or not mj.exists():
         return row
@@ -110,6 +137,7 @@ def load_row(run_dir: Path) -> dict:
     if "Acc@1" not in ko:
         row["status"] = "no_known_only"
         return row
+    rs = _load_resource_stats(run_dir, m)
     row.update(
         {
             "acc": ko["Acc@1"],
@@ -121,6 +149,11 @@ def load_row(run_dir: Path) -> dict:
             "cache": m.get("cache", ""),
             "status": "ok",
             "known_targets": ko.get("known_targets", ""),
+            "wall_time_s": rs.get("wall_time_s", ""),
+            "wall_time_hms": rs.get("wall_time_hms", ""),
+            "peak_rss_mib": rs.get("peak_rss_mib", ""),
+            "peak_gpu_mem_mib": rs.get("peak_gpu_mem_mib", ""),
+            "peak_gpu_util_pct": rs.get("peak_gpu_util_pct", ""),
         }
     )
     return row
@@ -213,6 +246,11 @@ def write_settings_summary(out: Path, city: str, sthgcn: float, rows: list[dict]
         "mrr",
         "ndcg1",
         "delta_sthgcn",
+        "wall_time_s",
+        "wall_time_hms",
+        "peak_rss_mib",
+        "peak_gpu_mem_mib",
+        "peak_gpu_util_pct",
         "cache",
         "status",
         "known_targets",
@@ -235,6 +273,11 @@ def write_settings_summary(out: Path, city: str, sthgcn: float, rows: list[dict]
                     "mrr": fmt(r["mrr"]) if r["mrr"] != "" else "",
                     "ndcg1": fmt(r["ndcg1"]) if r["ndcg1"] != "" else "",
                     "delta_sthgcn": delta,
+                    "wall_time_s": r.get("wall_time_s", ""),
+                    "wall_time_hms": r.get("wall_time_hms", ""),
+                    "peak_rss_mib": r.get("peak_rss_mib", ""),
+                    "peak_gpu_mem_mib": r.get("peak_gpu_mem_mib", ""),
+                    "peak_gpu_util_pct": r.get("peak_gpu_util_pct", ""),
                     "cache": r["cache"],
                     "status": r["status"],
                     "known_targets": r["known_targets"],
@@ -252,14 +295,17 @@ def write_settings_summary(out: Path, city: str, sthgcn: float, rows: list[dict]
         "",
         "## Top 30 (by Acc@1)",
         "",
-        "| # | Acc@1 | Δ STHGCN | R@5 | R@10 | R@20 | run |",
-        "| ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| # | Acc@1 | Δ STHGCN | R@5 | R@10 | R@20 | wall | peak RSS MiB | peak GPU MiB | peak GPU % | run |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for i, r in enumerate(ok_sorted[:30], 1):
         acc = float(r["acc"])
         md.append(
             f"| {i} | {acc:.6f} | {acc - sthgcn:+.4f} | {fmt(r['r5'], 4)} | "
-            f"{fmt(r['r10'], 4)} | {fmt(r['r20'], 4)} | `{r['run']}` |"
+            f"{fmt(r['r10'], 4)} | {fmt(r['r20'], 4)} | "
+            f"{r.get('wall_time_hms') or r.get('wall_time_s') or ''} | "
+            f"{r.get('peak_rss_mib') or ''} | {r.get('peak_gpu_mem_mib') or ''} | "
+            f"{r.get('peak_gpu_util_pct') or ''} | `{r['run']}` |"
         )
 
     # Acc plateaus (discrete 1/N)

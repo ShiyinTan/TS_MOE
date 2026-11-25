@@ -1,0 +1,53 @@
+{
+  "notes": "Cross-city densify priors distilled from Melbourne Acc climb (→0.173108) and earlier STOPPED cities. Used by city_lever_rank / city_climb_autonomy when local history is thin.",
+  "ban_keys": [
+    "seed",
+    "transition_2hop_bias",
+    "pop_score_bias",
+    "hour_pop_score_bias"
+  ],
+  "ban_keys_optional_early": [
+    "gauss_geo_bias"
+  ],
+  "keep_keys": [
+    "soft_target_beta",
+    "lambda_bpr",
+    "jump_length_bias",
+    "pmi_score_bias",
+    "revisit_score_bias",
+    "geo_score_bias",
+    "epochs",
+    "transition_attn",
+    "weight_decay"
+  ],
+  "mel_win_lessons": {
+    "foundation": "session_summary=on + softβ + λ_bpr + jump + pmi before random levers",
+    "acc_path": [
+      "soft0078+session+bpr205+jump010 → 0.169887",
+      "+pmi05 → 0.170692",
+      "gauss20 near-miss → 0.171498 (keep geo; gauss optional)",
+      "soft095+jump09 → 0.173108 WIN"
+    ],
+    "highest_roi_combos": ["soft×jump", "soft×bpr", "jump×pmi", "ep2 near lock"],
+    "tie_rule": "round(Acc@1, 6); TIE ≠ lift",
+    "wave_size": 28
+  },
+  "narrow_spans": {
+    "soft_target_beta": [-0.02, 0.03, 0.005],
+    "lambda_bpr": [-0.04, 0.04, 0.01],
+    "jump_length_bias": [-0.03, 0.04, 0.01],
+    "pmi_score_bias": [-0.02, 0.04, 0.01],
+    "revisit_score_bias": [-0.03, 0.05, 0.01],
+    "geo_score_bias": [-0.05, 0.05, 0.01]
+  },
+  "default_centers": {
+    "soft_target_beta": 0.1,
+    "lambda_bpr": 0.25,
+    "jump_length_bias": 0.1,
+    "pmi_score_bias": 0.05,
+    "revisit_score_bias": 0.1,
+    "geo_score_bias": 0.15,
+    "weight_decay": 0.01,
+    "epochs": 2
+  }
+}
