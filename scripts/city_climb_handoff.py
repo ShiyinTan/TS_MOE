@@ -73,11 +73,57 @@ def start_packer(packer_rel: str) -> int:
     return proc.pid
 
 
+def finalize_city(city: str) -> dict:
+    """Run Acc ledger + summarize/prune keeps for a finished city (GPU-local)."""
+    order = load_order()
+    meta = next((c for c in (order.get("cities") or []) if c.get("city") == city), {}) or {}
+    sthgcn = meta.get("sthgcn")
+    lock_acc = meta.get("lock_acc")
+    # MEL WIN known at handoff time
+    lock_config = None
+    if city == "melbourne":
+        lock_config = (
+            "configs/melbourne/climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win.yaml"
+        )
+        lock_acc = lock_acc or 0.173108
+        sthgcn = sthgcn or 0.168
+    cmd = [PY, str(ROOT / "scripts" / "city_climb_finalize.py"), "--city", city]
+    if sthgcn is not None:
+        cmd += ["--sthgcn", str(sthgcn)]
+    if lock_acc is not None:
+        cmd += ["--lock-acc", str(lock_acc)]
+    if lock_config:
+        cmd += ["--lock-config", lock_config]
+    print("+", " ".join(cmd), flush=True)
+    code = subprocess.call(cmd, cwd=ROOT)
+    snap = {
+        "event": "finalize_done" if code == 0 else "finalize_failed",
+        "city": city,
+        "code": code,
+        "written_at": _now(),
+    }
+    (STATE_DIR / f"finalize_{city}.json").write_text(json.dumps(snap, indent=2) + "\n")
+    return snap
+
+
 def handoff(from_city: str | None = None) -> dict:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     data = load_order()
+    finalize_snap = None
     if from_city:
-        mark_city(data, from_city, "DONE", finished_at=_now())
+        # Always record Acc ledger + run summary before switching cities.
+        try:
+            finalize_snap = finalize_city(from_city)
+        except Exception as e:
+            finalize_snap = {"event": "finalize_error", "city": from_city, "error": repr(e)}
+            print(f"finalize error: {e!r}", flush=True)
+        mark_city(
+            data,
+            from_city,
+            "DONE",
+            finished_at=_now(),
+            lock_acc=(0.173108 if from_city == "melbourne" else None),
+        )
     nxt = next_queued(data)
     if not nxt:
         data["active_city"] = None
@@ -113,6 +159,7 @@ def handoff(from_city: str | None = None) -> dict:
         "target_acc": nxt.get("target_acc"),
         "packer": packer,
         "pid": pid,
+        "finalize": finalize_snap,
         "written_at": _now(),
     }
     (STATE_DIR / "handoff_latest.json").write_text(json.dumps(snap, indent=2) + "\n")

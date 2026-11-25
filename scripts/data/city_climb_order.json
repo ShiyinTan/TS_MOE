@@ -1,11 +1,12 @@
 {
   "notes": "GPU-local sequential Acc climb vs STHGCN. When a city hits target_acc, packer handoff starts the next queued city (no cloud wake).",
-  "active_city": "melbourne",
+  "active_city": "bandung",
   "cities": [
     {
       "city": "melbourne",
       "sthgcn": 0.168,
       "target_acc": 0.172,
+      "lock_acc": 0.173108,
       "status": "DONE",
       "packer": "scripts/melbourne_climb_pack.py"
     },
@@ -13,7 +14,7 @@
       "city": "bandung",
       "sthgcn": 0.219,
       "target_acc": 0.222,
-      "status": "QUEUED",
+      "status": "ACTIVE",
       "packer": "scripts/bandung_climb_pack.py",
       "cache": "runs/bandung/cache_tgt_all_eval_last"
     },
