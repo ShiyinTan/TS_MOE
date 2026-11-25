@@ -1,0 +1,7 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w11_lr1e3_ssb025
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w11_lr1e3_ssb025
+recipe_id: climb_s5g20_all_gauss020_wd005_w11_lr1e3_ssb025
+description: "beijing climb · w11_lr1e3_ssb025"
+lr: 0.001
+surd_score_bias: 0.25

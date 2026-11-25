@@ -1,0 +1,11 @@
+# Melbourne Acc lift Acc@1=0.168277 (eval_test known_only) — BEATS STHGCN 0.168
+# Source: climb_bpr020_soft010_w5_tgt_seed40_soft0078_session · cache_tgt_all_eval_last
+# Was 0.161836; continue climb for clearer margin beyond +0.0003
+extends: ./climb_bpr020_soft010.yaml
+out: runs/melbourne/climb_bpr020_soft010_tgt_soft0078_session_seed40_win
+recipe_id: climb_bpr020_soft010_tgt_soft0078_session_seed40_win
+description: "melbourne Acc lift · soft0078+session seed40 Acc@1=0.168277 BEAT STHGCN"
+cache: "runs/melbourne/cache_tgt_all_eval_last"
+soft_target_beta: 0.078
+session_summary: "on"
+seed: 40

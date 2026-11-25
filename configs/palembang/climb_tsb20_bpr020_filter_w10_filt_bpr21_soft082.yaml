@@ -1,0 +1,6 @@
+extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w10_filt_bpr21_soft082
+recipe_id: climb_tsb20_bpr020_filter_w10_filt_bpr21_soft082
+description: palembang climb · climb_tsb20_bpr020_filter_w10_filt_bpr21_soft082
+lambda_bpr: 0.21
+soft_target_beta: 0.082

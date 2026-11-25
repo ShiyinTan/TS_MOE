@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w18_heads16
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w18_heads16
+recipe_id: climb_s5g20_all_gauss020_wd005_w18_heads16
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w18_heads16"
+heads: 16

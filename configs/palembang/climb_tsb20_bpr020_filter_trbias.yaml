@@ -1,0 +1,5 @@
+extends: ./climb_tsb20_bpr020_filter_last.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_trbias
+recipe_id: climb_tsb20_bpr020_filter_trbias
+description: "city-best + trbias"
+transition_attn: bias

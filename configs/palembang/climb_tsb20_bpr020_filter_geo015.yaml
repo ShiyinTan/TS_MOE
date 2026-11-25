@@ -1,0 +1,6 @@
+extends: ./climb_tsb20_bpr020_filter_last.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_geo015
+recipe_id: climb_tsb20_bpr020_filter_geo015
+description: "city-best + geo_score_bias=0.15"
+geo_score_bias: 0.15
+candidate_context: "on"

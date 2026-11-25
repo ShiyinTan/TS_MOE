@@ -1,0 +1,14 @@
+# beijing · climb_s5g20_all_gauss020_wd005 — CITY BEST / BEATS STHGCN
+# Acc@1=0.454545 (40/88) · R5=0.659 · R10=0.727 · R20=0.784 · STHGCN 0.453 · Δ +0.0015
+# soft005+trbias + gauss0.20 (geo off) on cache_tgt_all_eval_last + weight_decay=0.005
+# Measured 2026-11-24 known_only eval_test seed42
+# Speed (2026-11-25): final-only test eval + larger batch under ≤2/GPU VRAM headroom
+extends: ./climb_s5g20_all_gauss020.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005
+recipe_id: climb_s5g20_all_gauss020_wd005
+description: "LOCKED Beijing WIN vs STHGCN · Acc@1 0.454545"
+weight_decay: 0.005
+eval_test_every_epoch: false
+batch_size: 48
+eval_batch_size: 32
+threads: 4

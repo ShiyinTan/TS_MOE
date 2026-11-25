@@ -1,0 +1,5 @@
+extends: ./climb_tsb20_bpr020_all_gauss020.yaml
+out: runs/palembang/climb_tsb20_bpr020_all_gauss020_wd005
+recipe_id: climb_tsb20_bpr020_all_gauss020_wd005
+description: "tsb20_bpr020 all_gauss020 + wd005"
+weight_decay: 0.005

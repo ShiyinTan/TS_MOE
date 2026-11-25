@@ -1,0 +1,8 @@
+# beijing · jump-length prior replaces geo
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+out: runs/beijing/climb_s5g20_jump015
+recipe_id: climb_s5g20_jump015
+description: "s5g20 + jump_length_bias=0.15 lognormal (geo off)"
+geo_score_bias: 0.0
+jump_length_bias: 0.15
+jump_dist: lognormal

@@ -1,0 +1,6 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w24_tgt_geo_adapt
+recipe_id: climb_s5g20_all_gauss020_wd005_w24_tgt_geo_adapt
+description: beijing climb · climb_s5g20_all_gauss020_wd005_w24_tgt_geo_adapt
+cache: runs/beijing/cache_tgt_all_eval_last
+geo_adapt: sparse

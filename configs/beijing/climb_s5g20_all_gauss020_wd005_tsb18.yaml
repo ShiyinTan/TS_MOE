@@ -1,0 +1,5 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_tsb18
+recipe_id: climb_s5g20_all_gauss020_wd005_tsb18
+description: "WIN + transition_score_bias=1.8"
+transition_score_bias: 1.8

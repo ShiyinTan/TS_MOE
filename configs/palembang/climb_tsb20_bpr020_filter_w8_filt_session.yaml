@@ -1,0 +1,6 @@
+# palembang · climb_tsb20_bpr020_filter_w8_filt_session
+extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w8_filt_session
+recipe_id: climb_tsb20_bpr020_filter_w8_filt_session
+description: "palembang climb · climb_tsb20_bpr020_filter_w8_filt_session"
+session_summary: "on"

@@ -1,0 +1,5 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_soft012
+recipe_id: climb_s5g20_all_gauss020_wd005_soft012
+description: "WIN + soft_target_beta=0.12"
+soft_target_beta: 0.12

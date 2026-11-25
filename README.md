@@ -13,6 +13,8 @@ Target-conditioned SURD-guided Mixture-of-Experts（TS-MoE）的 PyTorch 实现�
 | [`TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md`](TS_MoE_SURD_POI_Category_Time_Location_Basic_Updated.md) | **Model baseline** — Basic design & §19 starters |
 | [`docs/model-settings.md`](docs/model-settings.md) | **Added settings** vs Basic (router · WIN · Acc climb) |
 | [`docs/experiments.md`](docs/experiments.md) | **Experiment settings + Acc/R** · Keep/Discard |
+| [`results/beijing/`](results/beijing/README.md) | **Beijing Acc climb bundle** (path · settings summary · mean±std) |
+| [`docs/beijing-acc-climb-path.md`](docs/beijing-acc-climb-path.md) | Beijing Acc climb path (doc copy) |
 | [`docs/design-notes.md`](docs/design-notes.md) | **Why** — design intent of climb levers |
 | [`docs/runbook.md`](docs/runbook.md) | **Runnable commands** only (`python -m tsmoe …` / `--config`) |
 | [`configs/`](configs/) | Base / WIN / Peak YAML recipes per Massive-STEPS city |
@@ -647,6 +649,7 @@ TS_MOE/
 | `requirements.txt` | `numpy`、`tqdm`、`torch` 版本范围 |
 | `docs/model-settings.md` | Added knobs vs Basic_Updated · router modes |
 | `docs/experiments.md` | Acc/R tables · Keep/Discard · results layout |
+| `docs/beijing-acc-climb-path.md` | Beijing Acc climb path tables (vs STHGCN) |
 | `docs/design-notes.md` | Design intent of climb levers |
 | `docs/runbook.md` | Runnable train/eval commands |
 | `docs/candidates.md` | 多源候选池 + overlays A–E（默认 off） |
@@ -753,6 +756,7 @@ python -m tsmoe train --cache runs/tokyo/cache --out runs/tokyo/model \
 | --- | --- |
 | Added knobs vs Basic | [`docs/model-settings.md`](docs/model-settings.md) |
 | Acc/R tables · Keep/Discard | [`docs/experiments.md`](docs/experiments.md) |
+| Beijing Acc climb path (tables) | [`docs/beijing-acc-climb-path.md`](docs/beijing-acc-climb-path.md) |
 | Design intent | [`docs/design-notes.md`](docs/design-notes.md) |
 | Copy-paste train/eval | [`docs/runbook.md`](docs/runbook.md) |
 

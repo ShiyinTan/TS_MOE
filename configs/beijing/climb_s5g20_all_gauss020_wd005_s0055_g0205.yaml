@@ -1,0 +1,6 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_s0055_g0205
+recipe_id: climb_s5g20_all_gauss020_wd005_s0055_g0205
+description: "WIN soft=0.055 gauss=0.205"
+soft_target_beta: 0.055
+gauss_geo_bias: 0.205

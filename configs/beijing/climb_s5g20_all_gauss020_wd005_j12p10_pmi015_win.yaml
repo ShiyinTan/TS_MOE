@@ -1,0 +1,14 @@
+# beijing · LOCKED WIN · Acc@1=0.465909 (41/88) · beats prior wall 0.454545 (40/88) and STHGCN 0.453
+# jump_length_bias=0.12 + pop_score_bias=0.10 + pmi_score_bias=0.15 on cache_tgt_all_eval_last
+# Measured 2026-11-25 known_only eval_test · MRR=0.5358 · mean_rank=35.58
+# Companions also at 0.465909: gsig060 (mean_rank 31.75), gsig075 (MRR 0.5340)
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win
+recipe_id: climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win
+description: "LOCKED Beijing WIN vs STHGCN · Acc@1 0.465909 (41/88) · j12+pop10+pmi015"
+jump_length_bias: 0.12
+jump_dist: "lognormal"
+pop_score_bias: 0.1
+pmi_score_bias: 0.15
+epochs: 3
+cache: "runs/beijing/cache_tgt_all_eval_last"

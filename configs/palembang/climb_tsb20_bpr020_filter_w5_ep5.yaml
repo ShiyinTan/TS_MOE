@@ -1,0 +1,6 @@
+# palembang · climb_tsb20_bpr020_filter_w5_ep5
+extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w5_ep5
+recipe_id: climb_tsb20_bpr020_filter_w5_ep5
+description: "palembang climb · w5_ep5"
+epochs: 5

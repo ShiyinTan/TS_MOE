@@ -1,0 +1,8 @@
+# palembang · climb_tsb20_bpr020_filter_w6_rad010
+extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w6_rad010
+recipe_id: climb_tsb20_bpr020_filter_w6_rad010
+description: "palembang climb · climb_tsb20_bpr020_filter_w6_rad010"
+radiation_score_bias: 0.1
+candidate_context: "on"
+candidate_context_time: "last_slot"

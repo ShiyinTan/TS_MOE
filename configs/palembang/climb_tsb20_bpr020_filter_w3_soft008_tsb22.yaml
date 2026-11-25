@@ -1,0 +1,7 @@
+# palembang · climb_tsb20_bpr020_filter_w3_soft008_tsb22
+extends: ./climb_tsb20_bpr020_filter_soft008.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w3_soft008_tsb22
+recipe_id: climb_tsb20_bpr020_filter_w3_soft008_tsb22
+description: "palembang climb · w3_soft008_tsb22"
+soft_target_beta: 0.08
+transition_score_bias: 2.2

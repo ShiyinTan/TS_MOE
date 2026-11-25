@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w15_seed60
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w15_seed60
+recipe_id: climb_s5g20_all_gauss020_wd005_w15_seed60
+description: "beijing climb · climb_s5g20_all_gauss020_wd005_w15_seed60"
+seed: 60

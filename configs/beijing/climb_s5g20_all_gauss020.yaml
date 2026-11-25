@@ -1,0 +1,10 @@
+# beijing · climb_s5g20_all_gauss020 — CITY BEST TEST Acc@1=0.443182 (was 0.431818; STHGCN 0.453)
+# Peak+trbias+soft005 + gauss0.20 (geo off) on cache_tgt_all_eval_last · Δ −0.0098
+extends: ./climb_ep2_trbias_soft005_geo020.yaml
+cache: runs/beijing/cache_tgt_all_eval_last
+out: runs/beijing/climb_s5g20_all_gauss020
+recipe_id: climb_s5g20_all_gauss020
+description: "s5g20 gauss020 on tgt_all_eval_last — Beijing city best 0.443182"
+geo_score_bias: 0.0
+gauss_geo_bias: 0.20
+gauss_sigma_km: 0.5

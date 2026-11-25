@@ -1,0 +1,6 @@
+# beijing · climb_s5g20_all_gauss020_wd005_w11_lambda_bpr025
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_w11_lambda_bpr025
+recipe_id: climb_s5g20_all_gauss020_wd005_w11_lambda_bpr025
+description: "beijing climb · w11_lambda_bpr025"
+lambda_bpr: 0.25

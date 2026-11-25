@@ -1,0 +1,8 @@
+extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w9_filt_session_ep3_ssb022
+recipe_id: climb_tsb20_bpr020_filter_w9_filt_session_ep3_ssb022
+description: palembang climb · climb_tsb20_bpr020_filter_w9_filt_session_ep3_ssb022
+session_summary: "on"
+epochs: 3
+surd_score_bias: 0.22
+surd_bias_gate: unique_p

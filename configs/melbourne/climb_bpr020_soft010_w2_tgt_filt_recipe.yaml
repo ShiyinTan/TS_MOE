@@ -1,0 +1,5 @@
+extends: ./climb_bpr020_soft010_filt_win.yaml
+out: runs/melbourne/climb_bpr020_soft010_w2_tgt_filt_recipe
+recipe_id: climb_bpr020_soft010_w2_tgt_filt_recipe
+description: "melbourne climb · climb_bpr020_soft010_w2_tgt_filt_recipe"
+cache: "runs/melbourne/cache_tgt_all_eval_last"

@@ -1,0 +1,5 @@
+extends: ./climb_s5g20_all_gauss020.yaml
+out: runs/beijing/climb_s5g20_all_gauss020_cat010
+recipe_id: climb_s5g20_all_gauss020_cat010
+description: "gauss020 + overlay"
+category_score_bias: 0.10

@@ -1,0 +1,17 @@
+extends: ./climb_bpr020_soft010.yaml
+cache: "runs/melbourne/cache_tgt_all_eval_last"
+session_summary: "on"
+eval_test_every_epoch: false
+batch_size: 48
+eval_batch_size: 32
+threads: 4
+soft_target_beta: 0.078
+seed: 46
+lambda_bpr: 0.205
+jump_length_bias: 0.10
+jump_dist: "lognormal"
+pmi_score_bias: 0.05
+out: runs/melbourne/climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi007
+recipe_id: climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi007
+description: "melbourne clear-margin climb · climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi007 · w17 soft/seed/bias/protocol densify on WIN (fresh vs flat w16)"
+pmi_score_bias: 0.07

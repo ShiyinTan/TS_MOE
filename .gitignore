@@ -1,7 +1,16 @@
 # Local data and experiment outputs (see README / docs/experiments.md)
 /data/
 /runs/
-/results/
+/results/*
+# Keep per-city Acc climb bundles (path / settings summary / mean±std)
+!/results/*/
+/results/*/*
+!/results/*/README.md
+!/results/*/climb_path.md
+!/results/*/settings_summary.md
+!/results/*/settings_summary.csv
+!/results/*/mean_std.md
+!/results/*/mean_std.csv
 
 # Python
 __pycache__/

@@ -1,0 +1,19 @@
+# Melbourne Acc lift Acc@1=0.170692 (eval_test known_only) — clearer margin vs STHGCN 0.168 (+0.0027)
+# Source: climb_bpr020_soft010_w12_tgt_seed46_soft0078_session_bpr205_jump010_pmi05
+# Previous lock 0.169887; continue climb toward ≥0.172
+extends: ./climb_bpr020_soft010.yaml
+out: runs/melbourne/climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win
+recipe_id: climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win
+description: "melbourne Acc lift · seed46 soft0078+session bpr205+jump010+pmi05 Acc@1=0.170692 clearer margin vs STHGCN"
+cache: "runs/melbourne/cache_tgt_all_eval_last"
+session_summary: "on"
+eval_test_every_epoch: false
+batch_size: 48
+eval_batch_size: 32
+threads: 4
+soft_target_beta: 0.078
+seed: 46
+lambda_bpr: 0.205
+jump_length_bias: 0.10
+jump_dist: "lognormal"
+pmi_score_bias: 0.05

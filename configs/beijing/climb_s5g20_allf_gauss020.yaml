@@ -1,0 +1,5 @@
+extends: ./climb_s5g20_all_gauss020.yaml
+cache: runs/beijing/cache_all_filter_last
+out: runs/beijing/climb_s5g20_allf_gauss020
+recipe_id: climb_s5g20_allf_gauss020
+description: "gauss020 on runs/beijing/cache_all_filter_last"

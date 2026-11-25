@@ -1,0 +1,5 @@
+extends: ./climb_tsb20_bpr020_filter_soft076_session_seed55.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_w14_p80_seed55_bpr016
+recipe_id: climb_tsb20_bpr020_filter_w14_p80_seed55_bpr016
+description: "palembang climb · climb_tsb20_bpr020_filter_w14_p80_seed55_bpr016 · continue past +0.002"
+lambda_bpr: 0.16

@@ -1,0 +1,8 @@
+# palembang · prior interim Acc@1=0.232558 · superseded by soft008_tsb18 (0.237726)
+# Measured 2026-11-24 known_only eval_test · soft β=0.08 revisit on cache_filter_last
+extends: ./climb_tsb20_bpr020_filter_last.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_soft008
+recipe_id: climb_tsb20_bpr020_filter_soft008
+description: "prior interim Palembang · Acc@1 0.232558 · soft008 (see soft008_tsb18)"
+soft_target_beta: 0.08
+soft_target_prior: revisit

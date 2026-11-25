@@ -1,0 +1,7 @@
+extends: ./climb_bpr020_soft010.yaml
+out: runs/melbourne/climb_bpr020_soft010_w1_tgt_session_ep2
+recipe_id: climb_bpr020_soft010_w1_tgt_session_ep2
+description: "melbourne climb · climb_bpr020_soft010_w1_tgt_session_ep2"
+cache: "runs/melbourne/cache_tgt_all_eval_last"
+session_summary: "on"
+epochs: 2

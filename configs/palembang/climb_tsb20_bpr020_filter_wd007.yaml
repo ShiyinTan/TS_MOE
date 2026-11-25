@@ -1,0 +1,5 @@
+extends: ./climb_tsb20_bpr020_filter_last.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_wd007
+recipe_id: climb_tsb20_bpr020_filter_wd007
+description: "city-best + weight_decay=0.007"
+weight_decay: 0.007

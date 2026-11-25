@@ -1,0 +1,10 @@
+extends: ./climb_tsb20_bpr020_filter_last.yaml
+out: runs/palembang/climb_tsb20_bpr020_filter_soft005_gauss010
+recipe_id: climb_tsb20_bpr020_filter_soft005_gauss010
+description: "city-best + soft005_gauss010"
+soft_target_beta: 0.05
+soft_target_prior: revisit
+gauss_geo_bias: 0.10
+gauss_sigma_km: 0.5
+geo_score_bias: 0.0
+candidate_context: "on"

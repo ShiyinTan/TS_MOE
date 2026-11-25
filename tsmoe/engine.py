@@ -4,7 +4,9 @@ import json
 import math
 import os
 import random
+import shutil
 import tempfile
+import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -1547,13 +1549,62 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
 
 
 def save_checkpoint(payload, path):
-    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as tmp:
-        staged = Path(tmp.name)
-    try:
-        torch.save(payload, staged)
-        os.replace(staged, path)
-    finally:
-        staged.unlink(missing_ok=True)
+    """Atomic checkpoint write with /tmp staging + retries.
+
+    Zip-container ``torch.save`` can fail with
+    ``RuntimeError: unexpected pos ...`` when the destination filesystem is
+    near-full or under heavy parallel IO. Stage on a roomy FS (``TMPDIR`` /
+    ``/tmp``) first, then copy+replace onto ``path``; retry a few times.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stage_dirs: list[Path] = []
+    tmp_root = Path(os.environ.get("TMPDIR", "/tmp"))
+    if tmp_root.exists():
+        stage_dirs.append(tmp_root)
+    stage_dirs.append(path.parent)
+    last_err: Exception | None = None
+    for stage_dir in stage_dirs:
+        staged: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=stage_dir, delete=False, suffix=".pt"
+            ) as tmp:
+                staged = Path(tmp.name)
+            for attempt in range(3):
+                try:
+                    torch.save(payload, staged)
+                    break
+                except RuntimeError as exc:
+                    last_err = exc
+                    if attempt == 2:
+                        raise
+                    time.sleep(0.5 * (attempt + 1))
+            try:
+                os.replace(staged, path)
+                staged = None
+            except OSError:
+                # Cross-device: copy into a local temp then atomic replace.
+                with tempfile.NamedTemporaryFile(
+                    dir=path.parent, delete=False, suffix=".pt"
+                ) as local:
+                    local_path = Path(local.name)
+                try:
+                    shutil.copy2(staged, local_path)
+                    os.replace(local_path, path)
+                finally:
+                    local_path.unlink(missing_ok=True)
+                staged.unlink(missing_ok=True)
+                staged = None
+            return
+        except Exception as exc:  # noqa: BLE001 — try next stage dir
+            last_err = exc
+            if staged is not None:
+                staged.unlink(missing_ok=True)
+            continue
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError(f"save_checkpoint failed for {path}")
 
 
 def fit_jump_lognormal(distances, eps=1e-6):

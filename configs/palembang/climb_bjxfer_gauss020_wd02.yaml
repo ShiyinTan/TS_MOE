@@ -1,0 +1,5 @@
+extends: ./climb_bjxfer_gauss020_wd005.yaml
+out: runs/palembang/climb_bjxfer_gauss020_wd02
+recipe_id: climb_bjxfer_gauss020_wd02
+description: "Beijing transfer wd=0.02"
+weight_decay: 0.02

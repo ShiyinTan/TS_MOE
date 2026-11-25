@@ -1,100 +1,206 @@
 #!/usr/bin/env python3
-"""Beijing-only Acc climb packer: fill free GPU slots (cap 8) with climb configs.
+"""Beijing Acc climb packer (active beat city; dynamic GPU caps).
+
+Sequential beat policy (prefs 2026-11-25): finish BJ clear margin before
+starting next unfinished city. Per-GPU our-job caps via ``gpu_pack_limits``:
+  - **2** when GPU has no foreign users (``dl-box`` ignored)
+  - **2** when another user (e.g. camob) is on that GPU
+Also gate on host RAM / free VRAM / disk. Caps only block new launches —
+never kills already-running jobs (ours or foreign).
+
 Never touches foreign processes. Prefer configs under configs/beijing/climb_*.yaml.
+Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
+import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from gpu_pack_limits import (  # noqa: E402
+    MAX_OUR_PER_GPU_FREE,
+    MAX_OUR_PER_GPU_SHARED,
+    MIN_FREE_VRAM_MIB,
+    city_cap,
+    disk_ok,
+    gpu_free_mib,
+    host_ram_ok,
+    peer_climb_packers_alive,
+    resource_snapshot,
+    scan_gpus,
+)
+
+CITY = "beijing"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
-MAX_OUR = 8
-MIN_FREE_MIB = 3500
+MIN_FREE_MIB = MIN_FREE_VRAM_MIB
 LOG = ROOT / "runs" / "packer_logs"
 PIDDIR = ROOT / "logs" / "multicity"
+STOP_SENTINEL = Path(
+    os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
+)
+PACK_LOCK = PIDDIR / "packer_launch.lock"
 
-# Priority order: compose around city best ep2_trbias, then filter_last
-QUEUE = [
-    "climb_s5g20_focal1",
-    "climb_s5g20_focal2",
-    "climb_s5g20_soft0",
-    "climb_s5g20_ema",
-    "climb_s5g20_soft_tsb",
-    "climb_s5g20_soft_tsbrev",
-    "climb_s5g20_bprmarg1",
-    "climb_s5g20_bprmarg2",
-    "climb_s5g20_laplace",
-    "climb_s5g20_catmtl01",
-]
+QUEUE = [line.strip() for line in """
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi008_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi010_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi012_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi014_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi016_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi018_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi020_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi022_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi025_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig050_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig055_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig065_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig070_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig080_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig085_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig090_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_gsig060_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_gsig075_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_gsig070_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j10p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j11p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j13p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j14p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j15p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12_pop06_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12_pop08_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12_pop12_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12_pop14_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12_pop16_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_ep4
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_ep5
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_ep6
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_wd002_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_wd003_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_wd004_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_wd006_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_wd008_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_wd01_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_soft003_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_soft004_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_soft006_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_soft007_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_soft008_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed40_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed41_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed42_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed43_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed44_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed45_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed46_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed47_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed48_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed49_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed50_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed51_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed52_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed53_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed55_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed56_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed57_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed58_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed59_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_seed60_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_ep4
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_ep5
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_seed41_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_seed43_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_seed45_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_seed47_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig060_seed50_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_ep4
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_ep5
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_seed41_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_seed43_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_seed45_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_seed47_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_gsig075_seed50_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_hop02_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_hop03_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_hour008_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_hour010_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_bpr28_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_bpr30_ep3
+climb_s5g20_all_gauss020_wd005_w46_tgt_j12p10_pmi015_bpr32_ep3
+climb_s5g20_all_gauss020_wd005_w46_filt_j12p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_filt_j12p10_gsig075_ep3
+climb_s5g20_all_gauss020_wd005_w46_allf_j12p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_allf_j12p10_gsig075_ep3
+climb_s5g20_all_gauss020_wd005_w46_p70_j12p10_pmi015_ep3
+climb_s5g20_all_gauss020_wd005_w46_p70_j12p10_gsig075_ep3
+""".strip().splitlines()]
 
 
-def uuid_map():
-    uu = {}
-    for line in subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"], text=True
-    ).strip().splitlines():
-        i, u = [x.strip() for x in line.split(",")]
-        uu[u] = int(i)
-    return uu
+def stop_requested() -> bool:
+    if STOP_SENTINEL.exists():
+        return True
+    for alt in (ROOT / "logs" / "STOP", ROOT / "runs" / "packer_logs" / "STOP"):
+        if alt.exists():
+            return True
+    return False
 
 
-def our_by_gpu(uu):
-    by = defaultdict(int)
-    live = set()
-    for line in subprocess.check_output(
-        ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True
-    ).strip().splitlines():
-        parts = [x.strip() for x in line.split(",")]
-        if len(parts) < 2:
-            continue
-        g = uu.get(parts[0])
-        if g is None:
-            continue
-        try:
-            cmd = open(f"/proc/{parts[1]}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="ignore")
-        except Exception:
-            continue
-        if "tsmoe" not in cmd:
-            continue
-        by[g] += 1
-        live.add(cmd)
-    return by, live
 
 
-def gpu_free():
-    free = {}
-    for line in subprocess.check_output(
-        ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"], text=True
-    ).strip().splitlines():
-        i, m = [x.strip() for x in line.split(",")]
-        free[int(i)] = int(float(m))
-    return free
+
+
+def failed(tag: str) -> bool:
+    log = LOG / f"{CITY}_{tag}.log"
+    if not log.exists():
+        return False
+    try:
+        text = log.read_text(errors="ignore")
+    except Exception:
+        return False
+    # Only judge the latest launch segment (log is append-only across retries).
+    marker = f"# {CITY}_climb_pack "
+    idx = text.rfind(marker)
+    tail = text[idx:] if idx >= 0 else text[-4000:]
+    # Catch argparse errors and runtime ValueError (e.g. missing candidate_context).
+    return (
+        "__main__.py: error:" in tail
+        or "__main__.py train: error:" in tail
+        or "error: --" in tail
+        or "ValueError:" in tail
+        or "Traceback (most recent call last):" in tail
+    )
 
 
 def done(tag: str) -> bool:
-    return (ROOT / "results" / "beijing" / tag / "eval_test" / "metrics.json").exists()
+    return (ROOT / "results" / CITY / tag / "eval_test" / "metrics.json").exists()
 
 
 def running(tag: str, live_cmds: set[str]) -> bool:
-    needle = f"configs/beijing/{tag}.yaml"
-    out_needle = f"--out runs/beijing/{tag}"
+    needle = f"configs/{CITY}/{tag}.yaml"
+    out_needle = f"--out runs/{CITY}/{tag}"
     for cmd in live_cmds:
         if needle in cmd or out_needle in cmd:
             return True
-    # pid file
-    pf = PIDDIR / f"beijing_{tag}.pid"
+    pf = PIDDIR / f"{CITY}_{tag}.pid"
     if pf.exists():
         pid = pf.read_text().strip()
         if pid and Path(f"/proc/{pid}").exists():
+            # Zombies / empty cmdline are not live workers — clear pid and retry.
+            try:
+                stat = open(f"/proc/{pid}/stat").read().split()
+                state = stat[2] if len(stat) > 2 else ""
+            except Exception:
+                state = ""
             try:
                 cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="ignore")
             except Exception:
                 cmd = ""
-            if tag in cmd:
+            if state != "Z" and tag in cmd:
                 return True
             try:
                 pf.unlink()
@@ -104,11 +210,11 @@ def running(tag: str, live_cmds: set[str]) -> bool:
 
 
 def cache_ready(tag: str) -> bool:
-    cfg = ROOT / "configs" / "beijing" / f"{tag}.yaml"
+    cfg = ROOT / "configs" / CITY / f"{tag}.yaml"
     if not cfg.exists():
         return False
     text = cfg.read_text()
-    cache = "runs/beijing/cache_abl_tgt_last"
+    cache = f"runs/{CITY}/cache_abl_tgt_last"
     for line in text.splitlines():
         if line.strip().startswith("cache:"):
             cache = line.split(":", 1)[1].strip().strip("\"'")
@@ -116,14 +222,17 @@ def cache_ready(tag: str) -> bool:
     return (ROOT / cache / "manifest.json").exists()
 
 
-def launch(tag: str, gpu: int) -> int:
+def launch(tag: str, gpu: int, gpu_limit: int) -> int:
     LOG.mkdir(parents=True, exist_ok=True)
     PIDDIR.mkdir(parents=True, exist_ok=True)
-    cfg = f"configs/beijing/{tag}.yaml"
+    cfg = f"configs/{CITY}/{tag}.yaml"
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
-    lf = open(LOG / f"beijing_{tag}.log", "ab")
-    lf.write(f"\n# beijing_climb_pack gpu={gpu}\n".encode())
+    lf = open(LOG / f"{CITY}_{tag}.log", "ab")
+    lf.write(
+        f"\\n# {CITY}_climb_pack gpu={gpu} limit={gpu_limit} "
+        f"city_cap={city_cap(gpu_limit)}\\n".encode()
+    )
     proc = subprocess.Popen(
         [PY, "-m", "tsmoe", "train", "--config", cfg],
         cwd=str(ROOT),
@@ -132,37 +241,93 @@ def launch(tag: str, gpu: int) -> int:
         start_new_session=True,
         env=env,
     )
-    (PIDDIR / f"beijing_{tag}.pid").write_text(str(proc.pid))
-    print(f"LAUNCH beijing/{tag} gpu={gpu} pid={proc.pid}", flush=True)
+    (PIDDIR / f"{CITY}_{tag}.pid").write_text(str(proc.pid))
+    print(f"LAUNCH {CITY}/{tag} gpu={gpu} pid={proc.pid} limit={gpu_limit}", flush=True)
     return proc.pid
 
 
 def main():
-    print(f"beijing climb packer queue={len(QUEUE)}", flush=True)
+    print(
+        f"{CITY} climb packer queue={len(QUEUE)} "
+        f"max_free={MAX_OUR_PER_GPU_FREE} max_shared={MAX_OUR_PER_GPU_SHARED} "
+        f"(foreign except dl-box → shared) stop={STOP_SENTINEL} | "
+        f"{resource_snapshot(ROOT / 'runs')}",
+        flush=True,
+    )
     while True:
-        uu = uuid_map()
-        by, live = our_by_gpu(uu)
-        free = gpu_free()
-        pending = [t for t in QUEUE if not done(t) and not running(t, live) and cache_ready(t)]
+        if stop_requested():
+            print(f"STOP sentinel present ({STOP_SENTINEL}) — exit", flush=True)
+            break
+        if not host_ram_ok() or not disk_ok(ROOT / "runs"):
+            print(
+                f"resource gate — skip launches this tick | {resource_snapshot(ROOT / 'runs')}",
+                flush=True,
+            )
+            time.sleep(45)
+            continue
+        # Cross-packer lock so BJ/PL don't race-launch past the GPU cap.
+        # Over-limit still never kills — lock only serializes new launches.
+        PIDDIR.mkdir(parents=True, exist_ok=True)
         launched = 0
-        order = sorted(range(4), key=lambda g: (by[g], -free.get(g, 0)))
-        for g in order:
-            while by[g] < MAX_OUR and free.get(g, 0) >= MIN_FREE_MIB and pending:
-                tag = pending.pop(0)
-                launch(tag, g)
-                by[g] += 1
-                launched += 1
+        over = []
+        with open(PACK_LOCK, "a+", encoding="utf-8") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            try:
+                by_all, by_city, live, limits, foreign = scan_gpus(CITY)
+                free = gpu_free_mib()
+                if not host_ram_ok() or not disk_ok(ROOT / "runs"):
+                    pending = []
+                else:
+                    pending = [
+                        t for t in QUEUE
+                        if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
+                    ]
+                order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
+                for g in order:
+                    lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
+                    other = by_all[g] - by_city[g]
+                    peers = peer_climb_packers_alive(CITY)
+                    ccap = city_cap(lim, other_city_on_gpu=other, peer_packers=peers)
+                    # Over-limit: skip new launches only — never kill already-running jobs.
+                    if by_all[g] > lim:
+                        over.append(f"gpu{g}:{by_all[g]}>lim{lim}")
+                    while (
+                        by_all[g] < lim
+                        and by_city[g] < ccap
+                        and free.get(g, 0) >= MIN_FREE_MIB
+                        and pending
+                    ):
+                        if stop_requested() or not host_ram_ok() or not disk_ok(ROOT / "runs"):
+                            break
+                        tag = pending.pop(0)
+                        launch(tag, g, lim)
+                        by_all[g] += 1
+                        by_city[g] += 1
+                        free[g] = free.get(g, 0) - 2000
+                        launched += 1
+            finally:
+                # Let nvidia-smi see new PIDs before the other packer scans.
+                if launched:
+                    time.sleep(2)
+                fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
+        if over:
+            print(
+                f"over-limit (leave running, no kill): {', '.join(over)}",
+                flush=True,
+            )
         print(
-            f"tick launched={launched} per_gpu={[by[g] for g in range(4)]} "
+            f"tick launched={launched} all={[by_all[g] for g in range(4)]} "
+            f"city={[by_city[g] for g in range(4)]} "
+            f"limits={[limits.get(g, MAX_OUR_PER_GPU_FREE) for g in range(4)]} "
+            f"foreign={[bool(foreign.get(g)) for g in range(4)]} "
             f"free={[free.get(g, 0) for g in range(4)]} pending~={len(pending)}",
             flush=True,
         )
         if not pending and launched == 0:
-            # exit when all done or waiting only on missing cache
             waiting_cache = [t for t in QUEUE if not done(t) and not cache_ready(t)]
             still = [t for t in QUEUE if not done(t)]
             if not still:
-                print("beijing climb queue DONE — exit", flush=True)
+                print(f"{CITY} climb queue DONE — exit", flush=True)
                 break
             if waiting_cache and not any(running(t, live) for t in QUEUE):
                 print(f"waiting cache for {waiting_cache}", flush=True)

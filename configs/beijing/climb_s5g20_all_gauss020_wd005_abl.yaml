@@ -1,0 +1,5 @@
+extends: ./climb_s5g20_all_gauss020_wd005.yaml
+cache: runs/beijing/cache_abl_tgt_last
+out: runs/beijing/climb_s5g20_all_gauss020_wd005_abl
+recipe_id: climb_s5g20_all_gauss020_wd005_abl
+description: "WIN stack on abl cache"
