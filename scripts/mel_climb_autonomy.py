@@ -608,8 +608,17 @@ def main() -> None:
         help="Rebuild active wave from lever_rank (drop dead pending levers)",
     )
     ap.add_argument("--rank-levers", action="store_true", help="Refresh lever_rank.json only")
+    ap.add_argument(
+        "--prefetch",
+        action="store_true",
+        help="Open next wave early to fill free GPUs while current drains",
+    )
     args = ap.parse_args()
 
+    if args.prefetch:
+        out = prefetch_next_wave()
+        print(json.dumps(out, indent=2))
+        return
     if args.rank_levers:
         report = _refresh_lever_rank()
         print(json.dumps({"ban_keys": report.get("ban_keys"), "keep_keys": report.get("keep_keys"), "n": report.get("n_results")}))
