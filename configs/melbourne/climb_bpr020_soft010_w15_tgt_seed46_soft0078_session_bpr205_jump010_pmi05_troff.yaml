@@ -14,4 +14,4 @@ lambda_bpr: 0.205
 jump_length_bias: 0.1
 jump_dist: "lognormal"
 pmi_score_bias: 0.05
-transition_attn: "off"
+transition_attn: "rel_key"

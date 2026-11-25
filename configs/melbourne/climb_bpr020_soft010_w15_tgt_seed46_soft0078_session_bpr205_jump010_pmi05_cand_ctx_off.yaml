@@ -16,3 +16,5 @@ jump_dist: "lognormal"
 pmi_score_bias: 0.05
 candidate_context: "off"
 candidate_context_time: "off"
+geo_score_bias: 0.0
+revisit_score_bias: 0.0
