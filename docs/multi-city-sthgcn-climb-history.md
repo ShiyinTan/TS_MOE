@@ -1,7 +1,7 @@
 # Multi-city Acc@1 climb vs STHGCN — locked beats + history
 
 **Protocol:** `known_only` Acc@1 · **eval_test** · PR [#37](https://github.com/ShiyinTan/TS_MOE/pull/37)  
-**Updated:** 2026-11-25 18:50 JST  
+**Updated:** 2026-11-25 19:00 JST  
 **Repo branch:** `cursor/beijing-sthgcn-climb-7a66`  
 **Retention:** beat/STOPPED cities → this file + short `results/<city>/climb_path.md` only; MEL keeps active wave detail.
 
@@ -11,15 +11,15 @@ STHGCN paper Acc@1 baselines (Massive-STEPS): Beijing **0.453** · Melbourne **0
 
 ## 1. Current beat scoreboard (locked WINs)
 
-| City | STHGCN | Our Acc@1 | Δ | MRR | NDCG@10 | Status | Locked config |
-| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| **Beijing** | 0.453 | **0.465909** (41/88) | **+0.0129** | ~0.536 | ~0.574 | **LOCKED · climb STOPPED** | `configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml` |
-| **Palembang** | 0.246 | **0.259690** | **+0.0137** | 0.3403 | 0.3711 | **LOCKED · climb STOPPED** | `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml` |
-| **Melbourne** | 0.168 | **0.170692** | **+0.0027** | 0.2491 | 0.2791 | **LOCKED · clear-margin climb ACTIVE** (target ~≥0.172) | `configs/melbourne/climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml` |
+| City | STHGCN | Our Acc@1 | Δ | MRR | NDCG@10 | Status | Locked config | Path |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |
+| **Tokyo** | 0.250 | **0.267650** | **+0.0177** | — | — | **LOCKED · STOPPED** | `configs/tokyo/peak.yaml` | [`results/tokyo/climb_path.md`](../results/tokyo/climb_path.md) |
+| **Shanghai** | 0.193 | **0.196226** | **+0.0032** | ~0.258 | ~0.282 | **LOCKED · STOPPED** | `configs/shanghai/climb_soft005_filter_last.yaml` | [`results/shanghai/climb_path.md`](../results/shanghai/climb_path.md) |
+| **Beijing** | 0.453 | **0.465909** (41/88) | **+0.0129** | ~0.536 | ~0.574 | **LOCKED · STOPPED** | `configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml` | [`results/beijing/climb_path.md`](../results/beijing/climb_path.md) |
+| **Palembang** | 0.246 | **0.259690** | **+0.0137** | 0.3403 | 0.3711 | **LOCKED · STOPPED** | `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml` | [`results/palembang/climb_path.md`](../results/palembang/climb_path.md) |
+| **Melbourne** | 0.168 | **0.170692** | **+0.0027** | 0.2491 | 0.2791 | **LOCKED · ACTIVE** (~≥0.172) | `configs/melbourne/climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml` | [`results/melbourne/climb_path.md`](../results/melbourne/climb_path.md) |
 
-Tokyo → Shanghai → Beijing → Palembang → Melbourne (active). BJ/PL **STOPPED**. MEL margin still thin (+0.0027); clear-margin target ~≥0.172 before opening any further city.
-
-Also already beat (earlier / other cities): Tokyo **0.2677** vs 0.250 (+0.0177); Shanghai **0.1962** vs 0.193 (+0.0032).
+Order: Tokyo → Shanghai → Beijing → Palembang → Melbourne (active). Beat/STOPPED cities keep **only** `results/<city>/climb_path.md` (+ WIN metrics/config); MEL keeps active wave detail.
 
 ---
 
