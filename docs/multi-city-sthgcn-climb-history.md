@@ -13,10 +13,10 @@ STHGCN paper Acc@1 baselines (Massive-STEPS): Beijing **0.453** · Melbourne **0
 | City | STHGCN | Our Acc@1 | Δ | MRR | NDCG@10 | Status | Locked config |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
 | **Beijing** | 0.453 | **0.465909** (41/88) | **+0.0129** | ~0.536 | ~0.574 | **LOCKED · climb STOPPED** | `configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml` |
-| **Palembang** | 0.246 | **0.259690** | **+0.0137** | 0.3403 | 0.3711 | **LOCKED · packer paused** | `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml` |
+| **Palembang** | 0.246 | **0.259690** | **+0.0137** | 0.3403 | 0.3711 | **LOCKED · climb STOPPED** | `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml` |
 | **Melbourne** | 0.168 | **0.170692** | **+0.0027** | 0.2491 | 0.2791 | **LOCKED · clear-margin climb ACTIVE** (target ~≥0.172) | `configs/melbourne/climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml` |
 
-All three active Massive-STEPS climb cities **beat STHGCN** on known_only Acc@1. MEL margin is still thin; BJ/PL have clearer margins.
+Tokyo → Shanghai → Beijing → Palembang → Melbourne (active). BJ/PL **STOPPED**. MEL margin still thin (+0.0027); clear-margin target ~≥0.172 before opening any further city.
 
 Also already beat (earlier / other cities): Tokyo **0.2677** vs 0.250 (+0.0177); Shanghai **0.1962** vs 0.193 (+0.0032).
 
@@ -75,7 +75,7 @@ Source WIN metrics: `results/palembang/climb_tsb20_bpr020_filter_w18_p80_seed55_
 | early lifts | 0.2506 → 0.2532 → 0.2558 → 0.2571 | +0.005…+0.011 | soft/session/seed densify |
 | WIN | **0.259690** | **+0.0137** | softβ **0.0754** · λ_bpr **0.25** · seed **55** · filter p80 lineage |
 
-**Status:** packer **paused** (margin already clear). Config: `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml`.
+**Status:** climb **STOPPED** (margin clear; do not resume densify unless asked). Config: `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml`.
 
 Also: [`results/palembang/climb_path.md`](../results/palembang/climb_path.md).
 
@@ -85,11 +85,12 @@ Also: [`results/palembang/climb_path.md`](../results/palembang/climb_path.md).
 
 | Item | Value |
 | --- | --- |
-| Focus | Melbourne clearer margin (~≥0.172) |
+| Focus | Melbourne clearer margin (~≥0.172) — no new city until then |
 | Wave | **w16** (~64 configs; router/neg/focal/bpr_margin/radiation/hour_pop/cataux/geoadapt/dim) |
 | Caps | ≤2 our jobs/GPU; RAM≥24 GiB avail; VRAM≥6 GiB free; disk floor |
-| BJ | STOPPED @ 0.465909 — no BJ packer |
-| PL | paused |
+| BJ | STOPPED @ 0.465909 — 0 jobs |
+| PL | STOPPED @ 0.259690 — 0 jobs |
+| Harvest | prefer 45–60m; one-line; wake on lift / blocker / wave flat |
 
 ---
 

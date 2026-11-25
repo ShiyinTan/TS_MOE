@@ -83,10 +83,10 @@ python -m tsmoe train --config configs/beijing/climb_s5g20_all_gauss020_wd005_j1
 | Tokyo | 0.2677 | 0.250 | +0.0177 | `configs/tokyo/peak.yaml`（soft10r） |
 | Shanghai | 0.1962 | 0.193 | +0.0032 | `configs/shanghai/climb_soft005.yaml` |
 | **Beijing** | **0.465909** | 0.453 | **+0.0129** | `configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml` · **STOPPED** |
-| Palembang | **0.259690** | 0.246 | **+0.0137** | `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml` · paused |
+| Palembang | **0.259690** | 0.246 | **+0.0137** | `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml` · **STOPPED** |
 | Melbourne | **0.170692** | 0.168 | **+0.0027** | `configs/melbourne/climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml` · clear-margin ACTIVE |
 
-多城汇总：[`docs/multi-city-sthgcn-climb-history.md`](../../docs/multi-city-sthgcn-climb-history.md)。下一城 focus：**Melbourne** clear-margin（目标 ~≥0.172）；BJ STOPPED；PL paused。
+多城汇总：[`docs/multi-city-sthgcn-climb-history.md`](../../docs/multi-city-sthgcn-climb-history.md)。顺序 Tokyo→Shanghai→Beijing→Palembang→Melbourne；BJ/PL **STOPPED**；仅 MEL clear-margin（~≥0.172）后再开新城。
 
 ---
 

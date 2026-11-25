@@ -6,7 +6,7 @@
 **Locked WIN:** Acc@1 **0.259690** (+0.0137) · MRR **0.3403** · NDCG@10 **0.3711**  
 **Config:** `configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml`  
 **Source metrics:** `results/palembang/climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr025/eval_test/`  
-**Status:** packer **paused** (clear margin)
+**Status:** climb **STOPPED** (clear margin; do not resume densify unless asked)
 
 ## Beat ladder
 
