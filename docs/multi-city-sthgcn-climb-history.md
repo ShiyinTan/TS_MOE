@@ -56,7 +56,8 @@ Source WIN metrics: `results/melbourne/climb_bpr020_soft010_w12_tgt_seed46_soft0
 | lock A | **0.169887** | +0.0019 | w11 · seed46 soft0078+session bpr205+jump010 |
 | lock B · WIN | **0.170692** | **+0.0027** | w12 · **+pmi=0.05** on lock A |
 | w12b–w15 | flat @ 0.170692 | — | densify / new levers; TIEs only; no real lift |
-| w16 | in flight | — | router / neg / focal / rad / hour_pop / dim … (seeking ≥~0.172) |
+| w16 | flat | — | 64/64 TOP 0.167472; no real lift |
+| w17 | queued | — | soft/seed/bias/protocol densify (~76) |
 
 **WIN recipe:** extends `climb_bpr020_soft010` · seed **46** · softβ **0.078** · session_summary on · λ_bpr **0.205** · jump **0.10** · pmi **0.05** · cache `runs/melbourne/cache_tgt_all_eval_last`.
 
@@ -87,7 +88,7 @@ Also: [`results/palembang/climb_path.md`](../results/palembang/climb_path.md).
 | Item | Value |
 | --- | --- |
 | Focus | Melbourne clearer margin (~≥0.172) — no new city until then |
-| Wave | **w16** (~64; router/neg/focal/rad/hour_pop/dim…) · mid-run TOP below lock |
+| Wave | **w17** (~76; soft/seed/bias/protocol) after flat w16 |
 | Caps | ≤2 our jobs/GPU; RAM/VRAM/disk gates |
 | BJ / PL | STOPPED — 0 jobs |
 | Harvest | ~45m sparse; one-line unless Acc lift or blocker |

@@ -15,6 +15,8 @@
 | lock A | 0.169887 | +0.0019 | w11 · seed46 soft0078+session bpr205+jump010 |
 | **WIN** | **0.170692** | **+0.0027** | w12 · pmi=0.05 |
 | w12b–w15 | flat | — | densify / new levers; no real lift |
-| w16 | in flight | — | seeking ≥~0.172 |
+| w16 | flat @ <lock | — | 64/64 TOP 0.167472; no real lift |
+| w17 | queued | — | soft/seed/bias/protocol densify (~76) |
+| w17 | queued | — | soft/seed/bias/protocol densify |
 
 Canonical multi-city summary: [`docs/multi-city-sthgcn-climb-history.md`](../../docs/multi-city-sthgcn-climb-history.md).
