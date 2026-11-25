@@ -12,6 +12,12 @@
 !/results/*/mean_std.md
 !/results/*/mean_std.csv
 
+# Intermediate climb densify waves (GPU-local only).
+# Commit a config only after Acc lock via scripts/promote_climb_config.py.
+# Recipe overrides for regen live in scripts/data/*_overrides.json.
+configs/*/*_w[0-9]*_*.yaml
+configs/*/*_w[0-9][0-9]*_*.yaml
+
 # Python
 __pycache__/
 *.py[cod]

@@ -1,9 +1,0 @@
-# Superseded by tgt_soft008_session_win Acc@1=0.155395
-# Melbourne Acc lift Acc@1=0.154157 (eval_test known_only)
-# Source: climb_bpr020_soft010_w1_filt_win · cache_filter_last
-# Prior best 0.152979; STHGCN Melbourne Acc@1=0.168 → gap −0.0138; continue climb
-extends: ./climb_bpr020_soft010.yaml
-out: runs/melbourne/climb_bpr020_soft010_filt_win
-recipe_id: climb_bpr020_soft010_filt_win
-description: "melbourne interim lift · soft010 on cache_filter_last Acc@1=0.154157"
-cache: "runs/melbourne/cache_filter_last"

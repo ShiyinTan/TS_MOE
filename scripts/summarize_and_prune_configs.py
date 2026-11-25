@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Summarize climb configs → CSV/MD index, then delete obsolete wave YAMLs.
 
+Wave densify YAMLs (``*_wNN_*``) are **gitignored** — they live on the GPU only.
+Git keeps WIN/lock + foundations; regenerate waves with
+``scripts/gen_mel_wave_local.py``. After Acc lock, promote with
+``scripts/promote_climb_config.py``.
+
 Run **on the GPU box or locally** (no chat uploads)::
 
-    # dry-run (default safe): only wave configs ``*_w12_*`` etc.
     python scripts/summarize_and_prune_configs.py --all-stopped --dry-run
-    python scripts/summarize_and_prune_configs.py --all-stopped
-
-    # Melbourne active wave: keep w17 (+ WIN + foundations via extends)
-    python scripts/summarize_and_prune_configs.py --city melbourne \\
-        --keep-wave w17 --dry-run
     python scripts/summarize_and_prune_configs.py --city melbourne --keep-wave w17
-
-    # STOPPED city: drop all climb waves; keep locked WIN + extends chain
     python scripts/summarize_and_prune_configs.py --city beijing --aggressive
+
+Prefer the umbrella::
+
+    python scripts/sync_climb_retention.py --city melbourne --apply
 
 Writes (kept forever)::
 

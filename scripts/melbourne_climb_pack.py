@@ -9,6 +9,9 @@ Total our jobs per GPU are capped; cities share via ``all_counts``.
 Over-limit only blocks new launches — never kills already-running jobs.
 
 Never touches foreign processes. Prefer configs under configs/melbourne/climb_*.yaml.
+Wave densify YAMLs are **gitignored** — materialize with
+``scripts/gen_mel_wave_local.py`` (also auto-called here). Commit only after Acc
+lock via ``scripts/promote_climb_config.py``.
 Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
 """
 from __future__ import annotations
@@ -34,6 +37,7 @@ from gpu_pack_limits import (  # noqa: E402
     resource_snapshot,
     scan_gpus,
 )
+from gen_mel_wave_local import ensure_wave_configs  # noqa: E402
 
 CITY = "melbourne"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
@@ -208,7 +212,13 @@ def cache_ready(tag: str) -> bool:
 def launch(tag: str, gpu: int, gpu_limit: int) -> int:
     LOG.mkdir(parents=True, exist_ok=True)
     PIDDIR.mkdir(parents=True, exist_ok=True)
-    cfg = f"configs/{CITY}/{tag}.yaml"
+    cfg_path = ROOT / "configs" / CITY / f"{tag}.yaml"
+    if not cfg_path.is_file() and "_w17_" in tag:
+        ensure_wave_configs("w17", CITY)
+    if not cfg_path.is_file():
+        print(f"SKIP missing local config {cfg_path}", flush=True)
+        return -1
+    cfg = str(cfg_path.relative_to(ROOT))
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     lf = open(LOG / f"{CITY}_{tag}.log", "ab")
@@ -230,8 +240,9 @@ def launch(tag: str, gpu: int, gpu_limit: int) -> int:
 
 
 def main():
+    n_ensured = ensure_wave_configs("w17", CITY)
     print(
-        f"{CITY} climb packer queue={len(QUEUE)} "
+        f"{CITY} climb packer queue={len(QUEUE)} ensured_local_w17={n_ensured} "
         f"max_free={MAX_OUR_PER_GPU_FREE} max_shared={MAX_OUR_PER_GPU_SHARED} "
         f"(foreign except dl-box → shared) stop={STOP_SENTINEL} | "
         f"{resource_snapshot(ROOT / 'runs')}",
@@ -283,7 +294,9 @@ def main():
                         if stop_requested() or not host_ram_ok() or not disk_ok(ROOT / "runs"):
                             break
                         tag = pending.pop(0)
-                        launch(tag, g, lim)
+                        pid = launch(tag, g, lim)
+                        if pid < 0:
+                            continue
                         by_all[g] += 1
                         by_city[g] += 1
                         free[g] = free.get(g, 0) - 2000

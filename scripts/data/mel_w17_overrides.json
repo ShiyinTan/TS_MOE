@@ -1,0 +1,238 @@
+{
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_bpr198": {
+    "lambda_bpr": 0.198
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_bpr200": {
+    "lambda_bpr": 0.2
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_bpr202": {
+    "lambda_bpr": 0.202
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_bpr208": {
+    "lambda_bpr": 0.208
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_bpr210": {
+    "lambda_bpr": 0.21
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_bpr212": {
+    "lambda_bpr": 0.212
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_bpr215": {
+    "lambda_bpr": 0.215
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_ep2": {
+    "epochs": 2
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_ep3": {
+    "epochs": 3
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_gauss010": {
+    "gauss_geo_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_gauss015": {
+    "gauss_geo_bias": 0.15
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_gauss020": {
+    "gauss_geo_bias": 0.2
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo005": {
+    "geo_score_bias": 0.05
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo008": {
+    "geo_score_bias": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo010": {
+    "geo_score_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo012": {
+    "geo_score_bias": 0.12
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo015": {
+    "geo_score_bias": 0.15
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hop010": {
+    "transition_2hop_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hop020": {
+    "transition_2hop_bias": 0.2
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hop030": {
+    "transition_2hop_bias": 0.3
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hpop005": {
+    "hour_pop_score_bias": 0.05
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hpop008": {
+    "hour_pop_score_bias": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hpop010": {
+    "hour_pop_score_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hpop012": {
+    "hour_pop_score_bias": 0.12
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hpop015": {
+    "hour_pop_score_bias": 0.15
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_hpop10_pop08": {
+    "hour_pop_score_bias": 0.1,
+    "pop_score_bias": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_jump008": {
+    "jump_length_bias": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_jump009": {
+    "jump_length_bias": 0.09
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_jump011": {
+    "jump_length_bias": 0.11
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_jump012": {
+    "jump_length_bias": 0.12
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_jump013": {
+    "jump_length_bias": 0.13
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_jump015": {
+    "jump_length_bias": 0.15
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi003": {
+    "pmi_score_bias": 0.03
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi004": {
+    "pmi_score_bias": 0.04
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi006": {
+    "pmi_score_bias": 0.06
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi007": {
+    "pmi_score_bias": 0.07
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi008": {
+    "pmi_score_bias": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi010": {
+    "pmi_score_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pmi012": {
+    "pmi_score_bias": 0.12
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pop005": {
+    "pop_score_bias": 0.05
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pop008": {
+    "pop_score_bias": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pop010": {
+    "pop_score_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_pop012": {
+    "pop_score_bias": 0.12
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_rev005": {
+    "revisit_score_bias": 0.05
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_rev008": {
+    "revisit_score_bias": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_rev010": {
+    "revisit_score_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_rev012": {
+    "revisit_score_bias": 0.12
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_rev015": {
+    "revisit_score_bias": 0.15
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_rev10_geo10": {
+    "geo_score_bias": 0.1,
+    "revisit_score_bias": 0.1
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed42": {
+    "seed": 42
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed43": {
+    "seed": 43
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed44": {
+    "seed": 44
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed45": {
+    "seed": 45
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed47": {
+    "seed": 47
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed47_soft080": {
+    "seed": 47,
+    "soft_target_beta": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed48": {
+    "seed": 48
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed50": {
+    "seed": 50
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed50_pmi08": {
+    "pmi_score_bias": 0.08,
+    "seed": 50
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed52": {
+    "seed": 52
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_seed55": {
+    "seed": 55
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft070": {
+    "soft_target_beta": 0.07
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft074": {
+    "soft_target_beta": 0.074
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft076": {
+    "soft_target_beta": 0.076
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft076_bpr208": {
+    "lambda_bpr": 0.208,
+    "soft_target_beta": 0.076
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft080": {
+    "soft_target_beta": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft080_pmi06": {
+    "pmi_score_bias": 0.06,
+    "soft_target_beta": 0.08
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft082": {
+    "soft_target_beta": 0.082
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft085": {
+    "soft_target_beta": 0.085
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft090": {
+    "soft_target_beta": 0.09
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft095": {
+    "soft_target_beta": 0.095
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_trgate": {
+    "transition_attn": "gate"
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_trgate_geo10": {
+    "geo_score_bias": 0.1,
+    "transition_attn": "gate"
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_trgate_rev10": {
+    "revisit_score_bias": 0.1,
+    "transition_attn": "gate"
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_wd001": {
+    "weight_decay": 0.001
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_wd005": {
+    "weight_decay": 0.005
+  },
+  "climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_wd010": {
+    "weight_decay": 0.01
+  }
+}
