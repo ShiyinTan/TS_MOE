@@ -1,7 +1,7 @@
 extends: ./climb_bpr020_soft010.yaml
 out: runs/melbourne/climb_bpr020_soft010_w16_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_cprior_radiation_m64
 recipe_id: climb_bpr020_soft010_w16_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_cprior_radiation_m64
-description: "melbourne clear-margin climb · climb_bpr020_soft010_w16_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_cprior_radiation_m64 · w16 loss/router/neg/radiation/prior levers on WIN (fresh vs w13–15)"
+description: "melbourne clear-margin climb · climb_bpr020_soft010_w16_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_cprior_radiation_m64 · w16 retarget (cprior is eval-only; train hour_pop/pop/rad)"
 cache: "runs/melbourne/cache_tgt_all_eval_last"
 session_summary: "on"
 eval_test_every_epoch: false
@@ -14,5 +14,4 @@ lambda_bpr: 0.205
 jump_length_bias: 0.1
 jump_dist: "lognormal"
 pmi_score_bias: 0.05
-candidate_spatial_prior: "radiation"
-candidate_prior_top_m: 64
+hour_pop_score_bias: 0.2
