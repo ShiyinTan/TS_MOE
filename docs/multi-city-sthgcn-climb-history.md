@@ -89,9 +89,9 @@ Also: [`results/palembang/climb_path.md`](../results/palembang/climb_path.md).
 | --- | --- |
 | Focus | Melbourne clearer margin (~≥0.172) — no new city until then |
 | Wave | **w17** (~76; soft/seed/bias/protocol) after flat w16 |
-| Caps | ≤2 our jobs/GPU; RAM/VRAM/disk gates |
+| Caps | ≤**4**/GPU free · ≤**3**/GPU shared; RAM/VRAM/disk gates |
 | BJ / PL | STOPPED — 0 jobs |
-| Harvest | ~45m sparse; one-line unless Acc lift or blocker |
+| Harvest | **~2–3h** sparse (`scripts/mel_acc_oneline.py`); chat only on Acc lift / blocker |
 
 ---
 

@@ -1,13 +1,15 @@
 """Per-GPU launch caps for multi-city climb packers.
 
-Rules (prefs 2026-11-25):
-- Default: up to ``TSMOE_MAX_PER_GPU`` (default **2**) of *our* ``tsmoe`` jobs per GPU.
-- If another user has a compute process on that GPU — except users listed in
-  ``TSMOE_IGNORE_FOREIGN_USERS`` (default **dl-box**) — cap is
-  ``TSMOE_MAX_PER_GPU_SHARED`` (default **2**, same as free).
-- Caps only gate **new** launches. Never kill / stop / signal running jobs
-  (ours or foreign) when a GPU is already over the limit — let them finish.
-- Also gate on host RAM, per-GPU free VRAM, and destination filesystem free space.
+Rules (prefs 2026-11-25; raised 2026-11-25 evening):
+- Default: up to ``TSMOE_MAX_PER_GPU`` (default **4**) of *our* ``tsmoe`` jobs per GPU
+  when the GPU is free of foreign users (ignore ``dl-box``).
+- If another user (e.g. camob) is on that GPU, cap is
+  ``TSMOE_MAX_PER_GPU_SHARED`` (default **3**).
+- Caps only gate **new** launches. Never kill running jobs (ours or foreign).
+- Also gate on host RAM, per-GPU free VRAM, and disk — these matter more than the
+  integer cap when cards have large VRAM headroom.
+- Packers should keep filling the box autonomously; agents harvest sparsely
+  (token thrift) and only wake on Acc lift / real resource blocker.
 """
 from __future__ import annotations
 
@@ -26,12 +28,12 @@ IGNORE_FOREIGN_USERS = {
     for u in os.environ.get("TSMOE_IGNORE_FOREIGN_USERS", "dl-box").split(",")
     if u.strip()
 }
-# Prefs 2026-11-25: ≤2 our jobs per GPU (free and shared).
-MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "2"))
-MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "2"))
+# Prefs: pack more when GPUs are free; VRAM/RAM/disk gates still apply.
+MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "4"))
+MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "3"))
 # Leave headroom so a new train does not OOM the host / GPU.
 MIN_HOST_RAM_GIB = float(os.environ.get("TSMOE_MIN_HOST_RAM_GIB", "24"))
-MIN_FREE_VRAM_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "6000"))
+MIN_FREE_VRAM_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "5000"))
 MIN_DISK_FREE_GIB = float(os.environ.get("TSMOE_MIN_DISK_FREE_GIB", "8"))
 
 
