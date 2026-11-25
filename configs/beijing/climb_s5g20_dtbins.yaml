@@ -1,5 +1,0 @@
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_dtbins
-recipe_id: climb_s5g20_dtbins
-description: "s5g20 transition_dt_bins=1h,6h,24h"
-transition_dt_bins: "1h,6h,24h"

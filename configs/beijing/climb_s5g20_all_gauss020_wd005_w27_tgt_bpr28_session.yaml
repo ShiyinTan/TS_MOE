@@ -1,7 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w27_tgt_bpr28_session
-recipe_id: climb_s5g20_all_gauss020_wd005_w27_tgt_bpr28_session
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w27_tgt_bpr28_session"
-cache: "runs/beijing/cache_tgt_all_eval_last"
-lambda_bpr: 0.28
-session_summary: "on"

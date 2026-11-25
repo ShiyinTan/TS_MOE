@@ -1,9 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w15_fam
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w15_fam
-recipe_id: climb_s5g20_all_gauss020_wd005_w15_fam
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w15_fam"
-fam_area_blend: "on"
-fam_radius_km: 0.5
-fam_explore_bias: 0.1
-fam_return_bias: 0.05

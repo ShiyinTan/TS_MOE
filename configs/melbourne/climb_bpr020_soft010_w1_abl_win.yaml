@@ -1,4 +1,0 @@
-extends: ./climb_bpr020_soft010.yaml
-out: runs/melbourne/climb_bpr020_soft010_w1_abl_win
-recipe_id: climb_bpr020_soft010_w1_abl_win
-description: "melbourne climb · climb_bpr020_soft010_w1_abl_win"

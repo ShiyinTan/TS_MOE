@@ -1,5 +1,0 @@
-extends: ./climb_bpr020_soft010_tgt_soft008_session_seed40_win.yaml
-out: runs/melbourne/climb_bpr020_soft010_w5_tgt_seed40_soft008_session_bpr018
-recipe_id: climb_bpr020_soft010_w5_tgt_seed40_soft008_session_bpr018
-description: "melbourne climb · climb_bpr020_soft010_w5_tgt_seed40_soft008_session_bpr018 · densify Acc 0.158615"
-lambda_bpr: 0.18

@@ -1,7 +1,0 @@
-# beijing · category + popularity score biases on top of geo020
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_cat015_pop010
-recipe_id: climb_s5g20_cat015_pop010
-description: "s5g20 + category_score_bias=0.15 + pop_score_bias=0.10"
-category_score_bias: 0.15
-pop_score_bias: 0.10

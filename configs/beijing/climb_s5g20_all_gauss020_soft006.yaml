@@ -1,8 +1,0 @@
-extends: ./climb_s5g20_all_gauss020.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_soft006
-recipe_id: climb_s5g20_all_gauss020_soft006
-description: "fine sweep around gauss020"
-geo_score_bias: 0.0
-gauss_geo_bias: 0.2
-gauss_sigma_km: 0.5
-soft_target_beta: 0.06

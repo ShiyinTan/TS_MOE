@@ -1,5 +1,0 @@
-extends: ./climb_s5g20_all_gauss015.yaml
-out: runs/beijing/climb_s5g20_all_gauss015_pmisb015
-recipe_id: climb_s5g20_all_gauss015_pmisb015
-description: "all_gauss015 + pmi_score_bias=0.15"
-pmi_score_bias: 0.15

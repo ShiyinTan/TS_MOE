@@ -1,7 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w10_tgt_ep2_tsb185
-recipe_id: climb_tsb20_bpr020_filter_w10_tgt_ep2_tsb185
-description: palembang climb · climb_tsb20_bpr020_filter_w10_tgt_ep2_tsb185
-cache: runs/palembang/cache_tgt_all_eval_last
-epochs: 2
-transition_score_bias: 1.85

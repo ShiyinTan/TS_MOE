@@ -1,5 +1,0 @@
-extends: ./climb_ep2_trbias.yaml
-out: runs/beijing/climb_ep2_trbias_ssb030
-recipe_id: climb_ep2_trbias_ssb030
-description: "ep2_trbias + surd_score_bias=0.30"
-surd_score_bias: 0.30

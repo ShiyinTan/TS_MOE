@@ -1,7 +1,0 @@
-# palembang · WIN on filter-unknown last/last cache
-extends: ../recipes/win.yaml
-city: palembang
-cache: runs/palembang/cache_filter_last
-out: runs/palembang/climb_win_filter_last
-recipe_id: climb_win_filter_last
-description: "WIN on cache_filter_last"

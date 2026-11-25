@@ -1,6 +1,0 @@
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_geo020_gauss005
-recipe_id: climb_s5g20_geo020_gauss005
-description: "s5g20 geo020 + weak gauss 0.05"
-gauss_geo_bias: 0.05
-gauss_sigma_km: 0.5

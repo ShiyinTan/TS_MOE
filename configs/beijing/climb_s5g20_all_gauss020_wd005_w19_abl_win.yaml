@@ -1,6 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w19_abl_win
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w19_abl_win
-recipe_id: climb_s5g20_all_gauss020_wd005_w19_abl_win
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w19_abl_win"
-cache: "runs/beijing/cache_abl_tgt_last"

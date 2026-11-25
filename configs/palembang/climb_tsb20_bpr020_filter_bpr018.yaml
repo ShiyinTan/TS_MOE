@@ -1,5 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_last.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_bpr018
-recipe_id: climb_tsb20_bpr020_filter_bpr018
-description: "city-best + lambda_bpr=0.18"
-lambda_bpr: 0.18

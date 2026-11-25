@@ -1,5 +1,0 @@
-extends: ./climb_ep2_trbias.yaml
-out: runs/beijing/climb_ep2_trbias_bpr025
-recipe_id: climb_ep2_trbias_bpr025
-description: "ep2_trbias + λ_bpr=0.25"
-lambda_bpr: 0.25

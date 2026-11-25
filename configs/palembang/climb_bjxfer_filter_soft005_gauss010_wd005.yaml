@@ -1,7 +1,0 @@
-extends: ./climb_bjxfer_gauss020_wd005.yaml
-cache: runs/palembang/cache_filter_last
-out: runs/palembang/climb_bjxfer_filter_soft005_gauss010_wd005
-recipe_id: climb_bjxfer_filter_soft005_gauss010_wd005
-description: "Beijing-style soft005+gauss010+wd005 on filter_last"
-gauss_geo_bias: 0.10
-weight_decay: 0.005

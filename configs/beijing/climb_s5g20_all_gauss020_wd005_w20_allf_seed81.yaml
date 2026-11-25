@@ -1,7 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w20_allf_seed81
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w20_allf_seed81
-recipe_id: climb_s5g20_all_gauss020_wd005_w20_allf_seed81
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w20_allf_seed81"
-cache: "runs/beijing/cache_all_filter_last"
-seed: 81

@@ -1,7 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w40_tgt_hour003_ep3
-recipe_id: climb_s5g20_all_gauss020_wd005_w40_tgt_hour003_ep3
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w40_tgt_hour003_ep3 · wall densify w40 NEW levers"
-cache: "runs/beijing/cache_tgt_all_eval_last"
-hour_pop_score_bias: 0.03
-epochs: 3

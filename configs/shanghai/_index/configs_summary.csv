@@ -1,0 +1,6 @@
+file,recipe_id,extends,cache,out,description,seed,epochs,soft_target_beta,lambda_bpr,jump_length_bias,pmi_score_bias,pop_score_bias,geo_score_bias,gauss_geo_bias,weight_decay,wave,bytes
+base.yaml,,../recipes/base.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/base,,,,,,,,,,,,,180
+climb_soft005.yaml,climb_soft005,../recipes/win.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/climb_soft005,WIN + soft-target β=0.05 prior=revisit (Shanghai best vs STHGCN),,,0.05,,,,,,,,,417
+climb_soft005_filter_last.yaml,climb_soft005_filter_last,./climb_soft005.yaml,runs/shanghai/cache_filter_last,runs/shanghai/climb_soft005_filter_last,soft005 on cache_filter_last,,,,,,,,,,,,248
+peak.yaml,,../recipes/peak.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/peak,,,,,,,,,,,,,180
+win.yaml,,../recipes/win.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/win,,,,,,,,,,,,,177

@@ -1,6 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w16_dt_edges
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w16_dt_edges
-recipe_id: climb_s5g20_all_gauss020_wd005_w16_dt_edges
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w16_dt_edges"
-tsb_dt_edges: [1, 6, 24]

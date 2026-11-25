@@ -1,9 +1,0 @@
-# palembang · climb_tsb20_dim256 — Acc climb toward STHGCN (wave3)
-extends: ../recipes/base.yaml
-city: palembang
-cache: runs/palembang/cache_abl_tgt_last
-out: runs/palembang/climb_tsb20_dim256
-recipe_id: climb_tsb20_dim256
-transition_score_bias: 2.0
-dim: 256
-heads: 8

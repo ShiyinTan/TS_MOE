@@ -1,9 +1,0 @@
-# beijing · radiation + user_pref
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_rad015_upref
-recipe_id: climb_s5g20_rad015_upref
-description: "s5g20 + radiation 0.15 + user_pref (geo off)"
-geo_score_bias: 0.0
-radiation_score_bias: 0.15
-radiation_kernel: hard
-user_pref: "on"

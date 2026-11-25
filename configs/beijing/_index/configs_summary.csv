@@ -1,0 +1,10 @@
+file,recipe_id,extends,cache,out,description,seed,epochs,soft_target_beta,lambda_bpr,jump_length_bias,pmi_score_bias,pop_score_bias,geo_score_bias,gauss_geo_bias,weight_decay,wave,bytes
+base.yaml,,../recipes/base.yaml,runs/beijing/cache_abl_tgt_last,runs/beijing/base,,,,,,,,,,,,,176
+climb_ep2_trbias.yaml,climb_ep2_trbias,../recipes/peak.yaml,runs/beijing/cache_abl_tgt_last,runs/beijing/climb_ep2_trbias,Peak + transition_attn=bias + epochs=2 (Beijing city best vs STHGCN gap −0.0439),,2,,,,,,,,,,455
+climb_ep2_trbias_soft005_geo020.yaml,climb_ep2_trbias_soft005_geo020,./climb_ep2_trbias.yaml,,runs/beijing/climb_ep2_trbias_soft005_geo020,ep2_trbias + soft005 + geo020 (Beijing city best vs STHGCN gap −0.0325),,,0.05,,,,,0.2,,,,482
+climb_s5g20_all_gauss015.yaml,climb_s5g20_all_gauss015,./climb_ep2_trbias_soft005_geo020.yaml,runs/beijing/cache_tgt_all_eval_last,runs/beijing/climb_s5g20_all_gauss015,s5g20 gauss015 on tgt_all_eval_last — Beijing city best 0.431818 (Δ −0.0212 vs STHGCN),,,,,,,,0.0,0.15,,,515
+climb_s5g20_all_gauss020.yaml,climb_s5g20_all_gauss020,./climb_ep2_trbias_soft005_geo020.yaml,runs/beijing/cache_tgt_all_eval_last,runs/beijing/climb_s5g20_all_gauss020,s5g20 gauss020 on tgt_all_eval_last — Beijing city best 0.443182,,,,,,,,0.0,0.2,,,502
+climb_s5g20_all_gauss020_wd005.yaml,climb_s5g20_all_gauss020_wd005,./climb_s5g20_all_gauss020.yaml,,runs/beijing/climb_s5g20_all_gauss020_wd005,LOCKED Beijing WIN vs STHGCN · Acc@1 0.454545,,,,,,,,,,0.005,,679
+climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml,climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win,./climb_s5g20_all_gauss020_wd005.yaml,runs/beijing/cache_tgt_all_eval_last,runs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win,LOCKED Beijing WIN vs STHGCN · Acc@1 0.465909 (41/88) · j12+pop10+pmi015,,3,,,0.12,0.15,0.1,,,,,761
+peak.yaml,,../recipes/peak.yaml,runs/beijing/cache_abl_tgt_last,runs/beijing/peak,,,,,,,,,,,,,176
+win.yaml,,../recipes/win.yaml,runs/beijing/cache_abl_tgt_last,runs/beijing/win,,,,,,,,,,,,,173

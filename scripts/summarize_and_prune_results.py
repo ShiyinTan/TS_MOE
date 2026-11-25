@@ -38,46 +38,27 @@ from city_results_bundle import (  # noqa: E402
     write_readme,
     write_settings_summary,
 )
+from climb_retention import (  # noqa: E402
+    city_keep_prefixes,
+    city_keep_results,
+    sthgcn_map,
+)
 
-DEFAULT_STHGCN = {
-    "tokyo": 0.250,
-    "shanghai": 0.193,
-    "beijing": 0.453,
-    "melbourne": 0.168,
-    "palembang": 0.246,
-}
+DEFAULT_STHGCN = sthgcn_map()
 
-# Conservative WIN / ladder dirs if climb_path has no backticks yet.
-DEFAULT_KEEP = {
-    "tokyo": {
-        "hc_sg_Atime_bpr029_ssb026",
-        "on_rev_soft10r",
-        "on_rev010",
-        "hc_win_trgate_gsb015",
-    },
-    "shanghai": {
-        "climb_soft005_filter_last",
-        "tune_soft005",
-        "win",
-    },
-    "beijing": {
-        "climb_s5g20_all_gauss020_wd005_w45_tgt_j12p10_pmi015_ep3",
-        "climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win",
-        "climb_s5g20_all_gauss020_wd005",
-        "climb_s5g20_all_gauss020_wd02",
-        "climb_s5g20_all_gauss020",
-        "climb_s5g20_all_gauss015",
-        "climb_ep2_trbias_soft005_geo020",
-    },
-    "melbourne": {
-        "climb_bpr020_soft010_w12_tgt_seed46_soft0078_session_bpr205_jump010_pmi05",
-        "climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win",
-        "climb_bpr020_soft010_w11_tgt_seed46_soft0078_session_bpr205_jump010",
-    },
-    "palembang": {
-        "climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr025",
-    },
-}
+
+def default_keep(city: str) -> set[str]:
+    try:
+        return city_keep_results(city)
+    except Exception:
+        return set()
+
+
+def default_prefixes(city: str) -> list[str]:
+    try:
+        return [p for p in city_keep_prefixes(city) if not p.startswith("_")]
+    except Exception:
+        return []
 
 KEEP_ROOT_NAMES = {
     "climb_path.md",
@@ -146,10 +127,11 @@ def resolve_keep(
     keep_prefix: list[str],
     keep_top: int,
 ) -> set[str]:
-    out: set[str] = set(DEFAULT_KEEP.get(city, set()))
+    out: set[str] = set(default_keep(city))
     out |= parse_keep_from_climb_path(city_dir / "climb_path.md")
     out |= set(keep)
-    for pref in keep_prefix:
+    prefs = list(keep_prefix) + default_prefixes(city)
+    for pref in prefs:
         for p in city_dir.iterdir():
             if p.is_dir() and p.name.startswith(pref):
                 out.add(p.name)

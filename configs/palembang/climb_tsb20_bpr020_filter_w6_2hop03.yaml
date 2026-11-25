@@ -1,6 +1,0 @@
-# palembang · climb_tsb20_bpr020_filter_w6_2hop03
-extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w6_2hop03
-recipe_id: climb_tsb20_bpr020_filter_w6_2hop03
-description: "palembang climb · climb_tsb20_bpr020_filter_w6_2hop03"
-transition_2hop_bias: 0.3

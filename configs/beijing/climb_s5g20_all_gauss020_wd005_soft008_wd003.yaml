@@ -1,6 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_soft008_wd003
-recipe_id: climb_s5g20_all_gauss020_wd005_soft008_wd003
-description: "WIN + soft008_wd003"
-soft_target_beta: 0.08
-weight_decay: 0.003

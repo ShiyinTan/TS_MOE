@@ -1,7 +1,0 @@
-# beijing · climb_s5g20_revrec015 — densify around soft005_geo020 / pmisb015 plateau
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_revrec015
-recipe_id: climb_s5g20_revrec015
-description: "densify revisit_recency_bias=0.15, revisit_recency_tau=24.0"
-revisit_recency_bias: 0.15
-revisit_recency_tau: 24.0

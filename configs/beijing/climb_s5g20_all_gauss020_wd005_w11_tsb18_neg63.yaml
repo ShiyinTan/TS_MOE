@@ -1,7 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w11_tsb18_neg63
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w11_tsb18_neg63
-recipe_id: climb_s5g20_all_gauss020_wd005_w11_tsb18_neg63
-description: "beijing climb · w11_tsb18_neg63"
-transition_score_bias: 1.8
-negatives: 63

@@ -1,5 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_soft0752_bpr027_session_seed55.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_explore005
-recipe_id: climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_explore005
-description: "palembang climb · climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_explore005 · densify Acc 0.255814"
-explore_score_bias: 0.05

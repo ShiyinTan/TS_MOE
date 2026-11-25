@@ -1,8 +1,0 @@
-# beijing · climb_ep2_trbias_soft006_geo020 — wave3 around soft005_geo020 city best 0.420455 (STHGCN 0.453)
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_ep2_trbias_soft006_geo020
-recipe_id: climb_ep2_trbias_soft006_geo020
-description: "wave3 soft_target_beta=0.06, soft_target_prior=revisit, geo_score_bias=0.2"
-soft_target_beta: 0.06
-soft_target_prior: "revisit"
-geo_score_bias: 0.2

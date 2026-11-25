@@ -1,6 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_soft0752_session_seed55.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w16_tgt_seed67_soft0752
-recipe_id: climb_tsb20_bpr020_filter_w16_tgt_seed67_soft0752
-description: "palembang climb · climb_tsb20_bpr020_filter_w16_tgt_seed67_soft0752 · densify Acc 0.253230"
-cache: "runs/palembang/cache_tgt_all_eval_last"
-seed: 67

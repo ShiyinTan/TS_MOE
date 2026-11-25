@@ -1,7 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_last.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_trbias_soft005
-recipe_id: climb_tsb20_bpr020_filter_trbias_soft005
-description: "city-best + trbias_soft005"
-transition_attn: bias
-soft_target_beta: 0.05
-soft_target_prior: revisit

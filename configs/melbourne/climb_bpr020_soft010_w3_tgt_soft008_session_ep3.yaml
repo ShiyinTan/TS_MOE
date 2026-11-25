@@ -1,7 +1,0 @@
-extends: ./climb_bpr020_soft010_tgt_soft008_session_win.yaml
-out: runs/melbourne/climb_bpr020_soft010_w3_tgt_soft008_session_ep3
-recipe_id: climb_bpr020_soft010_w3_tgt_soft008_session_ep3
-description: "melbourne climb · climb_bpr020_soft010_w3_tgt_soft008_session_ep3 · densify Acc 0.155395"
-epochs: 3
-soft_target_beta: 0.08
-session_summary: "on"
