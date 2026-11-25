@@ -42,6 +42,68 @@ from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
 
 
+def _format_hms(seconds: float | None) -> str | None:
+    """Wall-clock ``HH:MM:SS`` (rounded); ``None`` stays ``None``."""
+    if seconds is None:
+        return None
+    s = max(0, int(round(float(seconds))))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{sec:02d}"
+
+
+def _epoch_timing_payload(epoch: int, train_s: float, val_s: float,
+                          test_s: float | None = None) -> dict:
+    """Per-epoch train / validation / test wall times for results history."""
+    parts = [train_s, val_s] + ([] if test_s is None else [test_s])
+    epoch_s = float(sum(parts))
+    return {
+        "epoch": int(epoch),
+        "train_s": round(float(train_s), 3),
+        "validation_s": round(float(val_s), 3),
+        "test_s": None if test_s is None else round(float(test_s), 3),
+        "epoch_s": round(epoch_s, 3),
+        "train_hms": _format_hms(train_s),
+        "validation_hms": _format_hms(val_s),
+        "test_hms": _format_hms(test_s),
+        "epoch_hms": _format_hms(epoch_s),
+    }
+
+
+def _write_epoch_timings(stats_dir: Path, rows: list[dict], *,
+                         final_test: dict | None = None) -> None:
+    """Rewrite ``epoch_timings.json`` / ``.md`` under ``results/<city>/<run>/``."""
+    payload = {
+        "updated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "epochs": rows,
+    }
+    if final_test is not None:
+        payload["final_test"] = final_test
+    dump_json(payload, stats_dir / "epoch_timings.json")
+    lines = [
+        "# Epoch wall times",
+        "",
+        f"Updated (UTC): `{payload['updated_utc']}`",
+        "",
+        "| epoch | train | validation | test | epoch total |",
+        "| ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {row.get('epoch')} | {row.get('train_hms') or row.get('train_s')} | "
+            f"{row.get('validation_hms') or row.get('validation_s')} | "
+            f"{row.get('test_hms') if row.get('test_hms') is not None else (row.get('test_s') if row.get('test_s') is not None else '—')} | "
+            f"{row.get('epoch_hms') or row.get('epoch_s')} |"
+        )
+    if final_test is not None:
+        lines.extend([
+            "",
+            f"Final best-ckpt test: "
+            f"`{final_test.get('test_hms') or final_test.get('test_s')}`",
+        ])
+    (stats_dir / "epoch_timings.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def apply_eval_bias_overrides(model, args):
     """Replace frozen score biases at evaluate-time (locked-bias ε-mix / #38).
 
@@ -2295,6 +2357,7 @@ def train(args):
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     train_end_state = None
     results_history = []
+    epoch_timings: list[dict] = []
     test_eval_dir = resolve_train_eval_dir(out, "test")
     for epoch in epoch_bar:
         check_interrupt()
@@ -2307,6 +2370,7 @@ def train(args):
             steps = list(chronological_indices(data).split(args.batch_size))
         else:
             steps = list(torch.randperm(len(data["end"]), generator=batches).split(args.batch_size))
+        _train_t0 = time.perf_counter()
         for idx in tqdm(steps, desc=f"train ep{epoch}", leave=False, dynamic_ncols=True):
             check_interrupt()
             h, valid, target = device_batch(data, idx, device)
@@ -2424,15 +2488,18 @@ def train(args):
             counts += torch.bincount(result["top"].detach().reshape(-1), minlength=15)
             loss_sum += float(loss.detach()) * len(idx)
             components += torch.stack(parts).double().cpu() * len(idx)
+        train_s = time.perf_counter() - _train_t0
         # Val starts from a clone of tables at end of this training epoch.
         val_tables = online_tables.clone() if cfg.causal_counts else None
         if cfg.causal_counts:
             train_end_state = online_tables.state_dict()
         # Pass category_frequency so val (and saved best) always include groups + Acc@1.
         _eval_pool_kw = eval_pool_shrink_kwargs(args)
+        _val_t0 = time.perf_counter()
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
                            category_frequency, desc=f"val ep{epoch}", count_tables=val_tables,
                            **_eval_pool_kw)
+        val_s = time.perf_counter() - _val_t0
         row = metrics["all_targets"]
         if checkpoint_metric == "acc1":
             score = row["Acc@1"]
@@ -2448,13 +2515,16 @@ def train(args):
             loss=record["loss"],
             validation=primary_metric_snapshot(metrics),
         )
+        test_s = None
         # Optional per-epoch test on *current* weights (not best ckpt); separate table clone.
         if eval_test_every_epoch:
             epoch_test_tables = online_tables.clone() if cfg.causal_counts else None
+            _test_t0 = time.perf_counter()
             epoch_test = evaluate(
                 model, final, test, cache, args.eval_batch_size, args.chunk,
                 category_frequency, desc=f"test ep{epoch}", count_tables=epoch_test_tables,
                 **_eval_pool_kw)
+            test_s = time.perf_counter() - _test_t0
             record["test"] = epoch_test
             results_epoch["test"] = primary_metric_snapshot(epoch_test)
             test_eval_dir.mkdir(parents=True, exist_ok=True)
@@ -2469,6 +2539,7 @@ def train(args):
                 primary_metrics=list(PRIMARY_METRICS),
                 candidate_construction=cache.candidate_construction,
                 candidate_pool_stats=pool_stats.get("test"),
+                timing={"test_s": round(test_s, 3), "test_hms": _format_hms(test_s)},
                 **epoch_test,
             ), epoch_path)
             print(f"Wrote {epoch_path}", flush=True)
@@ -2477,6 +2548,10 @@ def train(args):
                   f"test Acc@1={trow['Acc@1']:.4f} NDCG@1={trow['NDCG@1']:.4f} "
                   f"MRR={trow['MRR']:.4f}  Acc@10={trow['Acc@10']:.4f} "
                   f"NDCG@10={trow['NDCG@10']:.4f}", flush=True)
+        timing = _epoch_timing_payload(epoch, train_s, val_s, test_s)
+        record["timing"] = timing
+        results_epoch["timing"] = timing
+        epoch_timings.append(timing)
         history.append(record)
         results_history.append(results_epoch)
         if score > best:
@@ -2499,15 +2574,21 @@ def train(args):
                    "eval_test_every_epoch": eval_test_every_epoch,
                    "checkpoint_metric": checkpoint_metric,
                    "epochs": results_history}, stats_dir / "history.json")
+        # Live per-epoch wall times under results/<city>/<config>/.
+        _write_epoch_timings(stats_dir, epoch_timings)
         postfix = dict(loss=f"{record['loss']:.5f}", acc1=f"{row['Acc@1']:.4f}",
-                       ndcg10=f"{row['NDCG@10']:.6f}", ckpt=f"{score:.6f}")
+                       ndcg10=f"{row['NDCG@10']:.6f}", ckpt=f"{score:.6f}",
+                       t=_format_hms(timing["epoch_s"]))
         if eval_test_every_epoch and "test" in results_epoch:
             postfix["test_acc1"] = f"{results_epoch['test']['Acc@1']:.4f}"
         epoch_bar.set_postfix(**postfix)
         print(f"epoch={epoch} loss={record['loss']:.5f}  "
               f"val Acc@1={row['Acc@1']:.4f} NDCG@1={row['NDCG@1']:.4f} MRR={row['MRR']:.4f}  "
               f"Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f}  "
-              f"ckpt_score({checkpoint_metric})={score:.6f}", flush=True)
+              f"ckpt_score({checkpoint_metric})={score:.6f}  "
+              f"time train={timing['train_hms']} val={timing['validation_hms']} "
+              f"test={timing['test_hms'] or '—'} total={timing['epoch_hms']}",
+              flush=True)
     if best_metrics is not None:
         best_path = out / "best.pt"
         val_payload = build_eval_payload(args, cache, best_metrics, device,
@@ -2533,17 +2614,31 @@ def train(args):
                 test_tables = replay_train_tables(
                     cache, cfg, data,
                     visit_bin_edges=None if edges is None else torch.tensor(edges))
+        _final_test_t0 = time.perf_counter()
         test_metrics = evaluate(model, final, test, cache, args.eval_batch_size,
                                 args.chunk, category_frequency, desc="eval test",
                                 count_tables=test_tables,
                                 **eval_pool_shrink_kwargs(args))
+        final_test_s = time.perf_counter() - _final_test_t0
+        final_test_timing = {
+            "test_s": round(final_test_s, 3),
+            "test_hms": _format_hms(final_test_s),
+            "selection": selection_tag,
+        }
         test_payload = build_eval_payload(args, cache, test_metrics, device,
                                           checkpoint_path=best_path, checkpoint=checkpoint)
         test_payload["split"] = "test"
         test_payload["selection"] = selection_tag
         test_payload["candidate_pool_stats"] = pool_stats.get("test")
+        test_payload["timing"] = final_test_timing
         print_eval_tables(test_payload)
         save_eval_results(test_payload, resolve_train_eval_dir(out, "test"))
+        _write_epoch_timings(stats_dir, epoch_timings, final_test=final_test_timing)
+        print(
+            f"final test wall={final_test_timing['test_hms']} "
+            f"(wrote {stats_dir / 'epoch_timings.json'})",
+            flush=True,
+        )
         # Auto-append one ablation table row (test metrics; best-val in notes).
         best_val = primary_metric_snapshot(best_metrics)
         notes = (
