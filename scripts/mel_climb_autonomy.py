@@ -30,6 +30,7 @@ STATE_DIR = ROOT / "runs" / "climb_state"
 STATE_PATH = STATE_DIR / "melbourne.json"
 HARVEST_PATH = STATE_DIR / "harvest_latest.json"
 HARVEST_LOG = STATE_DIR / "harvest_log.jsonl"
+LEVER_RANK_PATH = STATE_DIR / "lever_rank.json"
 
 
 def _now() -> str:
@@ -200,39 +201,101 @@ def _fmt_tag_value(v: Any) -> str:
     return str(v).replace(".", "").replace("-", "m")
 
 
+def _refresh_lever_rank() -> dict[str, Any]:
+    """Run historical lever analysis (local, free) and return the report."""
+    from mel_lever_rank import analyze
+
+    return analyze()
+
+
+def _lever_guided_families(policy: dict[str, Any], rank: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Build densify families from lever_rank (drop bans, shrink grids)."""
+    ban = set((rank or {}).get("ban_keys") or policy.get("ban_keys") or [])
+    suggested = dict((rank or {}).get("suggested_values") or {})
+    tag_for = {
+        "lambda_bpr": "bpr",
+        "jump_length_bias": "jump",
+        "pmi_score_bias": "pmi",
+        "soft_target_beta": "soft",
+        "revisit_score_bias": "rev",
+        "geo_score_bias": "geo",
+        "weight_decay": "wd",
+        "epochs": "ep",
+        "transition_attn": "trgate",
+    }
+    families: list[dict[str, Any]] = []
+    # Prefer suggested keep_keys order; else policy densify_families filtered.
+    keep_keys = list((rank or {}).get("keep_keys") or [])
+    if not keep_keys:
+        for fam in policy.get("densify_families") or []:
+            if fam.get("key") not in ban:
+                families.append(fam)
+        return families
+
+    for key in keep_keys:
+        if key in ban:
+            continue
+        if key == "transition_attn":
+            # handled via combos / single gate recipe
+            families.append({"tag": "trgate", "key": key, "values": ["gate"]})
+            continue
+        values = suggested.get(key)
+        if not values:
+            # fall back to policy family values, truncated
+            src = next((f for f in (policy.get("densify_families") or []) if f.get("key") == key), None)
+            values = list((src or {}).get("values") or [])[:5]
+        if not values:
+            continue
+        families.append({"tag": tag_for.get(key, key[:4]), "key": key, "values": values})
+    return families
+
+
 def build_next_wave_recipes(
     policy: dict[str, Any],
     state: dict[str, Any],
     new_wave: str,
+    *,
+    use_lever_rank: bool = True,
 ) -> dict[str, dict]:
-    """Synthesize densify overrides for ``new_wave`` without repeating tried fps."""
+    """Synthesize densify overrides for ``new_wave`` without repeating tried fps.
+
+    When lever history exists, drop dead switches (seed/hop/pop/…) and shrink
+    grids around near-lock levers (soft/bpr/jump/…).
+    """
     tried = set(state.get("tried_fingerprints") or [])
-    # mark current wave fps as tried
     for ov in load_overrides(policy["active_wave"]).values():
         tried.add(fingerprint(ov))
 
+    rank = None
+    if use_lever_rank:
+        try:
+            rank = _refresh_lever_rank()
+            state["lever_rank_at"] = _now()
+            state["lever_ban_keys"] = list(rank.get("ban_keys") or [])
+        except Exception as e:
+            print(f"lever_rank skip: {e!r}", flush=True)
+
     phase = wave_num(new_wave)
-    families = list(policy.get("densify_families") or [])
-    # rotate family order by wave number so grids shift each wave
+    families = _lever_guided_families(policy, rank)
+    # mild rotate among kept families only
     if families:
         rot = phase % len(families)
         families = families[rot:] + families[:rot]
 
     recipes: dict[str, dict] = {}
-    target_n = int(policy.get("wave_size") or 72)
+    target_n = int(policy.get("wave_size") or 32)
+    ban = set((rank or {}).get("ban_keys") or policy.get("ban_keys") or [])
 
     def try_add(tag: str, overrides: dict[str, Any]) -> None:
         if len(recipes) >= target_n:
             return
-        # nudge numeric values slightly by wave phase so grids aren't identical
+        if any(k in ban for k in overrides):
+            return
         ov = deepcopy(overrides)
+        # No random nudge: keep exact grids so history comparisons stay clean.
         for k, v in list(ov.items()):
-            if isinstance(v, float) and k != "seed":
-                # tiny phase nudge ± up to ~1% every 3 waves, clipped later by uniqueness
-                nudge = 1.0 + 0.002 * ((phase % 5) - 2)
-                ov[k] = round(v * nudge, 4)
-            elif isinstance(v, int) and k == "seed":
-                ov[k] = int(v) + ((phase - 17) % 7)  # mild seed drift
+            if isinstance(v, float):
+                ov[k] = round(v, 4)
         fp = fingerprint(ov)
         if fp in tried:
             return
@@ -242,15 +305,18 @@ def build_next_wave_recipes(
         recipes[stem] = ov
         tried.add(fp)
 
-    # single-knob densify
+    # 1) priority combos first (highest ROI)
+    combos = list((rank or {}).get("suggested_combos") or policy.get("combo_recipes") or [])
+    for combo in combos:
+        try_add(combo["tag"], dict(combo.get("overrides") or {}))
+        if len(recipes) >= target_n:
+            break
+
+    # 2) single-knob densify on kept/narrowed families
     for fam in families:
         key = fam["key"]
         tag_pfx = fam["tag"]
         values = list(fam.get("values") or [])
-        # shift value window
-        if values:
-            shift = phase % max(1, len(values))
-            values = values[shift:] + values[:shift]
         for v in values:
             if isinstance(v, float):
                 tag = f"{tag_pfx}{_fmt_tag_value(v)}"
@@ -262,30 +328,84 @@ def build_next_wave_recipes(
         if len(recipes) >= target_n:
             break
 
-    # combo recipes (rotated)
-    combos = list(policy.get("combo_recipes") or [])
-    if combos:
-        shift = phase % len(combos)
-        combos = combos[shift:] + combos[:shift]
-    for combo in combos:
-        try_add(combo["tag"], dict(combo.get("overrides") or {}))
-        if len(recipes) >= target_n:
-            break
-
-    # if still short, add pairwise soft×pmi / bpr×jump fillers
+    # 3) filler: soft × jump / soft × bpr near WIN only
     if len(recipes) < target_n:
-        softs = [0.07, 0.074, 0.08, 0.085, 0.09]
-        pmis = [0.03, 0.04, 0.06, 0.07, 0.08]
-        for i, (s, p) in enumerate(zip(softs, pmis)):
-            try_add(f"soft{_fmt_tag_value(s)}_pmi{_fmt_tag_value(p)}", {
-                "soft_target_beta": s,
-                "pmi_score_bias": p,
-            })
+        softs = (rank or {}).get("suggested_values", {}).get("soft_target_beta") or [
+            0.074, 0.076, 0.08, 0.082, 0.085
+        ]
+        jumps = (rank or {}).get("suggested_values", {}).get("jump_length_bias") or [
+            0.09, 0.1, 0.11, 0.12
+        ]
+        bprs = (rank or {}).get("suggested_values", {}).get("lambda_bpr") or [
+            0.2, 0.202, 0.205, 0.208
+        ]
+        for s in softs:
+            for j in jumps[:3]:
+                try_add(
+                    f"soft{_fmt_tag_value(s)}_jump{_fmt_tag_value(j)}",
+                    {"soft_target_beta": s, "jump_length_bias": j},
+                )
+                if len(recipes) >= target_n:
+                    break
+            if len(recipes) >= target_n:
+                break
+        for s in softs[:4]:
+            for b in bprs[:3]:
+                try_add(
+                    f"soft{_fmt_tag_value(s)}_bpr{_fmt_tag_value(b)}",
+                    {"soft_target_beta": s, "lambda_bpr": b},
+                )
+                if len(recipes) >= target_n:
+                    break
             if len(recipes) >= target_n:
                 break
 
-    state["tried_fingerprints"] = sorted(tried)[-5000:]  # bound growth
+    state["tried_fingerprints"] = sorted(tried)[-5000:]
     return recipes
+
+
+def rebuild_active_wave(*, keep_done: bool = True) -> dict[str, Any]:
+    """Replace the active wave queue with a lever-pruned set (GPU-local).
+
+    Already-finished recipes are kept so metrics are not discarded; pending
+    dead-lever jobs are dropped from the overrides queue so packer stops
+    launching them.
+    """
+    from gen_mel_wave_local import ensure_wave_configs
+
+    state = load_state()
+    policy = effective_policy()
+    wave = policy["active_wave"]
+    old = load_overrides(wave)
+    done_stems = {
+        stem
+        for stem in old
+        if (ROOT / "results" / "melbourne" / stem / "eval_test" / "metrics.json").is_file()
+    }
+
+    # Synthesize as if advancing into this same wave id (fingerprints exclude done).
+    # Temporarily pretend active_wave is previous so tried set still loads old fps.
+    recipes_new = build_next_wave_recipes(policy, state, wave, use_lever_rank=True)
+
+    if keep_done:
+        for stem in done_stems:
+            recipes_new[stem] = old.get(stem) or recipes_new.get(stem) or {}
+
+    save_overrides(wave, recipes_new)
+    save_state(state)
+    n = ensure_wave_configs(wave, "melbourne")
+    pending = [s for s in recipes_new if s not in done_stems]
+    out = {
+        "event": "rebuild_active",
+        "wave": wave,
+        "kept_done": len(done_stems),
+        "new_pending": len(pending),
+        "total": len(recipes_new),
+        "ban_keys": state.get("lever_ban_keys"),
+        "ensured_yamls": n,
+    }
+    write_harvest({**out, **scan_wave_metrics(wave)})
+    return out
 
 
 def draft_local_win(best_tag: str, acc: float, policy: dict[str, Any]) -> Path | None:
@@ -435,8 +555,22 @@ def main() -> None:
     ap.add_argument("--advance", action="store_true", help="Advance wave if complete")
     ap.add_argument("--force-advance", action="store_true", help="Advance even if incomplete")
     ap.add_argument("--ensure", action="store_true", help="Ensure active wave configs exist")
+    ap.add_argument(
+        "--rebuild-active",
+        action="store_true",
+        help="Rebuild active wave from lever_rank (drop dead pending levers)",
+    )
+    ap.add_argument("--rank-levers", action="store_true", help="Refresh lever_rank.json only")
     args = ap.parse_args()
 
+    if args.rank_levers:
+        report = _refresh_lever_rank()
+        print(json.dumps({"ban_keys": report.get("ban_keys"), "keep_keys": report.get("keep_keys"), "n": report.get("n_results")}))
+        return
+    if args.rebuild_active:
+        out = rebuild_active_wave(keep_done=True)
+        print(json.dumps(out, indent=2))
+        return
     if args.ensure:
         wave, q = ensure_active_wave_ready()
         print(json.dumps({"wave": wave, "queue": len(q)}))
