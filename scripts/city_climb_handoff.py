@@ -79,7 +79,6 @@ def finalize_city(city: str) -> dict:
     meta = next((c for c in (order.get("cities") or []) if c.get("city") == city), {}) or {}
     sthgcn = meta.get("sthgcn")
     lock_acc = meta.get("lock_acc")
-    # MEL WIN known at handoff time
     lock_config = None
     if city == "melbourne":
         lock_config = (
@@ -87,6 +86,13 @@ def finalize_city(city: str) -> dict:
         )
         lock_acc = lock_acc or 0.173108
         sthgcn = sthgcn or 0.168
+    elif city == "bandung":
+        sthgcn = sthgcn or 0.219
+        # Prefer local draft WIN if autonomy wrote one
+        drafts = sorted((STATE_DIR).glob("draft_win_bandung_latest.yaml"))
+        if drafts:
+            # finalize uses lock_config name for keep list; wave WIN promote later
+            lock_config = None
     cmd = [PY, str(ROOT / "scripts" / "city_climb_finalize.py"), "--city", city]
     if sthgcn is not None:
         cmd += ["--sthgcn", str(sthgcn)]
