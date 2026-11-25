@@ -1,9 +1,0 @@
-# beijing · climb_s5g20_kd01 — densify around soft005_geo020 / pmisb015 plateau
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_kd01
-recipe_id: climb_s5g20_kd01
-description: "densify lambda_kd=0.1, kd_teacher=runs/beijing/climb_ep2_trbias_soft005_geo020/best.pt, kd_top_k=20, kd_temp=2.0"
-lambda_kd: 0.1
-kd_teacher: runs/beijing/climb_ep2_trbias_soft005_geo020/best.pt
-kd_top_k: 20
-kd_temp: 2.0

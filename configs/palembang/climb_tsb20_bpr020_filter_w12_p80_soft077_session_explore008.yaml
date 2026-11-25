@@ -1,6 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_soft076_session_p80.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w12_p80_soft077_session_explore008
-recipe_id: climb_tsb20_bpr020_filter_w12_p80_soft077_session_explore008
-description: "palembang climb · climb_tsb20_bpr020_filter_w12_p80_soft077_session_explore008"
-soft_target_beta: 0.077
-explore_score_bias: 0.08

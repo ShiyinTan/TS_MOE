@@ -1,9 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w17_kd015
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w17_kd015
-recipe_id: climb_s5g20_all_gauss020_wd005_w17_kd015
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w17_kd015"
-lambda_kd: 0.15
-kd_teacher: "runs/beijing/climb_s5g20_all_gauss020_wd005/best.pt"
-kd_top_k: 20
-kd_temp: 2.0

@@ -1,7 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w27_allf_soft053_tsb19
-recipe_id: climb_s5g20_all_gauss020_wd005_w27_allf_soft053_tsb19
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w27_allf_soft053_tsb19"
-cache: "runs/beijing/cache_all_filter_last"
-soft_target_beta: 0.053
-transition_score_bias: 1.9

@@ -1,5 +1,0 @@
-extends: ./climb_s5g20_all_gauss015.yaml
-out: runs/beijing/climb_s5g20_all_gauss015_soft008
-recipe_id: climb_s5g20_all_gauss015_soft008
-description: "all_gauss015 soft_target_beta=0.08"
-soft_target_beta: 0.08

@@ -1,6 +1,0 @@
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_dim512
-recipe_id: climb_s5g20_dim512
-description: "s5g20 dim=512 heads=8"
-dim: 512
-heads: 8

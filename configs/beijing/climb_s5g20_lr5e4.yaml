@@ -1,5 +1,0 @@
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_lr5e4
-recipe_id: climb_s5g20_lr5e4
-description: "s5g20 lr=5e-4"
-lr: 0.0005

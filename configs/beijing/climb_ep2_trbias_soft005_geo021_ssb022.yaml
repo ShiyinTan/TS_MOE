@@ -1,9 +1,0 @@
-# beijing · climb_ep2_trbias_soft005_geo021_ssb022 — wave4 around soft005_geo020 0.420455
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_ep2_trbias_soft005_geo021_ssb022
-recipe_id: climb_ep2_trbias_soft005_geo021_ssb022
-description: "wave4 soft_target_beta=0.05, soft_target_prior=revisit, geo_score_bias=0.21, surd_score_bias=0.22"
-soft_target_beta: 0.05
-soft_target_prior: "revisit"
-geo_score_bias: 0.21
-surd_score_bias: 0.22

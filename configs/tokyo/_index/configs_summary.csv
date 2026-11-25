@@ -1,0 +1,4 @@
+file,recipe_id,extends,cache,out,description,seed,epochs,soft_target_beta,lambda_bpr,jump_length_bias,pmi_score_bias,pop_score_bias,geo_score_bias,gauss_geo_bias,weight_decay,wave,bytes
+base.yaml,,../recipes/base.yaml,runs/tokyo/cache_abl_tgt_last,runs/tokyo/base,,,,,,,,,,,,,168
+peak.yaml,,../recipes/peak.yaml,runs/tokyo/cache_abl_tgt_last,runs/tokyo/on_rev_soft10r,,,,,,,,,,,,,178
+win.yaml,,../recipes/win.yaml,runs/tokyo/cache_abl_tgt_last,runs/tokyo/hc_sg_Atime_bpr029_ssb026,,,,,,,,,,,,,187

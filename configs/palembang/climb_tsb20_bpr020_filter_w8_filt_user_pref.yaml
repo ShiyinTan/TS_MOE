@@ -1,6 +1,0 @@
-# palembang · climb_tsb20_bpr020_filter_w8_filt_user_pref
-extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w8_filt_user_pref
-recipe_id: climb_tsb20_bpr020_filter_w8_filt_user_pref
-description: "palembang climb · climb_tsb20_bpr020_filter_w8_filt_user_pref"
-user_pref: "on"

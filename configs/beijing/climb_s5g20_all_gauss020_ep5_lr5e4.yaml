@@ -1,6 +1,0 @@
-extends: ./climb_s5g20_all_gauss020.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_ep5_lr5e4
-recipe_id: climb_s5g20_all_gauss020_ep5_lr5e4
-description: "gauss020 train hyper fine"
-epochs: 5
-lr: 0.0005

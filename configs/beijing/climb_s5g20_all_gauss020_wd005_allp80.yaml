@@ -1,5 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-cache: runs/beijing/cache_all_p80
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_allp80
-recipe_id: climb_s5g20_all_gauss020_wd005_allp80
-description: "WIN stack on allp80 cache"

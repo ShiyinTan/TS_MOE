@@ -1,9 +1,0 @@
-# beijing · climb_ep5_trbias_soft005_geo020 — wave4 around soft005_geo020 0.420455
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_ep5_trbias_soft005_geo020
-recipe_id: climb_ep5_trbias_soft005_geo020
-description: "wave4 epochs=5, soft_target_beta=0.05, soft_target_prior=revisit, geo_score_bias=0.2"
-epochs: 5
-soft_target_beta: 0.05
-soft_target_prior: "revisit"
-geo_score_bias: 0.2

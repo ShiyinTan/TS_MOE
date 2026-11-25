@@ -1,5 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_last.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_tsb18
-recipe_id: climb_tsb20_bpr020_filter_tsb18
-description: "city-best + transition_score_bias=1.8"
-transition_score_bias: 1.8

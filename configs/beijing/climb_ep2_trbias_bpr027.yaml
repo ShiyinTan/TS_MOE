@@ -1,6 +1,0 @@
-# beijing · climb_ep2_trbias_bpr027 — wave2 Acc climb around ep2_trbias plateau 0.4091
-extends: ./climb_ep2_trbias.yaml
-out: runs/beijing/climb_ep2_trbias_bpr027
-recipe_id: climb_ep2_trbias_bpr027
-description: "wave2 lambda_bpr=0.27"
-lambda_bpr: 0.27

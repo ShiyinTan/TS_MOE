@@ -1,7 +1,0 @@
-# beijing · climb_ep2_trbias_soft013 — wave2 Acc climb around ep2_trbias plateau 0.4091
-extends: ./climb_ep2_trbias.yaml
-out: runs/beijing/climb_ep2_trbias_soft013
-recipe_id: climb_ep2_trbias_soft013
-description: "wave2 soft_target_beta=0.13, soft_target_prior=revisit"
-soft_target_beta: 0.13
-soft_target_prior: "revisit"

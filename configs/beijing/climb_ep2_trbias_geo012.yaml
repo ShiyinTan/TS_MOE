@@ -1,6 +1,0 @@
-# beijing · climb_ep2_trbias_geo012 — wave2 Acc climb around ep2_trbias plateau 0.4091
-extends: ./climb_ep2_trbias.yaml
-out: runs/beijing/climb_ep2_trbias_geo012
-recipe_id: climb_ep2_trbias_geo012
-description: "wave2 geo_score_bias=0.12"
-geo_score_bias: 0.12

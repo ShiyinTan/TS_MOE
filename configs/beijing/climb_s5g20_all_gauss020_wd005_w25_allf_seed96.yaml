@@ -1,6 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w25_allf_seed96
-recipe_id: climb_s5g20_all_gauss020_wd005_w25_allf_seed96
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w25_allf_seed96"
-cache: "runs/beijing/cache_all_filter_last"
-seed: 96

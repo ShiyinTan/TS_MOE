@@ -1,6 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w18_tsb_gate_mul
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w18_tsb_gate_mul
-recipe_id: climb_s5g20_all_gauss020_wd005_w18_tsb_gate_mul
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w18_tsb_gate_mul"
-tsb_gate_mode: "mul"

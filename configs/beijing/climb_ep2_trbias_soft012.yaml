@@ -1,6 +1,0 @@
-extends: ./climb_ep2_trbias.yaml
-out: runs/beijing/climb_ep2_trbias_soft012
-recipe_id: climb_ep2_trbias_soft012
-description: "ep2_trbias + soft β=0.12"
-soft_target_beta: 0.12
-soft_target_prior: revisit

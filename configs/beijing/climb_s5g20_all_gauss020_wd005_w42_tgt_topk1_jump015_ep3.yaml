@@ -1,9 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w42_tgt_topk1_jump015_ep3
-recipe_id: climb_s5g20_all_gauss020_wd005_w42_tgt_topk1_jump015_ep3
-description: "beijing climb · climb_s5g20_all_gauss020_wd005_w42_tgt_topk1_jump015_ep3 · wall densify w42 NEW family"
-cache: "runs/beijing/cache_tgt_all_eval_last"
-top_k: 1
-jump_length_bias: 0.15
-jump_dist: "lognormal"
-epochs: 3

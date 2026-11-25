@@ -1,6 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_soft076_session_seed55.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w14_filt_seed55_soft074
-recipe_id: climb_tsb20_bpr020_filter_w14_filt_seed55_soft074
-description: "palembang climb · climb_tsb20_bpr020_filter_w14_filt_seed55_soft074 · continue past +0.002"
-cache: "runs/palembang/cache_filter_last"
-soft_target_beta: 0.074

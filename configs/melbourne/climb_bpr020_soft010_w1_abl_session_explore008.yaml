@@ -1,6 +1,0 @@
-extends: ./climb_bpr020_soft010.yaml
-out: runs/melbourne/climb_bpr020_soft010_w1_abl_session_explore008
-recipe_id: climb_bpr020_soft010_w1_abl_session_explore008
-description: "melbourne climb · climb_bpr020_soft010_w1_abl_session_explore008"
-session_summary: "on"
-explore_score_bias: 0.08

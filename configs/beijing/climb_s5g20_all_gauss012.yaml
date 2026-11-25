@@ -1,8 +1,0 @@
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-cache: runs/beijing/cache_tgt_all_eval_last
-out: runs/beijing/climb_s5g20_all_gauss012
-recipe_id: climb_s5g20_all_gauss012
-description: "s5g20 gauss0.12 on tgt_all_eval_last (geo off)"
-geo_score_bias: 0.0
-gauss_geo_bias: 0.12
-gauss_sigma_km: 0.5

@@ -1,7 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w14_seed56_explore
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w14_seed56_explore
-recipe_id: climb_s5g20_all_gauss020_wd005_w14_seed56_explore
-description: "beijing climb · w14_seed56_explore"
-seed: 56
-explore_score_bias: 0.1

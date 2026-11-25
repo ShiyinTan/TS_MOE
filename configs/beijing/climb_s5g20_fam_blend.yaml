@@ -1,9 +1,0 @@
-# beijing · familiar-area blend (explore vs return)
-extends: ./climb_ep2_trbias_soft005_geo020.yaml
-out: runs/beijing/climb_s5g20_fam_blend
-recipe_id: climb_s5g20_fam_blend
-description: "s5g20 + fam_area_blend on (geo kept)"
-fam_area_blend: "on"
-fam_radius_km: 0.5
-fam_explore_bias: 0.10
-fam_return_bias: 0.05

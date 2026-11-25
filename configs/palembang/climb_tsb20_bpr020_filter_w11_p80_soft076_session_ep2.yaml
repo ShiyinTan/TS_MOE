@@ -1,5 +1,0 @@
-extends: ./climb_tsb20_bpr020_filter_soft076_session_p80.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w11_p80_soft076_session_ep2
-recipe_id: climb_tsb20_bpr020_filter_w11_p80_soft076_session_ep2
-description: "palembang climb · climb_tsb20_bpr020_filter_w11_p80_soft076_session_ep2"
-epochs: 2

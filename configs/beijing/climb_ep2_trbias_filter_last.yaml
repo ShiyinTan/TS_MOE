@@ -1,6 +1,0 @@
-# beijing · climb_ep2_trbias_filter_last — alt-cache follow-up of city best
-extends: ./climb_ep2_trbias.yaml
-cache: runs/beijing/cache_filter_last
-out: runs/beijing/climb_ep2_trbias_filter_last
-recipe_id: climb_ep2_trbias_filter_last
-description: "ep2_trbias on cache_filter_last"

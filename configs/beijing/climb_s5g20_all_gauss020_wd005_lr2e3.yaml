@@ -1,5 +1,0 @@
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_lr2e3
-recipe_id: climb_s5g20_all_gauss020_wd005_lr2e3
-description: "WIN + lr2e3"
-lr: 0.002

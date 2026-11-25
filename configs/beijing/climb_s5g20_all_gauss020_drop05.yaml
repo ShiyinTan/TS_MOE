@@ -1,5 +1,0 @@
-extends: ./climb_s5g20_all_gauss020.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_drop05
-recipe_id: climb_s5g20_all_gauss020_drop05
-description: "gauss020 train hyper fine"
-dropout: 0.05

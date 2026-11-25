@@ -1,8 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w10_focal1
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w10_focal1
-recipe_id: climb_s5g20_all_gauss020_wd005_w10_focal1
-description: "beijing climb · w10_focal1"
-ce_focal_gamma: 1.0
-soft_target_beta: 0.0
-soft_target_prior: "off"

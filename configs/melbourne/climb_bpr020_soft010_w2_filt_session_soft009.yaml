@@ -1,6 +1,0 @@
-extends: ./climb_bpr020_soft010_filt_win.yaml
-out: runs/melbourne/climb_bpr020_soft010_w2_filt_session_soft009
-recipe_id: climb_bpr020_soft010_w2_filt_session_soft009
-description: "melbourne climb · climb_bpr020_soft010_w2_filt_session_soft009"
-session_summary: "on"
-soft_target_beta: 0.09

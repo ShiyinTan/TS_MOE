@@ -1,6 +1,0 @@
-# beijing · climb_s5g20_all_gauss020_wd005_w14_lambda_prior02
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd005_w14_lambda_prior02
-recipe_id: climb_s5g20_all_gauss020_wd005_w14_lambda_prior02
-description: "beijing climb · w14_lambda_prior02"
-lambda_prior: 0.2

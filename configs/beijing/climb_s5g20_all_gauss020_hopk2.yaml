@@ -1,6 +1,0 @@
-extends: ./climb_s5g20_all_gauss020.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_hopk2
-recipe_id: climb_s5g20_all_gauss020_hopk2
-description: "gauss020 + overlay"
-tsb_history_k: 2
-tsb_history_decay: 0.5

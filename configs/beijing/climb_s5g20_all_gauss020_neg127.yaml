@@ -1,5 +1,0 @@
-extends: ./climb_s5g20_all_gauss020.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_neg127
-recipe_id: climb_s5g20_all_gauss020_neg127
-description: "gauss020 train hyper fine"
-negatives: 127

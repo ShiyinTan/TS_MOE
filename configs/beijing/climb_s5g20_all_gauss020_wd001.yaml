@@ -1,6 +1,0 @@
-# beijing wave7 · post-WIN around wd005
-extends: ./climb_s5g20_all_gauss020_wd005.yaml
-out: runs/beijing/climb_s5g20_all_gauss020_wd001
-recipe_id: climb_s5g20_all_gauss020_wd001
-description: "WIN stack weight_decay=0.001"
-weight_decay: 0.001

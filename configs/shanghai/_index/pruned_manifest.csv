@@ -1,0 +1,8 @@
+pruned_at,file,recipe_id,extends,cache,out,description,seed,epochs,soft_target_beta,lambda_bpr,jump_length_bias,pmi_score_bias,pop_score_bias,geo_score_bias,gauss_geo_bias,weight_decay,wave,bytes
+2026-11-25T10:49:15Z,climb_rev010.yaml,climb_rev010,../recipes/win.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/climb_rev010,,,,,,,,,,,,,228
+2026-11-25T10:49:15Z,climb_soft010.yaml,climb_soft010,../recipes/win.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/climb_soft010,,,,0.1,,,,,,,,,258
+2026-11-25T10:49:15Z,climb_soft010_rev010.yaml,climb_soft010_rev010,../recipes/win.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/climb_soft010_rev010,,,,0.1,,,,,,,,,304
+2026-11-25T10:49:15Z,climb_win_all_eval_last.yaml,climb_win_all_eval_last,../recipes/win.yaml,runs/shanghai/cache_tgt_all_eval_last,runs/shanghai/climb_win_all_eval_last,"WIN on cache_tgt_all_eval_last (train all, eval last)",,,,,,,,,,,,285
+2026-11-25T10:49:15Z,climb_win_filter_last.yaml,climb_win_filter_last,../recipes/win.yaml,runs/shanghai/cache_filter_last,runs/shanghai/climb_win_filter_last,WIN on cache_filter_last (last/last + filter-unknown on),,,,,,,,,,,,304
+2026-11-25T10:49:15Z,climb_win_geo010.yaml,climb_win_geo010,../recipes/win.yaml,runs/shanghai/cache_abl_tgt_last,runs/shanghai/climb_win_geo010,WIN + geo-score-bias 0.10 (Shanghai beat STHGCN),,,,,,,,0.1,,,,482
+2026-11-25T10:49:15Z,climb_win_geo010_filter_last.yaml,climb_win_geo010_filter_last,climb_win_geo010.yaml,runs/shanghai/cache_filter_last,runs/shanghai/climb_win_geo010_filter_last,WIN + geo 0.10 on cache_filter_last,,,,,,,,,,,,264

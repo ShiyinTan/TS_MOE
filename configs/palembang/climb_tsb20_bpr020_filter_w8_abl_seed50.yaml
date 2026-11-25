@@ -1,7 +1,0 @@
-# palembang · climb_tsb20_bpr020_filter_w8_abl_seed50
-extends: ./climb_tsb20_bpr020_filter_soft008_tsb18.yaml
-out: runs/palembang/climb_tsb20_bpr020_filter_w8_abl_seed50
-recipe_id: climb_tsb20_bpr020_filter_w8_abl_seed50
-description: "palembang climb · climb_tsb20_bpr020_filter_w8_abl_seed50"
-cache: "runs/palembang/cache_abl_tgt_last"
-seed: 50
