@@ -1,10 +1,12 @@
 """Per-GPU launch caps for multi-city climb packers.
 
-Rules (prefs 2026-11-25; raised 2026-11-25 evening):
+Rules (prefs 2026-11-25; raised 2026-11-25 evening; large-city 2026-11-26):
 - Default: up to ``TSMOE_MAX_PER_GPU`` (default **4**) of *our* ``tsmoe`` jobs per GPU
   when the GPU is free of foreign users (ignore ``dl-box``).
 - If another user (e.g. camob) is on that GPU, cap is
   ``TSMOE_MAX_PER_GPU_SHARED`` (default **3**).
+- Bandung-or-larger datasets: ``TSMOE_MAX_PER_GPU_LARGE`` (default **2**) per GPU
+  (see ``LARGE_CITIES``).
 - Caps only gate **new** launches. Never kill running jobs (ours or foreign).
 - Also gate on host RAM, per-GPU free VRAM, and disk — these matter more than the
   integer cap when cards have large VRAM headroom.
@@ -31,10 +33,30 @@ IGNORE_FOREIGN_USERS = {
 # Prefs: pack more when GPUs are free; VRAM/RAM/disk gates still apply.
 MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "4"))
 MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "3"))
+# Bandung-or-larger Massive-STEPS cities (raw data/ CSV ≥ Bandung ≈57MB): tighter
+# per-GPU cap to avoid host RAM / VRAM pressure. Override with TSMOE_MAX_PER_GPU_LARGE.
+MAX_OUR_PER_GPU_LARGE = int(os.environ.get("TSMOE_MAX_PER_GPU_LARGE", "2"))
+LARGE_CITIES = {
+    # ≥ Bandung by data/ CSV footprint on the GPU box (2026-11-26).
+    "bandung",
+    "kuwait_city",
+    "sao_paulo",
+    "new_york",
+    "jakarta",
+    "petaling_jaya",
+    "istanbul",
+}
 # Leave headroom so a new train does not OOM the host / GPU.
 MIN_HOST_RAM_GIB = float(os.environ.get("TSMOE_MIN_HOST_RAM_GIB", "24"))
 MIN_FREE_VRAM_MIB = int(os.environ.get("TSMOE_MIN_FREE_MIB", "5000"))
 MIN_DISK_FREE_GIB = float(os.environ.get("TSMOE_MIN_DISK_FREE_GIB", "8"))
+
+
+def max_our_per_gpu(city: str, *, shared: bool = False) -> int:
+    """Per-GPU our-job launch cap for ``city`` (never kills already-running jobs)."""
+    if city in LARGE_CITIES:
+        return max(1, MAX_OUR_PER_GPU_LARGE)
+    return MAX_OUR_PER_GPU_SHARED if shared else MAX_OUR_PER_GPU_FREE
 
 
 def proc_user(pid: int) -> str | None:
@@ -103,9 +125,7 @@ def scan_gpus(city: str):
 
     limits: dict[int, int] = {}
     for g in range(4):
-        limits[g] = (
-            MAX_OUR_PER_GPU_SHARED if foreign[g] else MAX_OUR_PER_GPU_FREE
-        )
+        limits[g] = max_our_per_gpu(city, shared=bool(foreign[g]))
     return by_all, by_city, live, limits, dict(foreign)
 
 

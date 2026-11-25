@@ -13,13 +13,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from gpu_pack_limits import (  # noqa: E402
-    MAX_OUR_PER_GPU_FREE,
-    MAX_OUR_PER_GPU_SHARED,
     MIN_FREE_VRAM_MIB,
     city_cap,
     disk_ok,
     gpu_free_mib,
     host_ram_ok,
+    max_our_per_gpu,
     peer_climb_packers_alive,
     resource_snapshot,
     scan_gpus,
@@ -45,6 +44,8 @@ STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 PACK_LOCK = PIDDIR / "packer_launch.lock"
+# Bandung is a LARGE_CITY → default 2/GPU (see gpu_pack_limits.LARGE_CITIES).
+CITY_GPU_CAP = max_our_per_gpu(CITY, shared=False)
 
 
 def ensure_active_wave_ready() -> tuple[str, list[str]]:
@@ -148,7 +149,7 @@ def main() -> None:
     pol = effective_policy(CITY)
     print(
         f"{CITY} climb packer wave={wave} queue={len(queue)} "
-        f"max_free={MAX_OUR_PER_GPU_FREE} target={pol['target_acc']} sthgcn={pol['sthgcn']} | "
+        f"max_per_gpu={CITY_GPU_CAP} (large-city) target={pol['target_acc']} sthgcn={pol['sthgcn']} | "
         f"{resource_snapshot(ROOT / 'runs')}",
         flush=True,
     )
@@ -180,7 +181,7 @@ def main() -> None:
         pending: list[str] = []
         by_all = {g: 0 for g in range(4)}
         by_city = {g: 0 for g in range(4)}
-        limits = {g: MAX_OUR_PER_GPU_FREE for g in range(4)}
+        limits = {g: CITY_GPU_CAP for g in range(4)}
         foreign = {g: False for g in range(4)}
         free = {g: 0 for g in range(4)}
         live: set[str] = set()
@@ -196,7 +197,7 @@ def main() -> None:
                 ]
                 order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
                 for g in order:
-                    lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
+                    lim = limits.get(g, CITY_GPU_CAP)
                     other = by_all[g] - by_city[g]
                     peers = peer_climb_packers_alive(CITY)
                     ccap = city_cap(lim, other_city_on_gpu=other, peer_packers=peers)
@@ -263,7 +264,7 @@ def main() -> None:
                     print(f"autonomy error: {e!r}", flush=True)
                 time.sleep(10)
                 continue
-            under = any(by_all[g] < limits.get(g, MAX_OUR_PER_GPU_FREE) for g in range(4))
+            under = any(by_all[g] < limits.get(g, CITY_GPU_CAP) for g in range(4))
             if under:
                 print(
                     f"{CITY} wave {wave} draining (still={len(still)}) with free GPU — prefetch",
