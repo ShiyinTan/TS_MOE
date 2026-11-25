@@ -228,17 +228,9 @@ def register_keeps(
     if lock_config:
         tags.add(Path(lock_config).stem)
     c["keep_results"] = sorted(tags)
-    # keep prefixes for waves that appear in keep tags
-    prefs = set(c.get("keep_results_prefixes") or [])
-    for tag in keep_tags:
-        if "_w" in tag:
-            # e.g. climb_..._w21_... → keep prefix up to w21_
-            parts = tag.split("_")
-            for i, p in enumerate(parts):
-                if p.startswith("w") and p[1:].isdigit():
-                    prefs.add("_".join(parts[: i + 1]) + "_")
-                    break
-    c["keep_results_prefixes"] = sorted(prefs)
+    # Exact tags only — do NOT widen to whole-wave prefixes (would keep
+    # every densify sibling). Dead densify may still be pruned later.
+    c["keep_results_prefixes"] = []
     if lock_acc is not None:
         c["lock_acc"] = float(lock_acc)
     c["status"] = status
