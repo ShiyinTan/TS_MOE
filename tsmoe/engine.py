@@ -35,8 +35,9 @@ from .model import (
 from .prepare import digest_json, dump_json, verify_files
 from .resource_monitor import ResourceMonitor
 from .city_scale import (
-    apply_large_city_fast, eval_pool_shrink_kwargs, resolve_city_name,
-    val_pool_shrink_kwargs,
+    apply_large_city_fast, checkpoint_on_climb_pb_enabled, climb_lock_acc,
+    eval_pool_shrink_kwargs, extract_known_acc1, is_climb_breakthrough,
+    resolve_city_name, val_pool_shrink_kwargs,
 )
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
@@ -2149,6 +2150,16 @@ def train(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     best, history, best_metrics = -math.inf, [], None
+    best_payload = None
+    climb_pb_only = checkpoint_on_climb_pb_enabled(args)
+    _climb_city = resolve_city_name(args, cache)
+    _climb_lock = climb_lock_acc(_climb_city) if climb_pb_only else None
+    if climb_pb_only:
+        print(
+            f"checkpoint_on_climb_pb=on city={_climb_city} lock_acc={_climb_lock} "
+            "(best.pt only if test Acc@1 beats lock)",
+            flush=True,
+        )
     settings = {key: value for key, value in vars(args).items() if isinstance(value, (str, float, int, bool))}
     settings["candidate_radius"] = cache.cfg.get("candidate_radius", "full")
     settings["candidate_radius_km"] = cache.radius_km
@@ -2158,6 +2169,9 @@ def train(args):
     settings["causal_counts"] = cfg.causal_counts
     settings["transition_attn"] = cfg.transition_attn
     settings["large_city_fast"] = getattr(args, "large_city_fast", "off")
+    settings["checkpoint_on_climb_pb"] = "on" if climb_pb_only else "off"
+    if _climb_lock is not None:
+        settings["climb_lock_acc"] = float(_climb_lock)
     settings["candidate_spatial_prior"] = getattr(args, "candidate_spatial_prior", "off")
     settings["candidate_prior_top_m"] = int(getattr(args, "candidate_prior_top_m", 0) or 0)
     settings["eval_pool_shrink"] = bool(eval_pool_shrink_kwargs(args))
@@ -2566,7 +2580,10 @@ def train(args):
             if train_end_state is not None:
                 payload["count_tables"] = train_end_state
                 payload["visit_bin_edges"] = visit_bin_edges.tolist()
-            save_checkpoint(payload, out / "best.pt")
+            best_payload = payload
+            # Climb mode: defer disk write until test Acc beats lock_acc.
+            if not climb_pb_only:
+                save_checkpoint(payload, out / "best.pt")
         dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
                    "epochs": history}, out / "history.json")
         # Compact per-epoch val (+ optional test) history under results/.
@@ -2589,17 +2606,21 @@ def train(args):
               f"time train={timing['train_hms']} val={timing['validation_hms']} "
               f"test={timing['test_hms'] or '—'} total={timing['epoch_hms']}",
               flush=True)
-    if best_metrics is not None:
+    if best_metrics is not None and best_payload is not None:
         best_path = out / "best.pt"
+        # Prefer in-memory best (climb-pb mode may not have written best.pt yet).
+        checkpoint = best_payload
+        if (not climb_pb_only) and best_path.is_file():
+            checkpoint = load_file(best_path)
         val_payload = build_eval_payload(args, cache, best_metrics, device,
-                                         checkpoint_path=best_path)
+                                         checkpoint_path=best_path if best_path.is_file() else None,
+                                         checkpoint=checkpoint)
         val_payload["split"] = "validation"
         val_payload["selection"] = selection_tag
         val_payload["candidate_pool_stats"] = pool_stats.get("validation")
         print_eval_tables(val_payload)
         save_eval_results(val_payload, resolve_train_eval_dir(out, "validation"))
         # Final test once on the selected checkpoint (not the last-epoch weights).
-        checkpoint = load_file(best_path)
         model.load_state_dict(checkpoint["weights"])
         model.eval()
         test_tables = None
@@ -2625,17 +2646,56 @@ def train(args):
             "test_hms": _format_hms(final_test_s),
             "selection": selection_tag,
         }
-        test_payload = build_eval_payload(args, cache, test_metrics, device,
-                                          checkpoint_path=best_path, checkpoint=checkpoint)
+        test_acc = extract_known_acc1(test_metrics)
+        ckpt_saved = False
+        if climb_pb_only:
+            # Re-read lock in case another run lifted it mid-wave.
+            lock_now = climb_lock_acc(_climb_city)
+            if lock_now is None:
+                lock_now = _climb_lock
+            lifted = is_climb_breakthrough(test_acc, lock_now)
+            if lifted:
+                save_checkpoint(checkpoint, best_path)
+                ckpt_saved = True
+                print(
+                    f"climb breakthrough Acc@1={test_acc:.6f} > lock={lock_now} "
+                    f"→ saved {best_path}",
+                    flush=True,
+                )
+            else:
+                if best_path.is_file():
+                    try:
+                        best_path.unlink()
+                    except OSError:
+                        pass
+                print(
+                    f"climb no-lift Acc@1={test_acc} lock={lock_now} "
+                    "→ skip best.pt (metrics kept)",
+                    flush=True,
+                )
+        else:
+            if not best_path.is_file():
+                save_checkpoint(checkpoint, best_path)
+            ckpt_saved = best_path.is_file()
+        test_payload = build_eval_payload(
+            args, cache, test_metrics, device,
+            checkpoint_path=best_path if ckpt_saved else None,
+            checkpoint=checkpoint)
         test_payload["split"] = "test"
         test_payload["selection"] = selection_tag
         test_payload["candidate_pool_stats"] = pool_stats.get("test")
         test_payload["timing"] = final_test_timing
+        test_payload["checkpoint_saved"] = ckpt_saved
+        if climb_pb_only:
+            test_payload["climb_lock_acc"] = lock_now if climb_pb_only else None
+            test_payload["climb_breakthrough"] = bool(
+                climb_pb_only and is_climb_breakthrough(test_acc, lock_now))
         print_eval_tables(test_payload)
         save_eval_results(test_payload, resolve_train_eval_dir(out, "test"))
         _write_epoch_timings(stats_dir, epoch_timings, final_test=final_test_timing)
         print(
             f"final test wall={final_test_timing['test_hms']} "
+            f"checkpoint_saved={ckpt_saved} "
             f"(wrote {stats_dir / 'epoch_timings.json'})",
             flush=True,
         )

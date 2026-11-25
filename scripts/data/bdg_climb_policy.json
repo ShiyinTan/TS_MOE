@@ -32,7 +32,8 @@
     "jump_length_bias": 0.1,
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
-    "large_city_fast": "on"
+    "large_city_fast": "on",
+    "checkpoint_on_climb_pb": "on"
   },
   "densify_families": [
     {"tag": "soft", "key": "soft_target_beta", "values": [0.08, 0.085, 0.09, 0.095, 0.1, 0.105, 0.11, 0.12, 0.13]},

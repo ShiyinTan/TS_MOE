@@ -173,3 +173,79 @@ def eval_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
 
 # Back-compat alias.
 val_pool_shrink_kwargs = eval_pool_shrink_kwargs
+
+
+def checkpoint_on_climb_pb_enabled(args: Any) -> bool:
+    raw = getattr(args, "checkpoint_on_climb_pb", "off")
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "off").lower() in ("on", "true", "1", "yes")
+
+
+def _read_json(path) -> dict[str, Any] | None:
+    from pathlib import Path
+
+    p = Path(path)
+    if not p.is_file():
+        return None
+    try:
+        import json
+
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def climb_lock_acc(city: str | None, *, root: str | None = None) -> float | None:
+    """Climb Acc bar a run must beat to keep ``best.pt`` (state lock, else policy)."""
+    if not city:
+        return None
+    from pathlib import Path
+
+    base = Path(root) if root else Path.cwd()
+    city = str(city).strip().lower()
+    state = _read_json(base / "runs" / "climb_state" / f"{city}.json") or {}
+    for key in ("lock_acc", "best_acc"):
+        if state.get(key) is not None:
+            try:
+                return float(state[key])
+            except (TypeError, ValueError):
+                pass
+    # Policy fallbacks: scripts/data/<city>_climb_policy.json or bdg/mel aliases.
+    candidates = [
+        base / "scripts" / "data" / f"{city}_climb_policy.json",
+        base / "scripts" / "data" / "bdg_climb_policy.json" if city == "bandung" else None,
+        base / "scripts" / "data" / "mel_climb_policy.json" if city == "melbourne" else None,
+    ]
+    for path in candidates:
+        if path is None:
+            continue
+        pol = _read_json(path) or {}
+        if pol.get("lock_acc") is not None:
+            try:
+                return float(pol["lock_acc"])
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def is_climb_breakthrough(acc: float | None, lock: float | None) -> bool:
+    """True when Acc@1 is a real lift over the climb lock (6 decimal places)."""
+    if acc is None or lock is None:
+        return False
+    return round(float(acc), 6) > round(float(lock), 6)
+
+
+def extract_known_acc1(metrics: Mapping[str, Any] | None) -> float | None:
+    """Prefer ``known_only.Acc@1``, else ``all_targets.Acc@1``."""
+    if not isinstance(metrics, Mapping):
+        return None
+    for key in ("known_only", "all_targets"):
+        block = metrics.get(key)
+        if isinstance(block, Mapping) and block.get("Acc@1") is not None:
+            try:
+                return float(block["Acc@1"])
+            except (TypeError, ValueError):
+                continue
+    return None

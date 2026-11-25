@@ -27,6 +27,7 @@ DEFAULT_BASE = {
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
     "large_city_fast": "on",
+    "checkpoint_on_climb_pb": "on",
 }
 
 
@@ -90,6 +91,7 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "weight_decay",
         "epochs",
         "large_city_fast",
+        "checkpoint_on_climb_pb",
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")
