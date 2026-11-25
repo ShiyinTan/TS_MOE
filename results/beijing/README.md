@@ -2,16 +2,15 @@
 
 | File | Content |
 | --- | --- |
-| [`climb_path.md`](climb_path.md) | Locked Acc@1 climb ladder |
-| [`settings_summary.md`](settings_summary.md) / [`.csv`](settings_summary.csv) | Per-setting known_only summary (keep) |
-| [`mean_std.md`](mean_std.md) / [`.csv`](mean_std.csv) | Multi-run mean±std (keep) |
-
-**Retention:** after a city is STOPPED/locked, keep these summary files + WIN eval dirs; individual non-WIN config result folders may be deleted to save disk. Do **not** delete summary/stat files.
+| [`climb_path.md`](climb_path.md) | Acc@1 提升路径（表格） |
+| [`settings_summary.md`](settings_summary.md) / [`.csv`](settings_summary.csv) | 各设定 known_only 结果 |
+| [`mean_std.md`](mean_std.md) / [`.csv`](mean_std.csv) | 同设定多次运行的 mean±std |
 
 **Protocol:** known_only Acc@1 · eval_test · seed 42 · hard_prior  
-**STHGCN:** 0.453 · **Locked WIN Acc@1:** **0.465909**
+**STHGCN:** 0.453 · **runs with metrics:** 0  
+**Best:** —
 
-Regenerate summaries (needs run dirs present):
+Regenerate:
 
 ```bash
 python scripts/city_results_bundle.py --city beijing --sthgcn 0.453
