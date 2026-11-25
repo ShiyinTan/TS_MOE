@@ -8,6 +8,8 @@ session_summary: on
 # Speed: shrink WIN structure + val/test pool C (mix top-M=512: geo/pop/user/
 # hist/hour; GT always included) on Bandung-or-larger (see tsmoe/city_scale.py).
 large_city_fast: on
+# Disk: only persist best.pt when test Acc@1 beats climb lock_acc.
+checkpoint_on_climb_pb: on
 eval_test_every_epoch: false
 batch_size: 48
 eval_batch_size: 32

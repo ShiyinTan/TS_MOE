@@ -437,6 +437,11 @@ def main(argv=None):
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
     t.add_argument(
+        "--checkpoint-on-climb-pb", choices=ON_OFF, default="off",
+        help="when on: keep best weights in memory for final test, but only write "
+             "best.pt if known_only Acc@1 beats the city climb lock_acc "
+             "(breakthrough). Non-lift runs still write metrics/history")
+    t.add_argument(
         "--user-pref", choices=ON_OFF, default="off",
         help="causal user–cat / user–hour preference MLP into base/context "
              "(default off; requires causal counts; never hard_prior)")
