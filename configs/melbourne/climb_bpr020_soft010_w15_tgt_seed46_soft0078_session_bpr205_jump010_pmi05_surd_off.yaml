@@ -15,3 +15,6 @@ jump_length_bias: 0.1
 jump_dist: "lognormal"
 pmi_score_bias: 0.05
 surd_bias_gate: "off"
+surd_score_bias: 0.0
+tsb_gate_mode: "off"
+surd_attn_gate: "off"
