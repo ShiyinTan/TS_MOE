@@ -1,0 +1,52 @@
+{
+  "city": "melbourne",
+  "lock_acc": 0.170692,
+  "target_acc": 0.172,
+  "sthgcn": 0.168,
+  "active_wave": "w17",
+  "wave_size": 72,
+  "auto_advance": true,
+  "stem_prefix": "climb_bpr020_soft010",
+  "stem_mid": "tgt_seed46_soft0078_session_bpr205_jump010_pmi05",
+  "base": {
+    "extends": "./climb_bpr020_soft010.yaml",
+    "cache": "runs/melbourne/cache_tgt_all_eval_last",
+    "session_summary": "on",
+    "eval_test_every_epoch": false,
+    "batch_size": 48,
+    "eval_batch_size": 32,
+    "threads": 4,
+    "soft_target_beta": 0.078,
+    "seed": 46,
+    "lambda_bpr": 0.205,
+    "jump_length_bias": 0.1,
+    "jump_dist": "lognormal",
+    "pmi_score_bias": 0.05
+  },
+  "densify_families": [
+    {"tag": "bpr", "key": "lambda_bpr", "values": [0.192, 0.195, 0.198, 0.2, 0.202, 0.208, 0.21, 0.215, 0.22]},
+    {"tag": "jump", "key": "jump_length_bias", "values": [0.07, 0.08, 0.09, 0.095, 0.105, 0.11, 0.12, 0.13, 0.15]},
+    {"tag": "pmi", "key": "pmi_score_bias", "values": [0.02, 0.03, 0.04, 0.045, 0.055, 0.06, 0.07, 0.08, 0.1]},
+    {"tag": "soft", "key": "soft_target_beta", "values": [0.065, 0.07, 0.074, 0.076, 0.08, 0.082, 0.085, 0.09, 0.1]},
+    {"tag": "seed", "key": "seed", "values": [40, 42, 43, 44, 45, 47, 48, 50, 52, 55]},
+    {"tag": "geo", "key": "geo_score_bias", "values": [0.04, 0.05, 0.08, 0.1, 0.12, 0.15, 0.18]},
+    {"tag": "rev", "key": "revisit_score_bias", "values": [0.04, 0.05, 0.08, 0.1, 0.12, 0.15, 0.2]},
+    {"tag": "hpop", "key": "hour_pop_score_bias", "values": [0.04, 0.05, 0.08, 0.1, 0.12, 0.15]},
+    {"tag": "pop", "key": "pop_score_bias", "values": [0.04, 0.05, 0.08, 0.1, 0.12]},
+    {"tag": "gauss", "key": "gauss_geo_bias", "values": [0.08, 0.1, 0.12, 0.15, 0.2]},
+    {"tag": "hop", "key": "transition_2hop_bias", "values": [0.08, 0.1, 0.15, 0.2, 0.3]},
+    {"tag": "wd", "key": "weight_decay", "values": [0.001, 0.003, 0.005, 0.008, 0.01]},
+    {"tag": "ep", "key": "epochs", "values": [2, 3]}
+  ],
+  "combo_recipes": [
+    {"tag": "hpop10_pop08", "overrides": {"hour_pop_score_bias": 0.1, "pop_score_bias": 0.08}},
+    {"tag": "rev10_geo10", "overrides": {"revisit_score_bias": 0.1, "geo_score_bias": 0.1}},
+    {"tag": "soft080_pmi06", "overrides": {"soft_target_beta": 0.08, "pmi_score_bias": 0.06}},
+    {"tag": "soft076_bpr208", "overrides": {"soft_target_beta": 0.076, "lambda_bpr": 0.208}},
+    {"tag": "seed50_pmi08", "overrides": {"seed": 50, "pmi_score_bias": 0.08}},
+    {"tag": "trgate", "overrides": {"transition_attn": "gate"}},
+    {"tag": "trgate_geo10", "overrides": {"transition_attn": "gate", "geo_score_bias": 0.1}},
+    {"tag": "trgate_rev10", "overrides": {"transition_attn": "gate", "revisit_score_bias": 0.1}}
+  ],
+  "notes": "GPU-local climb policy. Packer auto-advances waves when queue DONE. Cloud harvest only reads runs/climb_state/ and may edit this file + git pull to steer densify."
+}
