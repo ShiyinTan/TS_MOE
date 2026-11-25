@@ -1,0 +1,85 @@
+{
+  "notes": "GPU-local sequential Acc climb vs STHGCN. When a city hits target_acc, packer handoff starts the next queued city (no cloud wake).",
+  "active_city": "bandung",
+  "cities": [
+    {
+      "city": "melbourne",
+      "sthgcn": 0.168,
+      "target_acc": 0.172,
+      "lock_acc": 0.173108,
+      "status": "DONE",
+      "packer": "scripts/melbourne_climb_pack.py"
+    },
+    {
+      "city": "bandung",
+      "sthgcn": 0.219,
+      "target_acc": 0.222,
+      "status": "ACTIVE",
+      "packer": "scripts/bandung_climb_pack.py",
+      "cache": "runs/bandung/cache_tgt_all_eval_last"
+    },
+    {
+      "city": "petaling_jaya",
+      "sthgcn": 0.174,
+      "target_acc": 0.177,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "jakarta",
+      "sthgcn": 0.197,
+      "target_acc": 0.2,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "kuwait_city",
+      "sthgcn": 0.225,
+      "target_acc": 0.228,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "sydney",
+      "sthgcn": 0.227,
+      "target_acc": 0.23,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "moscow",
+      "sthgcn": 0.223,
+      "target_acc": 0.226,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "istanbul",
+      "sthgcn": 0.241,
+      "target_acc": 0.244,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "sao_paulo",
+      "sthgcn": 0.25,
+      "target_acc": 0.253,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "tangerang",
+      "sthgcn": 0.293,
+      "target_acc": 0.296,
+      "status": "QUEUED",
+      "packer": null
+    },
+    {
+      "city": "new_york",
+      "sthgcn": 0.146,
+      "target_acc": 0.149,
+      "status": "QUEUED",
+      "packer": null
+    }
+  ]
+}

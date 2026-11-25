@@ -75,9 +75,11 @@ cities:
     lock_config: configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml
 
   melbourne:
-    status: ACTIVE
-    aggressive_configs: false
-    keep_wave: w17
+    # STOPPED after clear margin vs STHGCN 0.168 (WIN Acc@1 0.173108).
+    # city_climb_finalize.py rewrites keep_* from Acc ledger; do not thin by hand.
+    status: STOPPED
+    aggressive_configs: true
+    keep_wave: null
     keep_configs:
       - base.yaml
       - peak.yaml
@@ -85,15 +87,21 @@ cities:
       - climb_bpr020_soft010.yaml
       - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml
       - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_win.yaml
+      - climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win.yaml
     keep_results:
-      - climb_bpr020_soft010_w12_tgt_seed46_soft0078_session_bpr205_jump010_pmi05
       - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win
+      - climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win
       - climb_bpr020_soft010_w11_tgt_seed46_soft0078_session_bpr205_jump010
-    keep_results_prefixes:
-      - climb_bpr020_soft010_w17_
-    lock_acc: 0.170692
-    lock_config: configs/melbourne/climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml
+      - climb_bpr020_soft010_w12_tgt_seed46_soft0078_session_bpr205_jump010_pmi05
+      - climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_ep2
+      - climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo015
+      - climb_bpr020_soft010_w19_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_gauss20
+      - climb_bpr020_soft010_w21_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft095_jump09
+    keep_results_prefixes: []
+    lock_acc: 0.173108
+    lock_config: configs/melbourne/climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win.yaml
     target_acc: 0.172
+    notes: "Finalize → results/melbourne/acc_ledger.{json,md}; Acc PB steps + top-5 exact tags kept (no whole-wave prefixes)."
 
   palembang:
     status: STOPPED

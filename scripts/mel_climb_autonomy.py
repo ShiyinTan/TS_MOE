@@ -18,6 +18,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
+import sys
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -533,6 +535,29 @@ def advance_wave_if_needed(force: bool = False) -> dict[str, Any]:
             save_state(state)
             snapshot["event"] = "target_met"
             write_harvest({**snapshot, "event": "target_met", "lock_acc": top})
+            # Acc ledger + summarize/prune keeps (important configs never dropped).
+            # Packer also triggers this via city_climb_handoff; idempotent.
+            try:
+                fin = [
+                    sys.executable,
+                    str(ROOT / "scripts" / "city_climb_finalize.py"),
+                    "--city",
+                    "melbourne",
+                    "--sthgcn",
+                    str(float(policy.get("sthgcn") or 0.168)),
+                    "--lock-acc",
+                    str(round(top, 6)),
+                ]
+                win_cfg = ROOT / "configs" / "melbourne"
+                # prefer promoted *_win.yaml matching best stem
+                for cand in sorted(win_cfg.glob("*_win.yaml")):
+                    if (best and best in cand.stem) or "soft0095" in cand.name:
+                        fin += ["--lock-config", str(cand.relative_to(ROOT))]
+                        break
+                print("+", " ".join(fin), flush=True)
+                subprocess.call(fin, cwd=ROOT)
+            except Exception as e:
+                print(f"finalize on target_met failed: {e!r}", flush=True)
             return snapshot
     else:
         # Keep canonical lock (do not bump on TIE float noise).
