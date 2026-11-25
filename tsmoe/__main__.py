@@ -419,9 +419,23 @@ def main(argv=None):
              "(default off; never hard_prior)")
     t.add_argument(
         "--large-city-fast", choices=ON_OFF, default="off",
-        help="when on *and* city is Bandung-or-larger: shrink model structure for "
-             "speed (dim128/heads4, transition-attn=bias, candidate-context-time=off, "
-             "session-summary=off). No-op on small cities. See tsmoe/city_scale.py")
+        help="when on *and* city is Bandung-or-larger: shrink model structure "
+             "(dim128/heads4, transition-attn=bias, no last_slot/session) and "
+             "validation candidate pool C via geo top-M=2048. Final test keeps "
+             "full constructed pool. No-op on small cities. See tsmoe/city_scale.py")
+    t.add_argument(
+        "--candidate-spatial-prior", type=str, default="off",
+        choices=("off", "geo", "gravity", "radiation"),
+        help="train validation pool shrink (#10): keep top-M by geo/gravity/"
+             "radiation (GT always included). large_city_fast defaults to geo "
+             "on Bandung-or-larger; final test keeps full pool")
+    t.add_argument(
+        "--candidate-prior-top-m", type=int, default=0,
+        help="top-M for --candidate-spatial-prior (0 = off). "
+             "large_city_fast default on large cities: 2048 for val only")
+    t.add_argument(
+        "--candidate-prior-gravity-beta", type=float, default=1.0,
+        help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
     t.add_argument(
         "--user-pref", choices=ON_OFF, default="off",
         help="causal user–cat / user–hour preference MLP into base/context "
@@ -592,6 +606,13 @@ def main(argv=None):
                    "geo-score-power must be positive")
     if args.command == "evaluate" and float(getattr(args, "score_temperature", 1.0) or 1.0) <= 0:
         root.error("--score-temperature must be positive")
+    if args.command in ("evaluate", "train"):
+        cprior = str(getattr(args, "candidate_spatial_prior", "off") or "off")
+        ctop = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+        if cprior not in ("off", "none", "") and ctop < 1:
+            root.error("--candidate-spatial-prior requires --candidate-prior-top-m >= 1")
+        if ctop < 0:
+            root.error("--candidate-prior-top-m must be nonnegative")
     if args.command == "evaluate":
         geo_ov = getattr(args, "geo_score_bias", None)
         rev_ov = getattr(args, "revisit_score_bias", None)
@@ -601,12 +622,6 @@ def main(argv=None):
             root.error("--revisit-score-bias override must be nonnegative")
         if int(getattr(args, "tta_views", 1) or 1) < 1:
             root.error("--tta-views must be >= 1")
-        cprior = str(getattr(args, "candidate_spatial_prior", "off") or "off")
-        ctop = int(getattr(args, "candidate_prior_top_m", 0) or 0)
-        if cprior not in ("off", "none", "") and ctop < 1:
-            root.error("--candidate-spatial-prior requires --candidate-prior-top-m >= 1")
-        if ctop < 0:
-            root.error("--candidate-prior-top-m must be nonnegative")
     if (args.command == "train"
             and float(getattr(args, "geo_score_bias", 0.0) or 0.0) > 0
             and getattr(args, "candidate_context", "off") == "off"):

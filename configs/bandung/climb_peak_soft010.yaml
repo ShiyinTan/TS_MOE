@@ -5,7 +5,8 @@ cache: runs/bandung/cache_tgt_all_eval_last
 out: runs/bandung/climb_peak_soft010
 recipe_id: climb_peak_soft010
 session_summary: on
-# Speed: shrink WIN structure on Bandung-or-larger only (see tsmoe/city_scale.py).
+# Speed: shrink WIN structure + val pool C (geo top-M=2048) on Bandung-or-larger
+# only; final eval_test keeps full constructed pool (see tsmoe/city_scale.py).
 large_city_fast: on
 eval_test_every_epoch: false
 batch_size: 48

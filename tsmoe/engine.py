@@ -34,7 +34,7 @@ from .model import (
 )
 from .prepare import digest_json, dump_json, verify_files
 from .resource_monitor import ResourceMonitor
-from .city_scale import apply_large_city_fast, resolve_city_name
+from .city_scale import apply_large_city_fast, resolve_city_name, val_pool_shrink_kwargs
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
 
@@ -1899,6 +1899,15 @@ def train(args):
             f"large_city_fast=on city={_city_name} changes={_fast_report.get('changes')}",
             flush=True,
         )
+        _vp = _fast_report.get("val_pool") or {}
+        if _vp.get("candidate_prior_top_m"):
+            print(
+                f"large_city_fast val pool shrink "
+                f"prior={_vp.get('candidate_spatial_prior')} "
+                f"top_m={_vp.get('candidate_prior_top_m')} "
+                f"(final test keeps full constructed pool)",
+                flush=True,
+            )
     elif _fast_report.get("requested"):
         print(
             f"large_city_fast skipped city={_city_name} reason={_fast_report.get('skipped')}",
@@ -2061,6 +2070,9 @@ def train(args):
     settings["causal_counts"] = cfg.causal_counts
     settings["transition_attn"] = cfg.transition_attn
     settings["large_city_fast"] = getattr(args, "large_city_fast", "off")
+    settings["candidate_spatial_prior"] = getattr(args, "candidate_spatial_prior", "off")
+    settings["candidate_prior_top_m"] = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+    settings["val_pool_shrink"] = bool(val_pool_shrink_kwargs(args))
     settings["dim"] = cfg.dim
     settings["heads"] = cfg.heads
     settings["layers"] = cfg.layers
@@ -2390,8 +2402,10 @@ def train(args):
         if cfg.causal_counts:
             train_end_state = online_tables.state_dict()
         # Pass category_frequency so val (and saved best) always include groups + Acc@1.
+        _val_pool_kw = val_pool_shrink_kwargs(args)
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
-                           category_frequency, desc=f"val ep{epoch}", count_tables=val_tables)
+                           category_frequency, desc=f"val ep{epoch}", count_tables=val_tables,
+                           **_val_pool_kw)
         row = metrics["all_targets"]
         if checkpoint_metric == "acc1":
             score = row["Acc@1"]
