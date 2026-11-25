@@ -1,8 +1,9 @@
 # Multi-city Acc@1 climb vs STHGCN — locked beats + history
 
 **Protocol:** `known_only` Acc@1 · **eval_test** · PR [#37](https://github.com/ShiyinTan/TS_MOE/pull/37)  
-**Updated:** 2026-11-25 18:30 JST  
-**Repo branch:** `cursor/beijing-sthgcn-climb-7a66`
+**Updated:** 2026-11-25 18:50 JST  
+**Repo branch:** `cursor/beijing-sthgcn-climb-7a66`  
+**Retention:** beat/STOPPED cities → this file + short `results/<city>/climb_path.md` only; MEL keeps active wave detail.
 
 STHGCN paper Acc@1 baselines (Massive-STEPS): Beijing **0.453** · Melbourne **0.168** · Palembang **0.246** · (Tokyo 0.250 · Shanghai 0.193).
 
@@ -39,7 +40,7 @@ Source run for WIN Acc: `results/beijing/climb_s5g20_all_gauss020_wd005_w45_tgt_
 ```
 
 **WIN recipe:** Peak + trbias + softβ0.05 + gauss0.20 + wd0.005 + jump0.12 + pop0.10 + pmi0.15 · epochs=3 · cache `runs/beijing/cache_tgt_all_eval_last`.  
-**Stopped** after flat densify w46 (no further Acc lift). Detailed path: [`docs/beijing-acc-climb-path.md`](beijing-acc-climb-path.md) / [`results/beijing/climb_path.md`](../results/beijing/climb_path.md).
+**Stopped** after flat densify w46 (no further Acc lift). Short path: [`results/beijing/climb_path.md`](../results/beijing/climb_path.md).
 
 ---
 
@@ -86,11 +87,10 @@ Also: [`results/palembang/climb_path.md`](../results/palembang/climb_path.md).
 | Item | Value |
 | --- | --- |
 | Focus | Melbourne clearer margin (~≥0.172) — no new city until then |
-| Wave | **w16** (~64 configs; router/neg/focal/bpr_margin/radiation/hour_pop/cataux/geoadapt/dim) |
-| Caps | ≤2 our jobs/GPU; RAM≥24 GiB avail; VRAM≥6 GiB free; disk floor |
-| BJ | STOPPED @ 0.465909 — 0 jobs |
-| PL | STOPPED @ 0.259690 — 0 jobs |
-| Harvest | prefer 45–60m; one-line; wake on lift / blocker / wave flat |
+| Wave | **w16** (~64; router/neg/focal/rad/hour_pop/dim…) · mid-run TOP below lock |
+| Caps | ≤2 our jobs/GPU; RAM/VRAM/disk gates |
+| BJ / PL | STOPPED — 0 jobs |
+| Harvest | ~45m sparse; one-line unless Acc lift or blocker |
 
 ---
 
