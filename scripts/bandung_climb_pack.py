@@ -35,6 +35,7 @@ from city_climb_autonomy import (  # noqa: E402
     write_harvest,
 )
 from gen_bdg_wave_local import ensure_wave_configs  # noqa: E402
+from gpu_pack_limits import max_our_per_gpu  # noqa: E402
 
 CITY = "bandung"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
@@ -45,6 +46,8 @@ STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 PACK_LOCK = PIDDIR / "packer_launch.lock"
+# Bandung is a LARGE_CITY → default 2/GPU (see gpu_pack_limits.LARGE_CITIES).
+CITY_GPU_CAP = max_our_per_gpu(CITY, shared=False)
 
 
 def ensure_active_wave_ready() -> tuple[str, list[str]]:
@@ -148,7 +151,7 @@ def main() -> None:
     pol = effective_policy(CITY)
     print(
         f"{CITY} climb packer wave={wave} queue={len(queue)} "
-        f"max_free={MAX_OUR_PER_GPU_FREE} target={pol['target_acc']} sthgcn={pol['sthgcn']} | "
+        f"max_per_gpu={CITY_GPU_CAP} (large-city) target={pol['target_acc']} sthgcn={pol['sthgcn']} | "
         f"{resource_snapshot(ROOT / 'runs')}",
         flush=True,
     )
