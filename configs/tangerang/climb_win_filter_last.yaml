@@ -1,0 +1,7 @@
+# tangerang · WIN on filter-unknown last/last cache
+extends: ../recipes/win.yaml
+city: tangerang
+cache: runs/tangerang/cache_filter_last
+out: runs/tangerang/climb_win_filter_last
+recipe_id: climb_win_filter_last
+description: "WIN on cache_filter_last"
