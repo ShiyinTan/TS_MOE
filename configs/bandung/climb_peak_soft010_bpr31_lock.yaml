@@ -1,0 +1,24 @@
+# Bandung climb lock Acc@1=0.216742 (2026-11-26) · from w1 tgt_bpr31
+# Densify continues toward ≥0.222 vs STHGCN 0.219.
+extends: ./climb_peak_soft010.yaml
+city: bandung
+cache: runs/bandung/cache_tgt_all_eval_last
+out: runs/bandung/climb_peak_soft010_bpr31_lock
+recipe_id: climb_peak_soft010_bpr31_lock
+description: "Bandung climb lock · Acc@1=0.216742 · peak+jump/pmi + λ_bpr=0.31"
+session_summary: on
+eval_test_every_epoch: false
+batch_size: 48
+eval_batch_size: 32
+threads: 4
+soft_target_beta: 0.1
+soft_target_prior: revisit
+transition_attn: gate
+geo_score_bias: 0.15
+revisit_score_bias: 0.1
+lambda_bpr: 0.31
+jump_length_bias: 0.1
+jump_dist: lognormal
+pmi_score_bias: 0.05
+large_city_fast: on
+checkpoint_on_climb_pb: on

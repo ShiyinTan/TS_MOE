@@ -1,6 +1,6 @@
 {
   "city": "bandung",
-  "lock_acc": 0.189612,
+  "lock_acc": 0.216742,
   "target_acc": 0.222,
   "sthgcn": 0.219,
   "active_wave": "w1",
@@ -28,7 +28,7 @@
     "transition_attn": "gate",
     "geo_score_bias": 0.15,
     "revisit_score_bias": 0.1,
-    "lambda_bpr": 0.25,
+    "lambda_bpr": 0.31,
     "jump_length_bias": 0.1,
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
@@ -61,5 +61,5 @@
     {"tag": "geo18_soft11", "overrides": {"geo_score_bias": 0.18, "soft_target_beta": 0.11}},
     {"tag": "bpr29_jump10", "overrides": {"lambda_bpr": 0.29, "jump_length_bias": 0.1}}
   ],
-  "notes": "MEL-derived densify: ban seed/hop/pop/hpop/gauss; prioritize soft×jump×pmi×bpr (+ep2). Foundation adds session+jump0.10+pmi0.05+λbpr0.25 on peak. wave_size~28; city_climb_autonomy + city_lever_rank advance locally; finalize on target_met."
+  "notes": "Lock Acc@1=0.216742 on climb_peak_soft010_w1_tgt_bpr31 (λ_bpr=0.31). Densify continues toward ≥0.222 vs STHGCN 0.219. MEL-derived bans seed/hop/pop/hpop/gauss; soft×jump×pmi×bpr (+ep2)."
 }
