@@ -31,6 +31,8 @@ HARVEST_LOG = STATE_DIR / "harvest_log.jsonl"
 CITY_ALIAS = {
     "melbourne": "mel",
     "bandung": "bdg",
+    "beijing": "bj",
+    "palembang": "plg",
 }
 
 
