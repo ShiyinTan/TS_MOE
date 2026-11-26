@@ -17,10 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "scripts" / "data" / "mel_climb_policy.json"
 
-# Fallback if policy missing (w17 WIN stack).
+# Fallback if policy missing (f63 shortlist on L128).
 DEFAULT_BASE = {
-    "extends": "./climb_bpr020_soft010.yaml",
-    "cache": "runs/melbourne/cache_tgt_all_eval_last",
+    "extends": "./climb_bpr020_soft010_f63.yaml",
+    "cache": "runs/melbourne/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
     "eval_test_every_epoch": False,
     "batch_size": 48,
@@ -32,6 +32,14 @@ DEFAULT_BASE = {
     "jump_length_bias": 0.10,
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
+    "final_negatives": 63,
+    "final_extra_random": -1,
+    "history_max_length": 128,
+    "min_history_length": 1,
+    "epochs": 50,
+    "early_stop_patience": 5,
+    "checkpoint_metric": "acc1",
+    "checkpoint_on_climb_pb": "on",
 }
 
 

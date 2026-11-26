@@ -9,8 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "scripts" / "data" / "bdg_climb_policy.json"
 DEFAULT_BASE = {
-    "extends": "./climb_peak_soft010.yaml",
-    "cache": "runs/bandung/cache_tgt_all_eval_last",
+    "extends": "./climb_peak_soft010_f63.yaml",
+    "cache": "runs/bandung/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
     "eval_test_every_epoch": False,
     "batch_size": 48,
@@ -28,6 +28,13 @@ DEFAULT_BASE = {
     "pmi_score_bias": 0.05,
     "large_city_fast": "on",
     "checkpoint_on_climb_pb": "on",
+    "final_negatives": 63,
+    "final_extra_random": -1,
+    "history_max_length": 128,
+    "min_history_length": 1,
+    "epochs": 50,
+    "early_stop_patience": 5,
+    "checkpoint_metric": "acc1",
 }
 
 
