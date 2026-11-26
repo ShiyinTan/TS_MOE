@@ -1,0 +1,16 @@
+# Bandung · final-63 shortlist climb foundation
+# Train+eval: constructed pool ∪ extra random → sample 63 (GT forced).
+# Acc@1 is shortlist@63 — NOT full-pool / STHGCN-comparable.
+extends: ./climb_peak_soft010.yaml
+recipe_id: climb_peak_soft010_f63
+out: runs/bandung/climb_peak_soft010_f63
+description: "Bandung Acc climb · final_candidates=63 shared train/eval shortlist"
+final_candidates: 63
+final_extra_random: 50
+# Disable mix top-M (final-K replaces it); keep large_city_fast structure shrink.
+candidate_spatial_prior: "off"
+candidate_prior_top_m: 0
+# History climb defaults (densify overrides these).
+history_max_length: 50
+min_history_length: 1
+epochs: 2

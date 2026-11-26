@@ -16,15 +16,19 @@ import torch
 from tqdm.auto import tqdm
 
 from .candidates import (
-    format_pool_size_line, haversine_km, mix_adaptive_negatives,
-    pools_for_split, sample_candidates, shrink_pools_spatial_prior,
+    build_final_pools, format_pool_size_line, haversine_km, mix_adaptive_negatives,
+    pools_for_split, sample_candidates, sample_final_candidates,
+    shrink_pools_spatial_prior,
     summarize_pool_sizes,
 )
 from .counts import (
     DEFAULT_VISIT_BINS, CausalCountTables, chronological_indices, gather_batch_context,
     parse_dt_bin_edges,
 )
-from .data import FEATURE_METHOD, Categories, build_split, file_digest, make_batch, read_split
+from .data import (
+    FEATURE_METHOD, Categories, build_split, file_digest, filter_indices_min_history,
+    make_batch, read_split,
+)
 from .features import (
     build_poi_cat_table, gather_side_features, merge_feature_context, slice_side_ctx,
 )
@@ -871,8 +875,9 @@ def select_device(name):
     return device
 
 
-def device_batch(data, indices, device, labels=True):
-    history, valid, target = make_batch(data, indices, labels=labels)
+def device_batch(data, indices, device, labels=True, history_max_length=None):
+    history, valid, target = make_batch(
+        data, indices, labels=labels, history_max_length=history_max_length)
     return {s: x.to(device) for s, x in history.items()}, valid.to(device), target
 
 
@@ -1450,11 +1455,17 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
              count_tables=None, score_temperature=1.0, tta_modes=(), tta_keep_last=True,
              tta_views=1, tta_fuse="mean", score_calib="off", calib_lambda=0.0,
              tta_seed=0, candidate_spatial_prior="off", candidate_prior_top_m=0,
-             candidate_prior_gravity_beta=1.0, mc_dropout=0, mc_keep_train_dropout=False):
+             candidate_prior_gravity_beta=1.0, mc_dropout=0, mc_keep_train_dropout=False,
+             history_max_length=0, final_candidates=0, final_extra_random=0,
+             final_candidates_seed=0):
     """Rank samples; with ``count_tables``, walk chronologically (score then update).
 
     Optional eval-only Acc levers: TTA (#36), Gaussian+feature calib (#34),
     coverage-safe spatial top-M pool shrink (#10), MC-dropout logit avg (#46).
+
+    ``final_candidates > 0`` applies the shared train/eval shortlist protocol:
+    constructed pool ∪ ``final_extra_random`` catalog rows → sample K (GT forced).
+    That Acc@1 is shortlist Acc, not full-pool / STHGCN-comparable.
     """
     mc_n = int(mc_dropout or 0)
     if mc_n < 0:
@@ -1467,9 +1478,35 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     device = table.routing_prior.device
     pools, _resolutions = cache.candidate_pools(data)
     pool_shrink_stats = None
+    final_k = int(final_candidates or 0)
     prior = str(candidate_spatial_prior or "off").lower()
     top_m = int(candidate_prior_top_m or 0)
-    if prior not in ("", "off", "none") and top_m > 0:
+    # Final-K shortlist replaces spatial top-M shrink (same protocol as train).
+    if final_k > 0:
+        if cache.uses_full_catalog_pools():
+            raise ValueError("--final-candidates requires constructed pools "
+                             "(not full-catalog cache)")
+        targets = (data["poi_token"][data["end"]] - 2).tolist()
+        pools = build_final_pools(
+            pools, targets, len(cache.pois),
+            final_k=final_k,
+            extra_random=int(final_extra_random or 0),
+            seed=int(final_candidates_seed or 0),
+            sample_indices=list(range(len(pools))))
+        sizes = [int(p.numel()) for p in pools]
+        pool_shrink_stats = {
+            "protocol": "final_candidates",
+            "final_candidates": final_k,
+            "final_extra_random": int(final_extra_random or 0),
+            "size_after_mean": float(sum(sizes) / max(len(sizes), 1)),
+            "size_after_max": max(sizes) if sizes else 0,
+        }
+        print(
+            f"final_candidates={final_k} extra_random={int(final_extra_random or 0)} "
+            f"size_after_mean={pool_shrink_stats['size_after_mean']:.1f} "
+            f"(GT force-included; shortlist Acc — not full-pool/STHGCN comparable)",
+            flush=True)
+    elif prior not in ("", "off", "none") and top_m > 0:
         if cache.uses_full_catalog_pools():
             raise ValueError("--candidate-spatial-prior requires constructed pools "
                              "(not full-catalog cache)")
@@ -1540,9 +1577,11 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
             acc = acc.masked_fill(~pool_mask, float("-inf"))
         return acc
 
+    hist_cap = int(history_max_length or 0) or None
     for idx in tqdm(batches, desc=desc, leave=False, dynamic_ncols=True):
         check_interrupt()
-        h, valid, target = device_batch(data, idx, device)
+        h, valid, target = device_batch(
+            data, idx, device, history_max_length=hist_cap)
         count_ctx = None
         if use_counts or use_side:
             seq_len = int(valid.shape[1])
@@ -2174,6 +2213,10 @@ def train(args):
         settings["climb_lock_acc"] = float(_climb_lock)
     settings["candidate_spatial_prior"] = getattr(args, "candidate_spatial_prior", "off")
     settings["candidate_prior_top_m"] = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+    settings["history_max_length"] = int(getattr(args, "history_max_length", 0) or 0)
+    settings["min_history_length"] = int(getattr(args, "min_history_length", 0) or 0)
+    settings["final_candidates"] = int(getattr(args, "final_candidates", 0) or 0)
+    settings["final_extra_random"] = int(getattr(args, "final_extra_random", 0) or 0)
     settings["eval_pool_shrink"] = bool(eval_pool_shrink_kwargs(args))
     settings["val_pool_shrink"] = settings["eval_pool_shrink"]  # alias
     settings["dim"] = cfg.dim
@@ -2368,6 +2411,24 @@ def train(args):
         splits=pool_stats,
     ), stats_dir / "candidate_pool_stats.json")
     print(f"Wrote {stats_dir / 'candidate_pool_stats.json'}", flush=True)
+    hist_cap = int(getattr(args, "history_max_length", 0) or 0) or None
+    min_hist = int(getattr(args, "min_history_length", 0) or 0)
+    final_k = int(getattr(args, "final_candidates", 0) or 0)
+    final_extra = int(getattr(args, "final_extra_random", 0) or 0)
+    final_seed_arg = int(getattr(args, "final_candidates_seed", -1))
+    final_seed = int(args.seed) if final_seed_arg < 0 else final_seed_arg
+    if hist_cap:
+        print(f"history_max_length={hist_cap} (runtime truncate)", flush=True)
+    if min_hist > 1:
+        print(f"min_history_length={min_hist} (train filter)", flush=True)
+    if final_k > 0:
+        print(
+            f"final_candidates={final_k} extra_random={final_extra} "
+            f"seed={final_seed} (shared train+eval shortlist; GT forced)",
+            flush=True,
+        )
+        if neg_sample == "adaptive_mix":
+            raise ValueError("--final-candidates is incompatible with --neg-sample adaptive_mix")
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     train_end_state = None
     results_history = []
@@ -2381,15 +2442,26 @@ def train(args):
         if cfg.causal_counts:
             online_tables.reset()
             # Chronological batches (stable by prediction timestamp); no shuffle.
-            steps = list(chronological_indices(data).split(args.batch_size))
+            order = chronological_indices(data)
         else:
-            steps = list(torch.randperm(len(data["end"]), generator=batches).split(args.batch_size))
+            order = torch.randperm(len(data["end"]), generator=batches)
+        order = filter_indices_min_history(data, order, min_hist)
+        if order.numel() == 0:
+            raise ValueError(
+                f"min_history_length={min_hist} removed every train sample")
+        steps = list(order.split(args.batch_size))
         _train_t0 = time.perf_counter()
         for idx in tqdm(steps, desc=f"train ep{epoch}", leave=False, dynamic_ncols=True):
             check_interrupt()
-            h, valid, target = device_batch(data, idx, device)
+            h, valid, target = device_batch(
+                data, idx, device, history_max_length=hist_cap)
             batch_pools = [train_pools[i] for i in idx.tolist()]
-            if neg_sample == "adaptive_mix":
+            if final_k > 0:
+                rows, positive, cand_mask = sample_final_candidates(
+                    target.detach().cpu(), len(cache.pois), final_k, rng,
+                    pools=batch_pools, extra_random=final_extra,
+                    seed=final_seed, sample_indices=idx.tolist())
+            elif neg_sample == "adaptive_mix":
                 # Probe a larger random pool subset, score no-grad, then mix hard+random.
                 probe_n = max(int(args.negatives), int(math.ceil(args.negatives * neg_probe_mult)))
                 probe_cap = None
@@ -2803,6 +2875,10 @@ def evaluate_cli(args):
     cand_gbeta = float(getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0)
     mc_dropout = int(getattr(args, "mc_dropout", 0) or 0)
     mc_keep = bool(getattr(args, "mc_keep_train_dropout", False))
+    hist_cap = int(getattr(args, "history_max_length", 0) or 0)
+    final_k = int(getattr(args, "final_candidates", 0) or 0)
+    final_extra = int(getattr(args, "final_extra_random", 0) or 0)
+    final_seed = int(getattr(args, "final_candidates_seed", 0) or 0)
     if mc_dropout > 1:
         print(f"mc_dropout={mc_dropout} keep_train_dropout={mc_keep}", flush=True)
     metrics = evaluate(
@@ -2813,7 +2889,9 @@ def evaluate_cli(args):
         tta_fuse=tta_fuse, score_calib=score_calib, calib_lambda=calib_lambda,
         candidate_spatial_prior=cand_prior, candidate_prior_top_m=cand_top_m,
         candidate_prior_gravity_beta=cand_gbeta,
-        mc_dropout=mc_dropout, mc_keep_train_dropout=mc_keep)
+        mc_dropout=mc_dropout, mc_keep_train_dropout=mc_keep,
+        history_max_length=hist_cap, final_candidates=final_k,
+        final_extra_random=final_extra, final_candidates_seed=final_seed)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)
     payload["candidate_pool_stats"] = pool_stats.get(args.split)

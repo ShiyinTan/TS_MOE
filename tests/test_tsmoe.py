@@ -17,7 +17,8 @@ from tsmoe.__main__ import main
 from tsmoe.candidates import (
     build_user_frequent, candidate_construction_record, catalog_coordinates,
     catalog_visit_counts, consecutive_visit_distances, format_pool_size_line,
-    haversine_km, mix_adaptive_negatives, neighborhood_indices,
+    build_final_pools, finalize_candidate_pool, haversine_km,
+    mix_adaptive_negatives, neighborhood_indices,
     pick_popular_radius_km, pick_radius_km, popular_indices,
     resolve_candidate_pool, sample_candidates, shrink_pools_spatial_prior,
     summarize_distances, summarize_pool_sizes,
@@ -430,6 +431,43 @@ class TestDesign(unittest.TestCase):
             torch.tensor([0]), 4, -1, random.Random(0), pools=[rich], max_candidates=2)
         self.assertEqual(int(cap_mask[0].sum()), 2)
         self.assertEqual(int(capped[0, 0]), 0)
+
+    def test_final_candidates_force_gt_and_cap(self):
+        pool = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8], dtype=torch.long)
+        finals = build_final_pools(
+            [pool], [3], catalog_size=20,
+            final_k=5, extra_random=10, seed=0, sample_indices=[0])
+        rows = finals[0].tolist()
+        self.assertEqual(rows[0], 3)
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(len(set(rows)), 5)
+        # Deterministic across calls with same seed/index.
+        again = build_final_pools(
+            [pool], [3], catalog_size=20,
+            final_k=5, extra_random=10, seed=0, sample_indices=[0])[0].tolist()
+        self.assertEqual(rows, again)
+        tiny = finalize_candidate_pool([3, 1], target=3, final_k=5, rng=random.Random(0))
+        self.assertEqual(tiny[0], 3)
+        self.assertLessEqual(len(tiny), 5)
+
+    def test_history_max_length_and_min_filter(self):
+        from tsmoe.data import L_DIM, T_DIM, filter_indices_min_history, make_batch
+        data = {
+            "start": torch.tensor([0, 10, 20]),
+            "end": torch.tensor([8, 12, 25]),  # lengths 8, 2, 5
+            "poi_token": torch.arange(30) + 2,
+            "cat_token": torch.ones(30, dtype=torch.long),
+            "T": torch.zeros(30, T_DIM),
+            "L": torch.zeros(30, L_DIM),
+            "P": torch.arange(30),
+            "C": torch.ones(30, dtype=torch.long),
+        }
+        kept = filter_indices_min_history(data, torch.arange(3), min_history_length=5)
+        self.assertEqual(kept.tolist(), [0, 2])
+        history, valid, target = make_batch(
+            data, torch.tensor([0]), history_max_length=3)
+        self.assertEqual(int(valid.sum()), 3)
+        self.assertEqual(int(target[0]), int(data["poi_token"][8] - 2))
 
     def test_prepare_prints_coordinate_imputation_counts(self):
         """prepare logs per-source catalog coordinate counts from the imputation audit."""

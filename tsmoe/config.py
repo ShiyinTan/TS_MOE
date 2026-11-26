@@ -20,6 +20,8 @@ META_KEYS = frozenset({
 EVAL_CONFIG_KEYS = frozenset({
     "cache", "device", "chunk", "eval_batch_size", "threads",
     "score_temperature", "geo_score_bias", "revisit_score_bias",
+    "history_max_length", "final_candidates", "final_extra_random",
+    "final_candidates_seed", "candidate_spatial_prior", "candidate_prior_top_m",
 })
 
 # argparse store_true / BooleanOptionalAction destinations that become bare flags

@@ -212,8 +212,30 @@ def main(argv=None):
     t.add_argument(
         "--max-train-candidates", type=int, default=-1,
         help="cap total training candidates per sample including the positive "
-             "(default -1 = no extra cap beyond --negatives); evaluation always "
-             "uses the full constructed pool")
+             "(default -1 = no extra cap beyond --negatives); ignored when "
+             "--final-candidates > 0")
+    t.add_argument(
+        "--history-max-length", type=int, default=0,
+        help="runtime history upper bound: keep only the last N events before "
+             "the target (0 = use prepare --max-length window as-is). "
+             "Climb knob; no re-prepare when N ≤ prepare max_length")
+    t.add_argument(
+        "--min-history-length", type=int, default=0,
+        help="drop train samples whose prepared history length is < N "
+             "(0/1 = off; prepare already requires ≥1). Train-only filter")
+    t.add_argument(
+        "--final-candidates", type=int, default=0,
+        help="shared train+eval shortlist size K (0 = legacy). When >0: start "
+             "from the constructed eval-style pool, union --final-extra-random "
+             "catalog POIs, then sample K (GT force-included). Acc@1 is "
+             "shortlist Acc (not full-pool / STHGCN comparable)")
+    t.add_argument(
+        "--final-extra-random", type=int, default=50,
+        help="extra uniform catalog POIs unioned into the constructed pool "
+             "before --final-candidates sampling (default 50; 0 disables)")
+    t.add_argument(
+        "--final-candidates-seed", type=int, default=-1,
+        help="seed for final-candidates sampling (-1 = use --seed)")
     t.add_argument("--no-surd", action="store_true", help="context-only U/S MoE ablation: disable all statistical guidance")
     t.add_argument(
         "--causal-counts", dest="no_causal_counts", action="store_false",
@@ -537,6 +559,18 @@ def main(argv=None):
     e.add_argument(
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
+    e.add_argument(
+        "--history-max-length", type=int, default=0,
+        help="runtime history upper bound (0 = prepared window)")
+    e.add_argument(
+        "--final-candidates", type=int, default=0,
+        help="shared shortlist K (0 = off); see train --final-candidates")
+    e.add_argument(
+        "--final-extra-random", type=int, default=50,
+        help="extra random catalog POIs before final-candidates sample")
+    e.add_argument(
+        "--final-candidates-seed", type=int, default=0,
+        help="seed for final-candidates sampling at evaluate")
     e.add_argument(
         "--mc-dropout", type=int, default=0,
         help="MC-dropout logit average at eval (#46): T stochastic forwards "

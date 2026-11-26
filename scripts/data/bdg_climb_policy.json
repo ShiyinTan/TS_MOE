@@ -1,12 +1,12 @@
 {
   "city": "bandung",
-  "lock_acc": 0.216742,
+  "lock_acc": 0.0,
   "target_acc": 0.222,
   "sthgcn": 0.219,
   "active_wave": "w1",
   "wave_size": 28,
   "auto_advance": true,
-  "stem_prefix": "climb_peak_soft010",
+  "stem_prefix": "climb_peak_soft010_f63",
   "stem_mid": "tgt",
   "ban_keys": [
     "seed",
@@ -16,7 +16,7 @@
     "gauss_geo_bias"
   ],
   "base": {
-    "extends": "./climb_peak_soft010.yaml",
+    "extends": "./climb_peak_soft010_f63.yaml",
     "cache": "runs/bandung/cache_tgt_all_eval_last",
     "session_summary": "on",
     "eval_test_every_epoch": false,
@@ -33,33 +33,34 @@
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
     "large_city_fast": "on",
-    "checkpoint_on_climb_pb": "on"
+    "checkpoint_on_climb_pb": "on",
+    "final_candidates": 63,
+    "final_extra_random": 50,
+    "candidate_spatial_prior": "off",
+    "candidate_prior_top_m": 0,
+    "history_max_length": 50,
+    "min_history_length": 1,
+    "epochs": 2
   },
   "densify_families": [
-    {"tag": "soft", "key": "soft_target_beta", "values": [0.08, 0.085, 0.09, 0.095, 0.1, 0.105, 0.11, 0.12, 0.13]},
-    {"tag": "bpr", "key": "lambda_bpr", "values": [0.22, 0.24, 0.25, 0.27, 0.29, 0.31]},
-    {"tag": "jump", "key": "jump_length_bias", "values": [0.07, 0.08, 0.09, 0.1, 0.11, 0.12]},
-    {"tag": "pmi", "key": "pmi_score_bias", "values": [0.03, 0.04, 0.05, 0.06, 0.08, 0.1]},
-    {"tag": "rev", "key": "revisit_score_bias", "values": [0.08, 0.1, 0.12, 0.15]},
-    {"tag": "geo", "key": "geo_score_bias", "values": [0.12, 0.15, 0.18]},
-    {"tag": "wd", "key": "weight_decay", "values": [0.005, 0.008, 0.01]},
-    {"tag": "ep", "key": "epochs", "values": [2, 3]}
+    {"tag": "hmax", "key": "history_max_length", "values": [20, 30, 40, 50]},
+    {"tag": "hmin", "key": "min_history_length", "values": [1, 2, 3, 5]},
+    {"tag": "ep", "key": "epochs", "values": [2, 3, 4, 5]},
+    {"tag": "xrand", "key": "final_extra_random", "values": [0, 50, 100, 200]},
+    {"tag": "soft", "key": "soft_target_beta", "values": [0.08, 0.1, 0.12]},
+    {"tag": "bpr", "key": "lambda_bpr", "values": [0.25, 0.29, 0.31]}
   ],
   "combo_recipes": [
-    {"tag": "soft095_jump09", "overrides": {"soft_target_beta": 0.095, "jump_length_bias": 0.09}},
-    {"tag": "soft11_jump10", "overrides": {"soft_target_beta": 0.11, "jump_length_bias": 0.1}},
-    {"tag": "soft12_jump09", "overrides": {"soft_target_beta": 0.12, "jump_length_bias": 0.09}},
-    {"tag": "soft10_bpr27", "overrides": {"soft_target_beta": 0.1, "lambda_bpr": 0.27}},
-    {"tag": "soft095_bpr25", "overrides": {"soft_target_beta": 0.095, "lambda_bpr": 0.25}},
-    {"tag": "jump10_pmi05", "overrides": {"jump_length_bias": 0.1, "pmi_score_bias": 0.05}},
-    {"tag": "jump09_pmi06", "overrides": {"jump_length_bias": 0.09, "pmi_score_bias": 0.06}},
-    {"tag": "soft095_jump09_pmi05", "overrides": {"soft_target_beta": 0.095, "jump_length_bias": 0.09, "pmi_score_bias": 0.05}},
-    {"tag": "soft11_jump10_pmi05", "overrides": {"soft_target_beta": 0.11, "jump_length_bias": 0.1, "pmi_score_bias": 0.05}},
-    {"tag": "ep2_soft11", "overrides": {"epochs": 2, "soft_target_beta": 0.11}},
-    {"tag": "ep2_soft095_jump09", "overrides": {"epochs": 2, "soft_target_beta": 0.095, "jump_length_bias": 0.09}},
-    {"tag": "rev12_soft11", "overrides": {"revisit_score_bias": 0.12, "soft_target_beta": 0.11}},
-    {"tag": "geo18_soft11", "overrides": {"geo_score_bias": 0.18, "soft_target_beta": 0.11}},
-    {"tag": "bpr29_jump10", "overrides": {"lambda_bpr": 0.29, "jump_length_bias": 0.1}}
+    {"tag": "hmax30_hmin2", "overrides": {"history_max_length": 30, "min_history_length": 2}},
+    {"tag": "hmax40_hmin3", "overrides": {"history_max_length": 40, "min_history_length": 3}},
+    {"tag": "hmax20_ep3", "overrides": {"history_max_length": 20, "epochs": 3}},
+    {"tag": "hmax50_ep4", "overrides": {"history_max_length": 50, "epochs": 4}},
+    {"tag": "hmin2_ep3", "overrides": {"min_history_length": 2, "epochs": 3}},
+    {"tag": "hmin3_ep4", "overrides": {"min_history_length": 3, "epochs": 4}},
+    {"tag": "xrand100_hmax40", "overrides": {"final_extra_random": 100, "history_max_length": 40}},
+    {"tag": "xrand0_hmax50", "overrides": {"final_extra_random": 0, "history_max_length": 50}},
+    {"tag": "hmax30_soft12", "overrides": {"history_max_length": 30, "soft_target_beta": 0.12}},
+    {"tag": "hmin2_bpr29", "overrides": {"min_history_length": 2, "lambda_bpr": 0.29}}
   ],
-  "notes": "Lock Acc@1=0.216742 on climb_peak_soft010_w1_tgt_bpr31 (λ_bpr=0.31). Densify continues toward ≥0.222 vs STHGCN 0.219. MEL-derived bans seed/hop/pop/hpop/gauss; soft×jump×pmi×bpr (+ep2)."
+  "notes": "NEW PROTOCOL: final_candidates=63 shared train/eval (constructed∪extra_random→sample 63, GT forced). Acc@1 is shortlist@63 — NOT comparable to STHGCN 0.219 or prior lock 0.216742. Climb history_max_length / min_history_length / epochs / extra_random. lock_acc starts at 0 until first PB."
 }

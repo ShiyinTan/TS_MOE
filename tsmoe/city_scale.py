@@ -131,10 +131,19 @@ def apply_large_city_fast(
             after[key] = new
 
     # Eval pool shrink defaults (do not override explicit user settings).
+    # Shared final-K shortlist (--final-candidates) replaces mix top-M.
+    final_k = int(getattr(args, "final_candidates", 0) or 0)
     prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
     top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
     eval_pool: dict[str, Any] = {}
-    if prior in ("", "off", "none") and top_m <= 0:
+    if final_k > 0:
+        eval_pool = {
+            "final_candidates": final_k,
+            "final_extra_random": int(getattr(args, "final_extra_random", 0) or 0),
+            "candidate_spatial_prior": "off",
+            "candidate_prior_top_m": 0,
+        }
+    elif prior in ("", "off", "none") and top_m <= 0:
         for key, new in FAST_EVAL_POOL.items():
             old = getattr(args, key, None)
             before[key] = old
@@ -159,16 +168,28 @@ def apply_large_city_fast(
 
 def eval_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
     """Kwargs for ``evaluate()`` pool shrink on val *and* test (empty ⇒ full pool)."""
+    final_k = int(getattr(args, "final_candidates", 0) or 0)
+    out: dict[str, Any] = {}
+    hist_cap = int(getattr(args, "history_max_length", 0) or 0)
+    if hist_cap > 0:
+        out["history_max_length"] = hist_cap
+    if final_k > 0:
+        out["final_candidates"] = final_k
+        out["final_extra_random"] = int(getattr(args, "final_extra_random", 0) or 0)
+        out["final_candidates_seed"] = int(
+            getattr(args, "final_candidates_seed", getattr(args, "seed", 0)) or 0)
+        return out
     prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
     top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
     if prior in ("", "off", "none") or top_m < 1:
-        return {}
-    return {
+        return out
+    out.update({
         "candidate_spatial_prior": prior,
         "candidate_prior_top_m": top_m,
         "candidate_prior_gravity_beta": float(
             getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0),
-    }
+    })
+    return out
 
 
 # Back-compat alias.
