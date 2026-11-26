@@ -1,7 +1,7 @@
 {
   "city": "bandung",
   "lock_acc": 0.0,
-  "target_acc": 0.222,
+  "target_acc": 0.99,
   "sthgcn": 0.219,
   "active_wave": "w1",
   "wave_size": 28,
@@ -45,24 +45,141 @@
     "checkpoint_metric": "acc1"
   },
   "densify_families": [
-    {"tag": "hmax", "key": "history_max_length", "values": [50, 64, 80, 100, 128]},
-    {"tag": "hmin", "key": "min_history_length", "values": [1, 2, 3, 5]},
-    {"tag": "ep", "key": "epochs", "values": [10, 20, 30, 50]},
-    {"tag": "pat", "key": "early_stop_patience", "values": [3, 5, 8]},
-    {"tag": "soft", "key": "soft_target_beta", "values": [0.08, 0.1, 0.12]},
-    {"tag": "bpr", "key": "lambda_bpr", "values": [0.25, 0.29, 0.31]}
+    {
+      "tag": "hmax",
+      "key": "history_max_length",
+      "values": [
+        50,
+        64,
+        80,
+        100,
+        128
+      ]
+    },
+    {
+      "tag": "hmin",
+      "key": "min_history_length",
+      "values": [
+        1,
+        2,
+        3,
+        5
+      ]
+    },
+    {
+      "tag": "ep",
+      "key": "epochs",
+      "values": [
+        10,
+        20,
+        30,
+        50
+      ]
+    },
+    {
+      "tag": "pat",
+      "key": "early_stop_patience",
+      "values": [
+        3,
+        5,
+        8
+      ]
+    },
+    {
+      "tag": "soft",
+      "key": "soft_target_beta",
+      "values": [
+        0.08,
+        0.1,
+        0.12
+      ]
+    },
+    {
+      "tag": "bpr",
+      "key": "lambda_bpr",
+      "values": [
+        0.25,
+        0.29,
+        0.31
+      ]
+    }
   ],
   "combo_recipes": [
-    {"tag": "hmax80_hmin2", "overrides": {"history_max_length": 80, "min_history_length": 2}},
-    {"tag": "hmax100_hmin3", "overrides": {"history_max_length": 100, "min_history_length": 3}},
-    {"tag": "hmax64_ep50_pat5", "overrides": {"history_max_length": 64, "epochs": 50, "early_stop_patience": 5}},
-    {"tag": "hmax128_ep50_pat3", "overrides": {"history_max_length": 128, "epochs": 50, "early_stop_patience": 3}},
-    {"tag": "hmin2_ep30_pat5", "overrides": {"min_history_length": 2, "epochs": 30, "early_stop_patience": 5}},
-    {"tag": "hmin3_ep50_pat8", "overrides": {"min_history_length": 3, "epochs": 50, "early_stop_patience": 8}},
-    {"tag": "hmax80_soft12", "overrides": {"history_max_length": 80, "soft_target_beta": 0.12}},
-    {"tag": "hmin2_bpr29", "overrides": {"min_history_length": 2, "lambda_bpr": 0.29}},
-    {"tag": "hmax100_pat3", "overrides": {"history_max_length": 100, "early_stop_patience": 3}},
-    {"tag": "hmax50_ep20_pat5", "overrides": {"history_max_length": 50, "epochs": 20, "early_stop_patience": 5}}
+    {
+      "tag": "hmax80_hmin2",
+      "overrides": {
+        "history_max_length": 80,
+        "min_history_length": 2
+      }
+    },
+    {
+      "tag": "hmax100_hmin3",
+      "overrides": {
+        "history_max_length": 100,
+        "min_history_length": 3
+      }
+    },
+    {
+      "tag": "hmax64_ep50_pat5",
+      "overrides": {
+        "history_max_length": 64,
+        "epochs": 50,
+        "early_stop_patience": 5
+      }
+    },
+    {
+      "tag": "hmax128_ep50_pat3",
+      "overrides": {
+        "history_max_length": 128,
+        "epochs": 50,
+        "early_stop_patience": 3
+      }
+    },
+    {
+      "tag": "hmin2_ep30_pat5",
+      "overrides": {
+        "min_history_length": 2,
+        "epochs": 30,
+        "early_stop_patience": 5
+      }
+    },
+    {
+      "tag": "hmin3_ep50_pat8",
+      "overrides": {
+        "min_history_length": 3,
+        "epochs": 50,
+        "early_stop_patience": 8
+      }
+    },
+    {
+      "tag": "hmax80_soft12",
+      "overrides": {
+        "history_max_length": 80,
+        "soft_target_beta": 0.12
+      }
+    },
+    {
+      "tag": "hmin2_bpr29",
+      "overrides": {
+        "min_history_length": 2,
+        "lambda_bpr": 0.29
+      }
+    },
+    {
+      "tag": "hmax100_pat3",
+      "overrides": {
+        "history_max_length": 100,
+        "early_stop_patience": 3
+      }
+    },
+    {
+      "tag": "hmax50_ep20_pat5",
+      "overrides": {
+        "history_max_length": 50,
+        "epochs": 20,
+        "early_stop_patience": 5
+      }
+    }
   ],
-  "notes": "final_negatives=63 + GT (≤64). extra_random=-1 ≈ pool size. cache L128 for history_max>50. epochs≤50 + early_stop_patience. Acc shortlist — not STHGCN-comparable. lock_acc=0 until PB."
+  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN)."
 }

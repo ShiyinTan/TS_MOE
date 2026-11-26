@@ -5,7 +5,7 @@ Rules (prefs 2026-11-25; raised 2026-11-25 evening; large-city 2026-11-26):
   when the GPU is free of foreign users (ignore ``dl-box``).
 - If another user (e.g. camob) is on that GPU, cap is
   ``TSMOE_MAX_PER_GPU_SHARED`` (default **3**).
-- Bandung-or-larger datasets: ``TSMOE_MAX_PER_GPU_LARGE`` (default **2**) per GPU
+- Bandung-or-larger datasets: ``TSMOE_MAX_PER_GPU_LARGE`` (default **4**) per GPU
   (see ``LARGE_CITIES``).
 - Caps only gate **new** launches. Never kill running jobs (ours or foreign).
 - Also gate on host RAM, per-GPU free VRAM, and disk — these matter more than the

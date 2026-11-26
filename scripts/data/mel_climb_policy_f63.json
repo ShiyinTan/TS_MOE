@@ -1,7 +1,7 @@
 {
   "city": "melbourne",
   "lock_acc": 0.0,
-  "target_acc": 0.172,
+  "target_acc": 0.99,
   "sthgcn": 0.168,
   "active_wave": "w1",
   "wave_size": 20,
@@ -109,5 +109,5 @@
       }
     }
   ],
-  "notes": "MEL f63 protocol on L128; shortlist Acc; lock 0 until PB"
+  "notes": "MEL f63 protocol on L128; shortlist Acc; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN)."
 }

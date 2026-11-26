@@ -57,15 +57,25 @@ def overrides_path(city: str, wave: str) -> Path:
 
 
 def ensure_wave_mod(city: str):
+    # Generic writer covers all policy-backed cities (incl. beijing/palembang).
+    # Keep city-specific modules as thin aliases when present.
     if city == "melbourne":
-        from gen_mel_wave_local import ensure_wave_configs
+        try:
+            from gen_mel_wave_local import ensure_wave_configs
 
-        return ensure_wave_configs
+            return ensure_wave_configs
+        except Exception:
+            pass
     if city == "bandung":
-        from gen_bdg_wave_local import ensure_wave_configs
+        try:
+            from gen_bdg_wave_local import ensure_wave_configs
 
-        return ensure_wave_configs
-    raise ValueError(f"no wave generator for city={city}")
+            return ensure_wave_configs
+        except Exception:
+            pass
+    from gen_city_wave_local import ensure_wave_configs
+
+    return ensure_wave_configs
 
 
 def load_policy(city: str) -> dict[str, Any]:

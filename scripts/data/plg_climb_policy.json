@@ -1,7 +1,7 @@
 {
   "city": "palembang",
   "lock_acc": 0.0,
-  "target_acc": 0.27,
+  "target_acc": 0.99,
   "sthgcn": 0.246,
   "active_wave": "w1",
   "wave_size": 20,
@@ -106,5 +106,5 @@
       }
     }
   ],
-  "notes": "palembang f63 shortlist on L128; lock 0 until PB"
+  "notes": "palembang f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN)."
 }

@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
-"""Palembang Acc climb packer (parallel cities; dynamic GPU caps).
-
-Policy: after a city beats STHGCN, start the next city but keep optimizing the
-winner. Per-GPU our-job caps via ``gpu_pack_limits``:
-  - **2** when GPU has no foreign users (``dl-box`` ignored)
-  - **2** when another user (e.g. camob) is on that GPU
-Total our jobs per GPU are capped; cities share via ``all_counts``.
-Over-limit only blocks new launches — never kills already-running jobs.
-
-Never touches foreign processes. Prefer configs under configs/palembang/climb_*.yaml.
-Exits immediately if logs/multicity/STOP (or TSMOE_STOP_SENTINEL) exists.
-"""
+"""Palembang Acc climb packer — f63 shortlist densify on L128 (GPU-local)."""
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import subprocess
 import sys
@@ -23,17 +13,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from gpu_pack_limits import (  # noqa: E402
-    MAX_OUR_PER_GPU_FREE,
-    MAX_OUR_PER_GPU_SHARED,
     MIN_FREE_VRAM_MIB,
     city_cap,
     disk_ok,
     gpu_free_mib,
     host_ram_ok,
+    max_our_per_gpu,
     peer_climb_packers_alive,
     resource_snapshot,
     scan_gpus,
 )
+from city_climb_autonomy import (  # noqa: E402
+    advance_wave_if_needed,
+    effective_policy,
+    load_overrides,
+    load_state,
+    prefetch_next_wave,
+    save_state,
+    scan_wave_metrics,
+    write_harvest,
+)
+from gen_city_wave_local import ensure_wave_configs  # noqa: E402
 
 CITY = "palembang"
 PY = os.environ.get("TSMOE_PYTHON", "/home/shiyintan/miniconda3/envs/tsmoe/bin/python")
@@ -44,279 +44,16 @@ STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 PACK_LOCK = PIDDIR / "packer_launch.lock"
+CITY_GPU_CAP = max_our_per_gpu(CITY, shared=False)
 
-QUEUE = [line.strip() for line in """
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00746_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00749_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00751_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00757_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00759_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00762_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr0235
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr0242
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr0248
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr0252
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr0258
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr0262
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr0275
-climb_tsb20_bpr020_filter_w20_p80_seed51_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed59_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed60_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed61_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed62_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed63_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed69_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed71_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed72_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed73_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_tsb172
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_tsb178
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_tsb182
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_tsb188
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_tsb195
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_tsb205
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_hour0015
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_hour0022
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_hour0028
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_hour0032
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_explore004
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_explore006
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_explore008
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_ep3
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft0754_bpr025_ep4
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00752_bpr0248
-climb_tsb20_bpr020_filter_w20_p80_seed55_soft00756_bpr0252
-climb_tsb20_bpr020_filter_w20_filt_seed55_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_filt_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w20_abl_seed55_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_abl_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w20_tgt_seed55_soft0754_bpr025
-climb_tsb20_bpr020_filter_w20_tgt_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft00748_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0075_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft00752_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft00753_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft00755_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft00756_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft00758_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0076_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr023
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr024
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr0245
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr0255
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr026
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr0265
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr027
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr028
-climb_tsb20_bpr020_filter_w19_p80_seed52_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed53_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed54_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed56_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed57_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed58_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed64_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed65_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed66_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed67_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed68_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed70_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_tsb175
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_tsb18
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_tsb185
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_tsb19
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_tsb20
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_hour002
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_hour0025
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_hour003
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_hour0035
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_explore003
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_explore005
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_explore007
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_ep3
-climb_tsb20_bpr020_filter_w19_p80_seed55_soft0754_bpr025_ep4
-climb_tsb20_bpr020_filter_w19_filt_seed55_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_filt_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w19_abl_seed55_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_abl_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w19_tgt_seed55_soft0754_bpr025
-climb_tsb20_bpr020_filter_w19_tgt_seed55_soft0754_bpr025_ep2
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00748_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0075_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00752_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00753_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00755_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00756_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00758_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0076_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr025
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr0255
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr026
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr0265
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr0275
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr028
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr0285
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr029
-climb_tsb20_bpr020_filter_w18_p80_seed52_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed53_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed54_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed56_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed57_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed58_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed64_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed65_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed66_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed67_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed68_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed70_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_ep2
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_ep3
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_ep4
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_hour002
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_hour0025
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_hour003
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_hour0035
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_hour004
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_tsb175
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_tsb18
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_tsb185
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_tsb19
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_explore003
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_explore005
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr027_explore007
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00754_bpr026_ep2
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00754_bpr028_ep2
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00752_bpr027_ep2
-climb_tsb20_bpr020_filter_w18_p80_seed55_soft00756_bpr027_ep2
-climb_tsb20_bpr020_filter_w18_filt_seed55_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_filt_seed55_soft0754_bpr027_ep2
-climb_tsb20_bpr020_filter_w18_tgt_seed55_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_tgt_seed55_soft0754_bpr027_ep2
-climb_tsb20_bpr020_filter_w18_abl_seed55_soft0754_bpr027
-climb_tsb20_bpr020_filter_w18_abl_seed55_soft0754_bpr027_ep2
-climb_tsb20_bpr020_filter_w17_abl_seed55_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_abl_seed55_soft0752_bpr027_ep2
-climb_tsb20_bpr020_filter_w17_filt_seed55_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_filt_seed55_soft0752_bpr027_ep2
-climb_tsb20_bpr020_filter_w17_p80_seed52_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed53_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed54_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00746_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00748_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00752_bpr026_ep2
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00752_bpr028_ep2
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00754_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00754_bpr027_ep2
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00756_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft00758_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0075_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0075_bpr027_ep2
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0076_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr025
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr0255
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr026
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr0265
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr0275
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_ep2
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_ep3
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_ep4
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_explore003
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_explore005
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_explore007
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_explore008
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_hour002
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_hour0025
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_hour0035
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_hour004
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_hour005
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_hour006
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_tsb175
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_tsb18
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_tsb185
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_tsb19
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr027_tsb20
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr028
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr0285
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr029
-climb_tsb20_bpr020_filter_w17_p80_seed55_soft0752_bpr03
-climb_tsb20_bpr020_filter_w17_p80_seed56_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed57_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed58_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed64_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed65_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed66_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed67_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed68_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed70_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_p80_seed72_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_tgt_seed55_soft0752_bpr027
-climb_tsb20_bpr020_filter_w17_tgt_seed55_soft0752_bpr027_ep2
-climb_tsb20_bpr020_filter_w16_abl_seed55_soft0752
-climb_tsb20_bpr020_filter_w16_abl_seed55_soft0752_ep2
-climb_tsb20_bpr020_filter_w16_abl_seed67_soft0752
-climb_tsb20_bpr020_filter_w16_filt_seed55_soft0752
-climb_tsb20_bpr020_filter_w16_filt_seed55_soft0752_ep2
-climb_tsb20_bpr020_filter_w16_filt_seed67_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed52_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed53_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed54_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00746
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00748
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0075
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00751
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00753
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00754
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00754_ep2
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00755
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00756
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft00758
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0075_ep2
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0076
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr017
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr018
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr019
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr021
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr022
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr023
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr024
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr025
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr026
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_bpr027
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_ep2
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_ep3
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_ep4
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_explore003
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_explore005
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_explore007
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_explore008
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_hour003
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_hour005
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_hour007
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_tsb175
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_tsb178
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_tsb182
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_tsb185
-climb_tsb20_bpr020_filter_w16_p80_seed55_soft0752_tsb19
-climb_tsb20_bpr020_filter_w16_p80_seed56_soft00752_ep2
-climb_tsb20_bpr020_filter_w16_p80_seed56_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed57_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed58_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed64_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed65_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed66_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed67_soft00752_ep2
-climb_tsb20_bpr020_filter_w16_p80_seed67_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed68_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed70_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed72_soft00752_ep2
-climb_tsb20_bpr020_filter_w16_p80_seed72_soft0752
-climb_tsb20_bpr020_filter_w16_p80_seed73_soft0752
-climb_tsb20_bpr020_filter_w16_tgt_seed55_soft0752
-climb_tsb20_bpr020_filter_w16_tgt_seed55_soft0752_ep2
-climb_tsb20_bpr020_filter_w16_tgt_seed67_soft0752
-""".strip().splitlines()]
+
+def ensure_active_wave_ready() -> tuple[str, list[str]]:
+    pol = effective_policy(CITY)
+    st = load_state(CITY)
+    wave = st.get("active_wave") or pol["active_wave"]
+    ensure_wave_configs(wave, CITY)
+    recipes = load_overrides(CITY, wave)
+    return wave, sorted(recipes.keys())
 
 
 def stop_requested() -> bool:
@@ -328,8 +65,8 @@ def stop_requested() -> bool:
     return False
 
 
-
-
+def done(tag: str) -> bool:
+    return (ROOT / "results" / CITY / tag / "eval_test" / "metrics.json").exists()
 
 
 def failed(tag: str) -> bool:
@@ -340,49 +77,33 @@ def failed(tag: str) -> bool:
         text = log.read_text(errors="ignore")
     except Exception:
         return False
-    # Only judge the latest launch segment (log is append-only across retries).
     marker = f"# {CITY}_climb_pack "
     idx = text.rfind(marker)
     tail = text[idx:] if idx >= 0 else text[-4000:]
-    # Catch argparse errors and runtime ValueError (e.g. missing candidate_context).
     return (
         "__main__.py: error:" in tail
-        or "error: --" in tail
         or "ValueError:" in tail
         or "Traceback (most recent call last):" in tail
     )
 
 
-def done(tag: str) -> bool:
-    return (ROOT / "results" / CITY / tag / "eval_test" / "metrics.json").exists()
-
-
 def running(tag: str, live_cmds: set[str]) -> bool:
     needle = f"configs/{CITY}/{tag}.yaml"
-    out_needle = f"--out runs/{CITY}/{tag}"
     for cmd in live_cmds:
-        if needle in cmd or out_needle in cmd:
+        if needle in cmd or f"--out runs/{CITY}/{tag}" in cmd:
             return True
     pf = PIDDIR / f"{CITY}_{tag}.pid"
     if pf.exists():
         pid = pf.read_text().strip()
         if pid and Path(f"/proc/{pid}").exists():
-            # Zombies / empty cmdline are not live workers — clear pid and retry.
             try:
-                stat = open(f"/proc/{pid}/stat").read().split()
-                state = stat[2] if len(stat) > 2 else ""
-            except Exception:
-                state = ""
-            try:
-                cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="ignore")
+                cmd = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ").decode(
+                    errors="ignore"
+                )
             except Exception:
                 cmd = ""
-            if state != "Z" and tag in cmd:
+            if tag in cmd:
                 return True
-            try:
-                pf.unlink()
-            except Exception:
-                pass
     return False
 
 
@@ -390,28 +111,29 @@ def cache_ready(tag: str) -> bool:
     cfg = ROOT / "configs" / CITY / f"{tag}.yaml"
     if not cfg.exists():
         return False
-    text = cfg.read_text()
     cache = f"runs/{CITY}/cache_abl_tgt_last"
-    for line in text.splitlines():
+    for line in cfg.read_text().splitlines():
         if line.strip().startswith("cache:"):
             cache = line.split(":", 1)[1].strip().strip("\"'")
             break
     return (ROOT / cache / "manifest.json").exists()
 
 
-def launch(tag: str, gpu: int, gpu_limit: int) -> int:
+def launch(tag: str, gpu: int, gpu_limit: int, wave: str) -> int:
     LOG.mkdir(parents=True, exist_ok=True)
     PIDDIR.mkdir(parents=True, exist_ok=True)
-    cfg = f"configs/{CITY}/{tag}.yaml"
+    cfg_path = ROOT / "configs" / CITY / f"{tag}.yaml"
+    if not cfg_path.is_file():
+        ensure_wave_configs(wave, CITY)
+    if not cfg_path.is_file():
+        print(f"SKIP missing {cfg_path}", flush=True)
+        return -1
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     lf = open(LOG / f"{CITY}_{tag}.log", "ab")
-    lf.write(
-        f"\\n# {CITY}_climb_pack gpu={gpu} limit={gpu_limit} "
-        f"city_cap={city_cap(gpu_limit)}\\n".encode()
-    )
+    lf.write(f"\n# {CITY}_climb_pack gpu={gpu} limit={gpu_limit} wave={wave}\n".encode())
     proc = subprocess.Popen(
-        [PY, "-m", "tsmoe", "train", "--config", cfg],
+        [PY, "-m", "tsmoe", "train", "--config", str(cfg_path.relative_to(ROOT))],
         cwd=str(ROOT),
         stdout=lf,
         stderr=subprocess.STDOUT,
@@ -419,95 +141,143 @@ def launch(tag: str, gpu: int, gpu_limit: int) -> int:
         env=env,
     )
     (PIDDIR / f"{CITY}_{tag}.pid").write_text(str(proc.pid))
-    print(f"LAUNCH {CITY}/{tag} gpu={gpu} pid={proc.pid} limit={gpu_limit}", flush=True)
+    print(f"LAUNCH {CITY}/{tag} gpu={gpu} pid={proc.pid}", flush=True)
     return proc.pid
 
 
-def main():
+def main() -> None:
+    wave, queue = ensure_active_wave_ready()
+    pol = effective_policy(CITY)
     print(
-        f"{CITY} climb packer queue={len(QUEUE)} "
-        f"max_free={MAX_OUR_PER_GPU_FREE} max_shared={MAX_OUR_PER_GPU_SHARED} "
-        f"(foreign except dl-box → shared) stop={STOP_SENTINEL} | "
+        f"{CITY} climb packer wave={wave} queue={len(queue)} "
+        f"max_per_gpu={CITY_GPU_CAP} target={pol['target_acc']} sthgcn={pol['sthgcn']} | "
         f"{resource_snapshot(ROOT / 'runs')}",
         flush=True,
     )
     while True:
         if stop_requested():
-            print(f"STOP sentinel present ({STOP_SENTINEL}) — exit", flush=True)
+            print("STOP — exit", flush=True)
             break
-        if not host_ram_ok() or not disk_ok(ROOT / "runs"):
+        pol = effective_policy(CITY)
+        st = load_state(CITY)
+        if st.get("target_met"):
             print(
-                f"resource gate — skip launches this tick | {resource_snapshot(ROOT / 'runs')}",
+                f"target_met Acc≥{pol.get('target_acc')} — handoff next city (no idle)",
                 flush=True,
             )
+            try:
+                subprocess.check_call(
+                    [PY, str(ROOT / "scripts" / "city_climb_handoff.py"), "--from", CITY],
+                    cwd=str(ROOT),
+                )
+            except Exception as e:
+                print(f"handoff error: {e!r}", flush=True)
+            break
+
+        wave, queue = ensure_active_wave_ready()
+        if not host_ram_ok() or not disk_ok(ROOT / "runs"):
             time.sleep(45)
             continue
-        # Cross-packer lock so BJ/PL don't race-launch past the GPU cap.
-        # Over-limit still never kills — lock only serializes new launches.
-        PIDDIR.mkdir(parents=True, exist_ok=True)
         launched = 0
-        over = []
+        pending: list[str] = []
+        by_all = {g: 0 for g in range(4)}
+        by_city = {g: 0 for g in range(4)}
+        limits = {g: CITY_GPU_CAP for g in range(4)}
+        free = {g: 0 for g in range(4)}
+        live: set[str] = set()
         with open(PACK_LOCK, "a+", encoding="utf-8") as lockf:
             fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
             try:
-                by_all, by_city, live, limits, foreign = scan_gpus(CITY)
+                by_all, by_city, live, limits, _foreign = scan_gpus(CITY)
                 free = gpu_free_mib()
-                if not host_ram_ok() or not disk_ok(ROOT / "runs"):
-                    pending = []
-                else:
-                    pending = [
-                        t for t in QUEUE
-                        if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
-                    ]
+                pending = [
+                    t
+                    for t in queue
+                    if not done(t) and not failed(t) and not running(t, live) and cache_ready(t)
+                ]
                 order = sorted(range(4), key=lambda g: (by_all[g], by_city[g], -free.get(g, 0)))
                 for g in order:
-                    lim = limits.get(g, MAX_OUR_PER_GPU_FREE)
+                    lim = limits.get(g, CITY_GPU_CAP)
                     other = by_all[g] - by_city[g]
                     peers = peer_climb_packers_alive(CITY)
                     ccap = city_cap(lim, other_city_on_gpu=other, peer_packers=peers)
-                    # Over-limit: skip new launches only — never kill already-running jobs.
-                    if by_all[g] > lim:
-                        over.append(f"gpu{g}:{by_all[g]}>lim{lim}")
                     while (
                         by_all[g] < lim
                         and by_city[g] < ccap
                         and free.get(g, 0) >= MIN_FREE_MIB
                         and pending
                     ):
-                        if stop_requested() or not host_ram_ok() or not disk_ok(ROOT / "runs"):
+                        if stop_requested() or not host_ram_ok():
                             break
                         tag = pending.pop(0)
-                        launch(tag, g, lim)
+                        pid = launch(tag, g, lim, wave)
+                        if pid < 0:
+                            continue
                         by_all[g] += 1
                         by_city[g] += 1
                         free[g] = free.get(g, 0) - 2000
                         launched += 1
             finally:
-                # Let nvidia-smi see new PIDs before the other packer scans.
                 if launched:
                     time.sleep(2)
                 fcntl.flock(lockf.fileno(), fcntl.LOCK_UN)
-        if over:
-            print(
-                f"over-limit (leave running, no kill): {', '.join(over)}",
-                flush=True,
-            )
         print(
-            f"tick launched={launched} all={[by_all[g] for g in range(4)]} "
-            f"city={[by_city[g] for g in range(4)]} "
-            f"limits={[limits.get(g, MAX_OUR_PER_GPU_FREE) for g in range(4)]} "
-            f"foreign={[bool(foreign.get(g)) for g in range(4)]} "
-            f"free={[free.get(g, 0) for g in range(4)]} pending~={len(pending)}",
+            f"tick wave={wave} launched={launched} all={[by_all[g] for g in range(4)]} "
+            f"pending~={len(pending)}",
             flush=True,
         )
+        summary: dict = {}
+        try:
+            summary = scan_wave_metrics(CITY, wave)
+            write_harvest(
+                {
+                    "event": "tick",
+                    "wave": wave,
+                    "lock_acc": float(pol["lock_acc"]),
+                    "target_acc": float(pol["target_acc"]),
+                    **summary,
+                },
+                CITY,
+            )
+        except Exception as e:
+            print(f"harvest snapshot skip: {e!r}", flush=True)
+
+        top = float(summary.get("top") or 0.0)
+        best = summary.get("best")
+        if round(top, 6) >= round(float(pol["target_acc"]), 6):
+            st["target_met"] = True
+            st["lock_acc"] = top
+            st["best_tag"] = best
+            save_state(CITY, st)
+            print(f"TARGET HIT {top:.6f} best={best}", flush=True)
+            subprocess.call(
+                [PY, str(ROOT / "scripts" / "city_climb_handoff.py"), "--from", CITY],
+                cwd=ROOT,
+            )
+            break
+
         if not pending and launched == 0:
-            waiting_cache = [t for t in QUEUE if not done(t) and not cache_ready(t)]
-            still = [t for t in QUEUE if not done(t)]
+            still = [t for t in queue if not done(t)]
             if not still:
-                print(f"{CITY} climb queue DONE — exit", flush=True)
-                break
-            if waiting_cache and not any(running(t, live) for t in QUEUE):
-                print(f"waiting cache for {waiting_cache}", flush=True)
+                print(f"{CITY} wave {wave} DONE — autonomy advance", flush=True)
+                try:
+                    out = advance_wave_if_needed(CITY, force=False)
+                    print(f"autonomy: {out.get('event')} {out}", flush=True)
+                except Exception as e:
+                    print(f"autonomy error: {e!r}", flush=True)
+                time.sleep(10)
+                continue
+            under = any(by_all[g] < limits.get(g, CITY_GPU_CAP) for g in range(4))
+            if under:
+                print(
+                    f"{CITY} wave {wave} draining (still={len(still)}) with free GPU — prefetch",
+                    flush=True,
+                )
+                try:
+                    out = prefetch_next_wave(CITY)
+                    print(f"prefetch: {out.get('event')} {out}", flush=True)
+                except Exception as e:
+                    print(f"prefetch error: {e!r}", flush=True)
         time.sleep(45)
 
 
