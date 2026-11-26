@@ -359,6 +359,72 @@ def build_next_wave_recipes(
             if len(recipes) >= target_n:
                 break
 
+    # Last resort: lever bans / tried-set emptied the wave — fall back to policy
+    # densify families + combos with *policy* bans only (keep Acc-search alive).
+    if not recipes:
+        ban = set(policy.get("ban_keys") or [])
+        for combo in policy.get("combo_recipes") or []:
+            try_add(combo["tag"], dict(combo.get("overrides") or {}))
+            if len(recipes) >= target_n:
+                break
+        for fam in policy.get("densify_families") or []:
+            key = fam.get("key")
+            if not key or key in ban:
+                continue
+            tag_pfx = fam.get("tag") or str(key)[:4]
+            for v in list(fam.get("values") or []):
+                tag = (
+                    f"{tag_pfx}{_fmt_tag_value(v)}"
+                    if isinstance(v, float)
+                    else f"{tag_pfx}{v}"
+                )
+                try_add(tag, {key: v})
+                if len(recipes) >= target_n:
+                    break
+            if len(recipes) >= target_n:
+                break
+        # Fine grid around current base for leftover slots.
+        if len(recipes) < target_n:
+            base = dict(state.get("base") or policy.get("base") or {})
+            c_soft = float(base.get("soft_target_beta") or 0.1)
+            c_jump = float(base.get("jump_length_bias") or 0.1)
+            c_bpr = float(base.get("lambda_bpr") or 0.25)
+            c_pmi = float(base.get("pmi_score_bias") or 0.05)
+            softs = [round(c_soft + d, 4) for d in (-0.02, -0.01, -0.005, 0.005, 0.01, 0.02)]
+            jumps = [round(c_jump + d, 4) for d in (-0.02, -0.01, 0.01, 0.02)]
+            bprs = [round(c_bpr + d, 4) for d in (-0.03, -0.02, -0.01, 0.01, 0.02, 0.03)]
+            pmis = [round(c_pmi + d, 4) for d in (-0.02, -0.01, 0.01, 0.02)]
+            for s in softs:
+                for j in jumps:
+                    try_add(
+                        f"soft{_fmt_tag_value(s)}_jump{_fmt_tag_value(j)}",
+                        {"soft_target_beta": s, "jump_length_bias": j},
+                    )
+                    if len(recipes) >= target_n:
+                        break
+                if len(recipes) >= target_n:
+                    break
+            for s in softs:
+                for b in bprs:
+                    try_add(
+                        f"soft{_fmt_tag_value(s)}_bpr{_fmt_tag_value(b)}",
+                        {"soft_target_beta": s, "lambda_bpr": b},
+                    )
+                    if len(recipes) >= target_n:
+                        break
+                if len(recipes) >= target_n:
+                    break
+            for j in jumps:
+                for p in pmis:
+                    try_add(
+                        f"jump{_fmt_tag_value(j)}_pmi{_fmt_tag_value(p)}",
+                        {"jump_length_bias": j, "pmi_score_bias": p},
+                    )
+                    if len(recipes) >= target_n:
+                        break
+                if len(recipes) >= target_n:
+                    break
+
     state["tried_fingerprints"] = sorted(tried)[-5000:]
     return recipes
 

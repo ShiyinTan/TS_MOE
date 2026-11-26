@@ -136,11 +136,11 @@ def analyze(city: str, lock: float | None = None) -> dict[str, Any]:
     key_rank.sort(key=lambda r: -r["score"])
 
     ban_keys = {r["key"] for r in key_rank if r["verdict"] == "drop"} | ban_default
+    # Never ban MEL/policy keep levers — flat Acc history often marks them "drop"
+    # and then advance_failed_empty (no wN+1 recipes). Narrow via suggested_values.
     for k in list(ban_keys):
         if k in keep_default:
-            row = next((r for r in key_rank if r["key"] == k), None)
-            if row is None or row["verdict"] != "drop":
-                ban_keys.discard(k)
+            ban_keys.discard(k)
 
     keep_keys: list[str] = []
     for r in key_rank:
