@@ -41,6 +41,7 @@ from .resource_monitor import ResourceMonitor
 from .city_scale import (
     apply_large_city_fast, checkpoint_on_climb_pb_enabled, climb_lock_acc,
     eval_pool_shrink_kwargs, extract_known_acc1, is_climb_breakthrough,
+    resolve_final_negatives,
     resolve_city_name, val_pool_shrink_kwargs,
 )
 from .runtime import check_interrupt, install_interrupt_handler
@@ -1456,15 +1457,15 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
              tta_views=1, tta_fuse="mean", score_calib="off", calib_lambda=0.0,
              tta_seed=0, candidate_spatial_prior="off", candidate_prior_top_m=0,
              candidate_prior_gravity_beta=1.0, mc_dropout=0, mc_keep_train_dropout=False,
-             history_max_length=0, final_candidates=0, final_extra_random=0,
-             final_candidates_seed=0):
+             history_max_length=0, final_negatives=0, final_candidates=0,
+             final_extra_random=-1, final_candidates_seed=0):
     """Rank samples; with ``count_tables``, walk chronologically (score then update).
 
     Optional eval-only Acc levers: TTA (#36), Gaussian+feature calib (#34),
     coverage-safe spatial top-M pool shrink (#10), MC-dropout logit avg (#46).
 
-    ``final_candidates > 0`` applies the shared train/eval shortlist protocol:
-    constructed pool ∪ ``final_extra_random`` catalog rows → sample K (GT forced).
+    ``final_negatives > 0`` applies the shared train/eval shortlist protocol:
+    constructed pool ∪ extra random → sample N non-GT + force GT (total ≤ N+1).
     That Acc@1 is shortlist Acc, not full-pool / STHGCN-comparable.
     """
     mc_n = int(mc_dropout or 0)
@@ -1478,33 +1479,37 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     device = table.routing_prior.device
     pools, _resolutions = cache.candidate_pools(data)
     pool_shrink_stats = None
-    final_k = int(final_candidates or 0)
+    n_neg = int(final_negatives or 0)
+    if n_neg <= 0 and int(final_candidates or 0) > 1:
+        n_neg = int(final_candidates) - 1
     prior = str(candidate_spatial_prior or "off").lower()
     top_m = int(candidate_prior_top_m or 0)
-    # Final-K shortlist replaces spatial top-M shrink (same protocol as train).
-    if final_k > 0:
+    # Final-negatives+GT shortlist replaces spatial top-M shrink (same as train).
+    if n_neg > 0 or int(final_candidates or 0) > 0:
         if cache.uses_full_catalog_pools():
-            raise ValueError("--final-candidates requires constructed pools "
-                             "(not full-catalog cache)")
+            raise ValueError("--final-negatives/--final-candidates requires "
+                             "constructed pools (not full-catalog cache)")
         targets = (data["poi_token"][data["end"]] - 2).tolist()
         pools = build_final_pools(
             pools, targets, len(cache.pois),
-            final_k=final_k,
-            extra_random=int(final_extra_random or 0),
+            final_negatives=max(n_neg, 0),
+            extra_random=int(final_extra_random),
             seed=int(final_candidates_seed or 0),
             sample_indices=list(range(len(pools))))
         sizes = [int(p.numel()) for p in pools]
         pool_shrink_stats = {
-            "protocol": "final_candidates",
-            "final_candidates": final_k,
-            "final_extra_random": int(final_extra_random or 0),
+            "protocol": "final_negatives_plus_gt",
+            "final_negatives": n_neg,
+            "final_total_cap": n_neg + 1,
+            "final_extra_random": int(final_extra_random),
             "size_after_mean": float(sum(sizes) / max(len(sizes), 1)),
             "size_after_max": max(sizes) if sizes else 0,
         }
         print(
-            f"final_candidates={final_k} extra_random={int(final_extra_random or 0)} "
+            f"final_negatives={n_neg} (+GT ⇒ ≤{n_neg + 1}) "
+            f"extra_random={int(final_extra_random)} "
             f"size_after_mean={pool_shrink_stats['size_after_mean']:.1f} "
-            f"(GT force-included; shortlist Acc — not full-pool/STHGCN comparable)",
+            f"(shortlist Acc — not full-pool/STHGCN comparable)",
             flush=True)
     elif prior not in ("", "off", "none") and top_m > 0:
         if cache.uses_full_catalog_pools():
@@ -2215,8 +2220,10 @@ def train(args):
     settings["candidate_prior_top_m"] = int(getattr(args, "candidate_prior_top_m", 0) or 0)
     settings["history_max_length"] = int(getattr(args, "history_max_length", 0) or 0)
     settings["min_history_length"] = int(getattr(args, "min_history_length", 0) or 0)
+    settings["final_negatives"] = resolve_final_negatives(args)
     settings["final_candidates"] = int(getattr(args, "final_candidates", 0) or 0)
-    settings["final_extra_random"] = int(getattr(args, "final_extra_random", 0) or 0)
+    settings["final_extra_random"] = int(getattr(args, "final_extra_random", -1))
+    settings["early_stop_patience"] = int(getattr(args, "early_stop_patience", 0) or 0)
     settings["eval_pool_shrink"] = bool(eval_pool_shrink_kwargs(args))
     settings["val_pool_shrink"] = settings["eval_pool_shrink"]  # alias
     settings["dim"] = cfg.dim
@@ -2413,27 +2420,32 @@ def train(args):
     print(f"Wrote {stats_dir / 'candidate_pool_stats.json'}", flush=True)
     hist_cap = int(getattr(args, "history_max_length", 0) or 0) or None
     min_hist = int(getattr(args, "min_history_length", 0) or 0)
-    final_k = int(getattr(args, "final_candidates", 0) or 0)
-    final_extra = int(getattr(args, "final_extra_random", 0) or 0)
+    final_neg = resolve_final_negatives(args)
+    final_extra = int(getattr(args, "final_extra_random", -1))
     final_seed_arg = int(getattr(args, "final_candidates_seed", -1))
     final_seed = int(args.seed) if final_seed_arg < 0 else final_seed_arg
+    early_patience = int(getattr(args, "early_stop_patience", 0) or 0)
     if hist_cap:
         print(f"history_max_length={hist_cap} (runtime truncate)", flush=True)
     if min_hist > 1:
         print(f"min_history_length={min_hist} (train filter)", flush=True)
-    if final_k > 0:
+    if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
         print(
-            f"final_candidates={final_k} extra_random={final_extra} "
-            f"seed={final_seed} (shared train+eval shortlist; GT forced)",
+            f"final_negatives={final_neg} (+GT ⇒ ≤{final_neg + 1}) "
+            f"extra_random={final_extra} seed={final_seed} "
+            f"(shared train+eval shortlist)",
             flush=True,
         )
         if neg_sample == "adaptive_mix":
-            raise ValueError("--final-candidates is incompatible with --neg-sample adaptive_mix")
+            raise ValueError("--final-negatives is incompatible with --neg-sample adaptive_mix")
+    if early_patience > 0:
+        print(f"early_stop_patience={early_patience} (val {checkpoint_metric})", flush=True)
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     train_end_state = None
     results_history = []
     epoch_timings: list[dict] = []
     test_eval_dir = resolve_train_eval_dir(out, "test")
+    epochs_without_improve = 0
     for epoch in epoch_bar:
         check_interrupt()
         model.train()
@@ -2456,9 +2468,9 @@ def train(args):
             h, valid, target = device_batch(
                 data, idx, device, history_max_length=hist_cap)
             batch_pools = [train_pools[i] for i in idx.tolist()]
-            if final_k > 0:
+            if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
                 rows, positive, cand_mask = sample_final_candidates(
-                    target.detach().cpu(), len(cache.pois), final_k, rng,
+                    target.detach().cpu(), len(cache.pois), final_neg, rng,
                     pools=batch_pools, extra_random=final_extra,
                     seed=final_seed, sample_indices=idx.tolist())
             elif neg_sample == "adaptive_mix":
@@ -2643,6 +2655,7 @@ def train(args):
         if score > best:
             best = score
             best_metrics = metrics
+            epochs_without_improve = 0
             payload = dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
                            epoch=epoch, validation_ndcg10=row["NDCG@10"],
                            validation_acc1=row["Acc@1"],
@@ -2656,6 +2669,8 @@ def train(args):
             # Climb mode: defer disk write until test Acc beats lock_acc.
             if not climb_pb_only:
                 save_checkpoint(payload, out / "best.pt")
+        else:
+            epochs_without_improve += 1
         dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
                    "epochs": history}, out / "history.json")
         # Compact per-epoch val (+ optional test) history under results/.
@@ -2678,6 +2693,13 @@ def train(args):
               f"time train={timing['train_hms']} val={timing['validation_hms']} "
               f"test={timing['test_hms'] or '—'} total={timing['epoch_hms']}",
               flush=True)
+        if early_patience > 0 and epochs_without_improve >= early_patience:
+            print(
+                f"early_stop: no val {checkpoint_metric} improve for "
+                f"{early_patience} epochs (best={best:.6f} at patience)",
+                flush=True,
+            )
+            break
     if best_metrics is not None and best_payload is not None:
         best_path = out / "best.pt"
         # Prefer in-memory best (climb-pb mode may not have written best.pt yet).
@@ -2876,8 +2898,8 @@ def evaluate_cli(args):
     mc_dropout = int(getattr(args, "mc_dropout", 0) or 0)
     mc_keep = bool(getattr(args, "mc_keep_train_dropout", False))
     hist_cap = int(getattr(args, "history_max_length", 0) or 0)
-    final_k = int(getattr(args, "final_candidates", 0) or 0)
-    final_extra = int(getattr(args, "final_extra_random", 0) or 0)
+    final_neg = resolve_final_negatives(args)
+    final_extra = int(getattr(args, "final_extra_random", -1))
     final_seed = int(getattr(args, "final_candidates_seed", 0) or 0)
     if mc_dropout > 1:
         print(f"mc_dropout={mc_dropout} keep_train_dropout={mc_keep}", flush=True)
@@ -2890,7 +2912,8 @@ def evaluate_cli(args):
         candidate_spatial_prior=cand_prior, candidate_prior_top_m=cand_top_m,
         candidate_prior_gravity_beta=cand_gbeta,
         mc_dropout=mc_dropout, mc_keep_train_dropout=mc_keep,
-        history_max_length=hist_cap, final_candidates=final_k,
+        history_max_length=hist_cap, final_negatives=final_neg,
+        final_candidates=int(getattr(args, "final_candidates", 0) or 0),
         final_extra_random=final_extra, final_candidates_seed=final_seed)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)

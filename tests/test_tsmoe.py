@@ -434,21 +434,28 @@ class TestDesign(unittest.TestCase):
 
     def test_final_candidates_force_gt_and_cap(self):
         pool = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8], dtype=torch.long)
+        # 63-style: final_negatives=5 → GT + 5 = 6 total.
         finals = build_final_pools(
             [pool], [3], catalog_size=20,
-            final_k=5, extra_random=10, seed=0, sample_indices=[0])
+            final_negatives=5, extra_random=10, seed=0, sample_indices=[0])
         rows = finals[0].tolist()
         self.assertEqual(rows[0], 3)
-        self.assertEqual(len(rows), 5)
-        self.assertEqual(len(set(rows)), 5)
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(set(rows)), 6)
         # Deterministic across calls with same seed/index.
         again = build_final_pools(
             [pool], [3], catalog_size=20,
-            final_k=5, extra_random=10, seed=0, sample_indices=[0])[0].tolist()
+            final_negatives=5, extra_random=10, seed=0, sample_indices=[0])[0].tolist()
         self.assertEqual(rows, again)
-        tiny = finalize_candidate_pool([3, 1], target=3, final_k=5, rng=random.Random(0))
+        # extra_random < 0 ≈ pool size
+        auto = build_final_pools(
+            [pool], [3], catalog_size=40,
+            final_negatives=63, extra_random=-1, seed=1, sample_indices=[0])[0]
+        self.assertEqual(int(auto[0]), 3)
+        self.assertLessEqual(int(auto.numel()), 64)
+        tiny = finalize_candidate_pool([3, 1], target=3, final_negatives=5, rng=random.Random(0))
         self.assertEqual(tiny[0], 3)
-        self.assertLessEqual(len(tiny), 5)
+        self.assertLessEqual(len(tiny), 6)
 
     def test_history_max_length_and_min_filter(self):
         from tsmoe.data import L_DIM, T_DIM, filter_indices_min_history, make_batch

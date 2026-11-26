@@ -93,6 +93,13 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "jump_length_bias",
         "jump_dist",
         "pmi_score_bias",
+        "history_max_length",
+        "min_history_length",
+        "final_negatives",
+        "final_extra_random",
+        "early_stop_patience",
+        "checkpoint_metric",
+        "epochs",
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")

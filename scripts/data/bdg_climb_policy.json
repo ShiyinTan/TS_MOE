@@ -17,7 +17,7 @@
   ],
   "base": {
     "extends": "./climb_peak_soft010_f63.yaml",
-    "cache": "runs/bandung/cache_tgt_all_eval_last",
+    "cache": "runs/bandung/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
     "eval_test_every_epoch": false,
     "batch_size": 48,
@@ -34,33 +34,35 @@
     "pmi_score_bias": 0.05,
     "large_city_fast": "on",
     "checkpoint_on_climb_pb": "on",
-    "final_candidates": 63,
-    "final_extra_random": 50,
+    "final_negatives": 63,
+    "final_extra_random": -1,
     "candidate_spatial_prior": "off",
     "candidate_prior_top_m": 0,
-    "history_max_length": 50,
+    "history_max_length": 128,
     "min_history_length": 1,
-    "epochs": 2
+    "epochs": 50,
+    "early_stop_patience": 5,
+    "checkpoint_metric": "acc1"
   },
   "densify_families": [
-    {"tag": "hmax", "key": "history_max_length", "values": [20, 30, 40, 50]},
+    {"tag": "hmax", "key": "history_max_length", "values": [50, 64, 80, 100, 128]},
     {"tag": "hmin", "key": "min_history_length", "values": [1, 2, 3, 5]},
-    {"tag": "ep", "key": "epochs", "values": [2, 3, 4, 5]},
-    {"tag": "xrand", "key": "final_extra_random", "values": [0, 50, 100, 200]},
+    {"tag": "ep", "key": "epochs", "values": [10, 20, 30, 50]},
+    {"tag": "pat", "key": "early_stop_patience", "values": [3, 5, 8]},
     {"tag": "soft", "key": "soft_target_beta", "values": [0.08, 0.1, 0.12]},
     {"tag": "bpr", "key": "lambda_bpr", "values": [0.25, 0.29, 0.31]}
   ],
   "combo_recipes": [
-    {"tag": "hmax30_hmin2", "overrides": {"history_max_length": 30, "min_history_length": 2}},
-    {"tag": "hmax40_hmin3", "overrides": {"history_max_length": 40, "min_history_length": 3}},
-    {"tag": "hmax20_ep3", "overrides": {"history_max_length": 20, "epochs": 3}},
-    {"tag": "hmax50_ep4", "overrides": {"history_max_length": 50, "epochs": 4}},
-    {"tag": "hmin2_ep3", "overrides": {"min_history_length": 2, "epochs": 3}},
-    {"tag": "hmin3_ep4", "overrides": {"min_history_length": 3, "epochs": 4}},
-    {"tag": "xrand100_hmax40", "overrides": {"final_extra_random": 100, "history_max_length": 40}},
-    {"tag": "xrand0_hmax50", "overrides": {"final_extra_random": 0, "history_max_length": 50}},
-    {"tag": "hmax30_soft12", "overrides": {"history_max_length": 30, "soft_target_beta": 0.12}},
-    {"tag": "hmin2_bpr29", "overrides": {"min_history_length": 2, "lambda_bpr": 0.29}}
+    {"tag": "hmax80_hmin2", "overrides": {"history_max_length": 80, "min_history_length": 2}},
+    {"tag": "hmax100_hmin3", "overrides": {"history_max_length": 100, "min_history_length": 3}},
+    {"tag": "hmax64_ep50_pat5", "overrides": {"history_max_length": 64, "epochs": 50, "early_stop_patience": 5}},
+    {"tag": "hmax128_ep50_pat3", "overrides": {"history_max_length": 128, "epochs": 50, "early_stop_patience": 3}},
+    {"tag": "hmin2_ep30_pat5", "overrides": {"min_history_length": 2, "epochs": 30, "early_stop_patience": 5}},
+    {"tag": "hmin3_ep50_pat8", "overrides": {"min_history_length": 3, "epochs": 50, "early_stop_patience": 8}},
+    {"tag": "hmax80_soft12", "overrides": {"history_max_length": 80, "soft_target_beta": 0.12}},
+    {"tag": "hmin2_bpr29", "overrides": {"min_history_length": 2, "lambda_bpr": 0.29}},
+    {"tag": "hmax100_pat3", "overrides": {"history_max_length": 100, "early_stop_patience": 3}},
+    {"tag": "hmax50_ep20_pat5", "overrides": {"history_max_length": 50, "epochs": 20, "early_stop_patience": 5}}
   ],
-  "notes": "NEW PROTOCOL: final_candidates=63 shared train/eval (constructed∪extra_random→sample 63, GT forced). Acc@1 is shortlist@63 — NOT comparable to STHGCN 0.219 or prior lock 0.216742. Climb history_max_length / min_history_length / epochs / extra_random. lock_acc starts at 0 until first PB."
+  "notes": "final_negatives=63 + GT (≤64). extra_random=-1 ≈ pool size. cache L128 for history_max>50. epochs≤50 + early_stop_patience. Acc shortlist — not STHGCN-comparable. lock_acc=0 until PB."
 }

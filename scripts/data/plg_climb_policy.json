@@ -1,0 +1,110 @@
+{
+  "city": "palembang",
+  "lock_acc": 0.0,
+  "target_acc": 0.27,
+  "sthgcn": 0.246,
+  "active_wave": "w1",
+  "wave_size": 20,
+  "auto_advance": true,
+  "stem_prefix": "climb_tsb20_f63",
+  "stem_mid": "tgt",
+  "ban_keys": [
+    "seed"
+  ],
+  "base": {
+    "extends": "./climb_tsb20_f63.yaml",
+    "cache": "runs/palembang/cache_tgt_all_eval_last_L128",
+    "eval_test_every_epoch": false,
+    "batch_size": 48,
+    "eval_batch_size": 32,
+    "threads": 4,
+    "final_negatives": 63,
+    "final_extra_random": -1,
+    "history_max_length": 128,
+    "min_history_length": 1,
+    "epochs": 50,
+    "early_stop_patience": 5,
+    "checkpoint_metric": "acc1",
+    "checkpoint_on_climb_pb": "on",
+    "soft_target_beta": 0.0754,
+    "lambda_bpr": 0.25,
+    "seed": 55,
+    "session_summary": "on"
+  },
+  "densify_families": [
+    {
+      "tag": "hmax",
+      "key": "history_max_length",
+      "values": [
+        50,
+        64,
+        80,
+        100,
+        128
+      ]
+    },
+    {
+      "tag": "hmin",
+      "key": "min_history_length",
+      "values": [
+        1,
+        2,
+        3,
+        5
+      ]
+    },
+    {
+      "tag": "ep",
+      "key": "epochs",
+      "values": [
+        10,
+        20,
+        30,
+        50
+      ]
+    },
+    {
+      "tag": "pat",
+      "key": "early_stop_patience",
+      "values": [
+        3,
+        5,
+        8
+      ]
+    }
+  ],
+  "combo_recipes": [
+    {
+      "tag": "hmax80_hmin2",
+      "overrides": {
+        "history_max_length": 80,
+        "min_history_length": 2
+      }
+    },
+    {
+      "tag": "hmax128_ep50_pat5",
+      "overrides": {
+        "history_max_length": 128,
+        "epochs": 50,
+        "early_stop_patience": 5
+      }
+    },
+    {
+      "tag": "hmax64_ep30_pat3",
+      "overrides": {
+        "history_max_length": 64,
+        "epochs": 30,
+        "early_stop_patience": 3
+      }
+    },
+    {
+      "tag": "hmin2_ep50_pat5",
+      "overrides": {
+        "min_history_length": 2,
+        "epochs": 50,
+        "early_stop_patience": 5
+      }
+    }
+  ],
+  "notes": "palembang f63 shortlist on L128; lock 0 until PB"
+}

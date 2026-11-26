@@ -94,9 +94,12 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "checkpoint_on_climb_pb",
         "history_max_length",
         "min_history_length",
+        "final_negatives",
         "final_candidates",
         "final_extra_random",
         "final_candidates_seed",
+        "early_stop_patience",
+        "checkpoint_metric",
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")

@@ -35,7 +35,9 @@ MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "4"))
 MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "3"))
 # Bandung-or-larger Massive-STEPS cities (raw data/ CSV ≥ Bandung ≈57MB): tighter
 # per-GPU cap to avoid host RAM / VRAM pressure. Override with TSMOE_MAX_PER_GPU_LARGE.
-MAX_OUR_PER_GPU_LARGE = int(os.environ.get("TSMOE_MAX_PER_GPU_LARGE", "2"))
+# Raised to 4 (2026-11-27): pack prior-city + f63 densify when VRAM allows;
+# host RAM / free-VRAM gates still apply. Override with TSMOE_MAX_PER_GPU_LARGE.
+MAX_OUR_PER_GPU_LARGE = int(os.environ.get("TSMOE_MAX_PER_GPU_LARGE", "4"))
 try:
     # Single source of truth with train-time large_city_fast gating.
     from tsmoe.city_scale import LARGE_CITIES as _LARGE_CITIES  # type: ignore

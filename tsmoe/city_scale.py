@@ -77,6 +77,19 @@ def large_city_fast_enabled(args: Any) -> bool:
     return str(raw or "off").lower() in ("on", "true", "1", "yes")
 
 
+def resolve_final_negatives(args: Any) -> int:
+    """Non-GT shortlist count: ``final_negatives``, else ``final_candidates-1``."""
+    n = int(getattr(args, "final_negatives", 0) or 0)
+    if n > 0:
+        return n
+    total = int(getattr(args, "final_candidates", 0) or 0)
+    if total > 1:
+        return total - 1
+    if total == 1:
+        return 0
+    return 0
+
+
 def apply_large_city_fast(
     args: Any,
     *,
@@ -131,15 +144,15 @@ def apply_large_city_fast(
             after[key] = new
 
     # Eval pool shrink defaults (do not override explicit user settings).
-    # Shared final-K shortlist (--final-candidates) replaces mix top-M.
-    final_k = int(getattr(args, "final_candidates", 0) or 0)
+    # Shared final-negatives+GT shortlist replaces mix top-M.
+    final_neg = resolve_final_negatives(args)
     prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
     top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
     eval_pool: dict[str, Any] = {}
-    if final_k > 0:
+    if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
         eval_pool = {
-            "final_candidates": final_k,
-            "final_extra_random": int(getattr(args, "final_extra_random", 0) or 0),
+            "final_negatives": final_neg,
+            "final_extra_random": int(getattr(args, "final_extra_random", -1)),
             "candidate_spatial_prior": "off",
             "candidate_prior_top_m": 0,
         }
@@ -168,14 +181,14 @@ def apply_large_city_fast(
 
 def eval_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
     """Kwargs for ``evaluate()`` pool shrink on val *and* test (empty ⇒ full pool)."""
-    final_k = int(getattr(args, "final_candidates", 0) or 0)
+    final_neg = resolve_final_negatives(args)
     out: dict[str, Any] = {}
     hist_cap = int(getattr(args, "history_max_length", 0) or 0)
     if hist_cap > 0:
         out["history_max_length"] = hist_cap
-    if final_k > 0:
-        out["final_candidates"] = final_k
-        out["final_extra_random"] = int(getattr(args, "final_extra_random", 0) or 0)
+    if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
+        out["final_negatives"] = final_neg
+        out["final_extra_random"] = int(getattr(args, "final_extra_random", -1))
         out["final_candidates_seed"] = int(
             getattr(args, "final_candidates_seed", getattr(args, "seed", 0)) or 0)
         return out

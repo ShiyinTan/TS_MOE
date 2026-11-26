@@ -950,10 +950,18 @@ def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
 def enrich_pool_with_extra_random(
         pool: Sequence[int] | torch.Tensor, catalog_size: int, extra_random: int,
         rng: random.Random) -> list[int]:
-    """Union a constructed pool with up to ``extra_random`` uniform catalog rows."""
+    """Union a constructed pool with uniform catalog rows.
+
+    ``extra_random``:
+      * ``> 0`` — add up to that many new catalog rows
+      * ``0`` — no extras
+      * ``< 0`` — add about as many as the current pool size (``len(pool)``)
+    """
     members = list(dict.fromkeys(int(x) for x in (
         pool.tolist() if torch.is_tensor(pool) else pool)))
     extra = int(extra_random or 0)
+    if extra < 0:
+        extra = len(members)
     if extra <= 0 or catalog_size <= 0:
         return members
     existing = set(members)
@@ -966,26 +974,27 @@ def enrich_pool_with_extra_random(
 
 
 def finalize_candidate_pool(
-        members: Sequence[int], target: int, final_k: int,
+        members: Sequence[int], target: int, final_negatives: int,
         rng: random.Random) -> list[int]:
-    """Force-include in-catalog GT, then sample down to ``final_k`` rows.
+    """Force-include in-catalog GT, then sample ``final_negatives`` other rows.
 
-    Returns a list with GT first when ``target >= 0``, length ``≤ final_k``.
-    If the enriched pool is smaller than ``final_k``, keeps everyone (GT first).
+    Total size is ``≤ final_negatives + 1`` (GT + negatives). Example: 63
+    negatives → up to **64** candidates with GT first.
+    If the enriched pool is smaller, keeps everyone (GT first).
     """
-    final_k = int(final_k)
-    if final_k < 1:
-        raise ValueError("final_k must be >= 1")
+    n_neg = int(final_negatives)
+    if n_neg < 0:
+        raise ValueError("final_negatives must be >= 0")
     members = list(dict.fromkeys(int(x) for x in members))
     if target >= 0 and target not in members:
         members.append(target)
     if target < 0:
-        # OOV target: cannot force-include; still cap the pool.
-        if len(members) <= final_k:
+        # OOV target: cannot force-include; still cap to n_neg (no +1).
+        if len(members) <= n_neg:
             return members
-        return rng.sample(members, final_k)
+        return rng.sample(members, n_neg) if n_neg else []
     others = [row for row in members if row != target]
-    want = min(len(others), final_k - 1)
+    want = min(len(others), n_neg)
     if want >= len(others):
         chosen = others
     else:
@@ -998,12 +1007,13 @@ def build_final_pools(
         targets: Sequence[int] | torch.Tensor,
         catalog_size: int,
         *,
-        final_k: int,
-        extra_random: int = 0,
+        final_negatives: int,
+        extra_random: int = -1,
         seed: int = 0,
         sample_indices: Sequence[int] | None = None) -> list[torch.Tensor]:
-    """Eval-style pools ∪ extra random → sample ``final_k`` (GT forced).
+    """Eval-style pools ∪ extra random → sample ``final_negatives`` + GT.
 
+    ``extra_random < 0`` ⇒ add ~``len(pool)`` random catalog rows per sample.
     Deterministic per sample via ``seed + sample_index``. Used for train and
     eval/test so both share one shortlist protocol.
     """
@@ -1019,24 +1029,24 @@ def build_final_pools(
         rng = random.Random(int(seed) + 10007 * sample_i + 17)
         enriched = enrich_pool_with_extra_random(
             pool, catalog_size, extra_random, rng)
-        final = finalize_candidate_pool(enriched, target, final_k, rng)
+        final = finalize_candidate_pool(enriched, target, final_negatives, rng)
         out.append(torch.tensor(final, dtype=torch.long))
     return out
 
 
 def sample_final_candidates(
-        targets: torch.Tensor, catalog_size: int, final_k: int,
+        targets: torch.Tensor, catalog_size: int, final_negatives: int,
         rng: random.Random, pools: Sequence[torch.Tensor],
         *,
-        extra_random: int = 0,
+        extra_random: int = -1,
         seed: int = 0,
         sample_indices: Sequence[int] | None = None):
-    """Train-time rows/labels/mask under the final-``k`` shortlist protocol."""
+    """Train-time rows/labels/mask under the final-negatives+GT shortlist protocol."""
     if pools is None:
         raise ValueError("sample_final_candidates requires constructed pools")
     finals = build_final_pools(
         pools, targets, catalog_size,
-        final_k=final_k, extra_random=extra_random, seed=seed,
+        final_negatives=final_negatives, extra_random=extra_random, seed=seed,
         sample_indices=sample_indices)
     # Rebuild with a shared RNG path already used above; rows put GT at col 0.
     row_lists = []

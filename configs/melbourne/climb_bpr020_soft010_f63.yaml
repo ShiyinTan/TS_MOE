@@ -1,0 +1,15 @@
+# Melbourne · final_negatives=63+GT shortlist climb on L128 cache
+extends: ./climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml
+recipe_id: climb_bpr020_soft010_f63
+out: runs/melbourne/climb_bpr020_soft010_f63
+description: "melbourne f63 shortlist · final_negatives=63+GT · L128"
+cache: runs/melbourne/cache_tgt_all_eval_last_L128
+final_negatives: 63
+final_extra_random: -1
+candidate_spatial_prior: "off"
+candidate_prior_top_m: 0
+history_max_length: 128
+min_history_length: 1
+epochs: 50
+early_stop_patience: 5
+checkpoint_metric: acc1
