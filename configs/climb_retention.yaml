@@ -1,119 +1,124 @@
-# Single source of truth for climb config/results retention.
-# After locking a new WIN (or starting a new active wave), run:
-#   python scripts/sync_climb_retention.py --city melbourne --lock-config configs/melbourne/..._win.yaml \
-#       --results-tag <eval_run_dir> --acc 0.17xx --keep-wave w18 --apply
-# Or just re-sync from this file:
-#   python scripts/sync_climb_retention.py --apply
-#
-# Prune tools read this file (do not hardcode city WIN lists in two places).
-# Intermediate densify waves (*_wNN_*) are gitignored; only lock WIN configs belong in git.
-# Promote with: python scripts/promote_climb_config.py --city … --config … --acc … --git-add
-
 sthgcn:
-  tokyo: 0.250
+  tokyo: 0.25
   shanghai: 0.193
   beijing: 0.453
   melbourne: 0.168
   palembang: 0.246
-
+  bandung: 0.219
 cities:
   tokyo:
     status: STOPPED
     aggressive_configs: true
     keep_wave: null
     keep_configs:
-      - base.yaml
-      - peak.yaml
-      - win.yaml
+    - base.yaml
+    - peak.yaml
+    - win.yaml
     keep_results:
-      - hc_sg_Atime_bpr029_ssb026
-      - on_rev_soft10r
-      - on_rev010
-      - hc_win_trgate_gsb015
-    lock_acc: 0.267650
+    - hc_sg_Atime_bpr029_ssb026
+    - on_rev_soft10r
+    - on_rev010
+    - hc_win_trgate_gsb015
+    lock_acc: 0.26765
     lock_config: configs/tokyo/peak.yaml
-
   shanghai:
     status: STOPPED
     aggressive_configs: true
     keep_wave: null
     keep_configs:
-      - base.yaml
-      - peak.yaml
-      - win.yaml
-      - climb_soft005.yaml
-      - climb_soft005_filter_last.yaml
+    - base.yaml
+    - peak.yaml
+    - win.yaml
+    - climb_soft005.yaml
+    - climb_soft005_filter_last.yaml
     keep_results:
-      - climb_soft005_filter_last
-      - tune_soft005
-      - win
+    - climb_soft005_filter_last
+    - tune_soft005
+    - win
     lock_acc: 0.196226
     lock_config: configs/shanghai/climb_soft005_filter_last.yaml
-
   beijing:
     status: STOPPED
     aggressive_configs: true
     keep_wave: null
     keep_configs:
-      - base.yaml
-      - peak.yaml
-      - win.yaml
-      - climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml
-      - climb_s5g20_all_gauss020_wd005.yaml
-      - climb_s5g20_all_gauss020.yaml
-      - climb_s5g20_all_gauss015.yaml
-      - climb_ep2_trbias_soft005_geo020.yaml
+    - base.yaml
+    - peak.yaml
+    - win.yaml
+    - climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml
+    - climb_s5g20_all_gauss020_wd005.yaml
+    - climb_s5g20_all_gauss020.yaml
+    - climb_s5g20_all_gauss015.yaml
+    - climb_ep2_trbias_soft005_geo020.yaml
     keep_results:
-      - climb_s5g20_all_gauss020_wd005_w45_tgt_j12p10_pmi015_ep3
-      - climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win
-      - climb_s5g20_all_gauss020_wd005
-      - climb_s5g20_all_gauss020_wd02
-      - climb_s5g20_all_gauss020
-      - climb_s5g20_all_gauss015
-      - climb_ep2_trbias_soft005_geo020
+    - climb_s5g20_all_gauss020_wd005_w45_tgt_j12p10_pmi015_ep3
+    - climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win
+    - climb_s5g20_all_gauss020_wd005
+    - climb_s5g20_all_gauss020_wd02
+    - climb_s5g20_all_gauss020
+    - climb_s5g20_all_gauss015
+    - climb_ep2_trbias_soft005_geo020
     lock_acc: 0.465909
     lock_config: configs/beijing/climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml
-
   melbourne:
-    # STOPPED after clear margin vs STHGCN 0.168 (WIN Acc@1 0.173108).
-    # city_climb_finalize.py rewrites keep_* from Acc ledger; do not thin by hand.
     status: STOPPED
     aggressive_configs: true
     keep_wave: null
     keep_configs:
-      - base.yaml
-      - peak.yaml
-      - win.yaml
-      - climb_bpr020_soft010.yaml
-      - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml
-      - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_win.yaml
-      - climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win.yaml
+    - base.yaml
+    - peak.yaml
+    - win.yaml
+    - climb_bpr020_soft010.yaml
+    - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win.yaml
+    - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_win.yaml
+    - climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win.yaml
     keep_results:
-      - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win
-      - climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win
-      - climb_bpr020_soft010_w11_tgt_seed46_soft0078_session_bpr205_jump010
-      - climb_bpr020_soft010_w12_tgt_seed46_soft0078_session_bpr205_jump010_pmi05
-      - climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_ep2
-      - climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo015
-      - climb_bpr020_soft010_w19_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_gauss20
-      - climb_bpr020_soft010_w21_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft095_jump09
+    - climb_bpr020_soft010_tgt_soft0078_session_bpr205_jump010_pmi05_win
+    - climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win
+    - climb_bpr020_soft010_w11_tgt_seed46_soft0078_session_bpr205_jump010
+    - climb_bpr020_soft010_w12_tgt_seed46_soft0078_session_bpr205_jump010_pmi05
+    - climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_ep2
+    - climb_bpr020_soft010_w17_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_geo015
+    - climb_bpr020_soft010_w19_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_gauss20
+    - climb_bpr020_soft010_w21_tgt_seed46_soft0078_session_bpr205_jump010_pmi05_soft095_jump09
     keep_results_prefixes: []
     lock_acc: 0.173108
     lock_config: configs/melbourne/climb_bpr020_soft010_tgt_soft0095_session_bpr205_jump009_pmi05_win.yaml
     target_acc: 0.172
-    notes: "Finalize → results/melbourne/acc_ledger.{json,md}; Acc PB steps + top-5 exact tags kept (no whole-wave prefixes)."
-
+    notes: Finalize → results/melbourne/acc_ledger.{json,md}; Acc PB steps + top-5
+      exact tags kept (no whole-wave prefixes).
   palembang:
     status: STOPPED
     aggressive_configs: true
     keep_wave: null
     keep_configs:
-      - base.yaml
-      - peak.yaml
-      - win.yaml
-      - climb_tsb20_bpr020.yaml
-      - climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml
+    - base.yaml
+    - peak.yaml
+    - win.yaml
+    - climb_tsb20_bpr020.yaml
+    - climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml
     keep_results:
-      - climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr025
-    lock_acc: 0.259690
+    - climb_tsb20_bpr020_filter_w18_p80_seed55_soft0754_bpr025
+    lock_acc: 0.25969
     lock_config: configs/palembang/climb_tsb20_bpr020_filter_soft0754_bpr025_session_seed55.yaml
+  bandung:
+    status: ACTIVE
+    aggressive_configs: false
+    keep_wave: w1
+    keep_configs:
+    - base.yaml
+    - climb_peak_soft010.yaml
+    - climb_peak_soft010_bpr31_lock.yaml
+    - peak.yaml
+    - win.yaml
+    keep_results:
+    - climb_peak_soft010_bpr31_lock
+    - climb_peak_soft010_w1_tgt_bpr31
+    keep_results_prefixes:
+    - _w1_
+    - climb_peak_soft010_w1_
+    lock_acc: 0.216742
+    lock_config: configs/bandung/climb_peak_soft010_bpr31_lock.yaml
+    target_acc: 0.222
+    notes: Interim lock Acc@1=0.216742 from w1 bpr31; densify continues toward ≥0.222
+      vs STHGCN 0.219.

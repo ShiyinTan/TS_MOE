@@ -22,7 +22,7 @@ DEFAULT_BASE = {
     "geo_score_bias": 0.15,
     "revisit_score_bias": 0.1,
     # MEL climb priors: jump+pmi+bpr on foundation before densify.
-    "lambda_bpr": 0.25,
+    "lambda_bpr": 0.31,
     "jump_length_bias": 0.1,
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
