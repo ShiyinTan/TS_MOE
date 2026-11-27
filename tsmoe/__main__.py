@@ -467,8 +467,8 @@ def main(argv=None):
     t.add_argument(
         "--test-prior-top-m", type=int, default=None,
         help="per-epoch TEST pool top-M (mix prior + GT). 0 = full constructed "
-             "pool. Default: when --final-negatives>0 and large_city_fast on a "
-             "LARGE city → 512; else 0. Use for Bandung-scale checkpointing")
+             "pool. Default with --final-negatives: cities ≥ Bandung → 512 "
+             "(Bandung settings); smaller cities → 0 (full test every epoch)")
     t.add_argument(
         "--test-spatial-prior", type=str, default="auto",
         choices=("auto", "off", "geo", "gravity", "radiation", "mix"),
@@ -476,8 +476,8 @@ def main(argv=None):
     t.add_argument(
         "--final-test-full-pool", choices=("auto", "on", "off"), default="auto",
         help="post-train best-ckpt test pool: auto = full constructed once "
-             "when per-epoch test used top-M (STHGCN-style ledger); on/off "
-             "force. Per-epoch checkpointing still uses --test-prior-top-m")
+             "when per-epoch test used top-M (≥Bandung ledger); on/off force. "
+             "Smaller cities keep full constructed every epoch (top-M=0)")
     t.add_argument(
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping, MutableMapping
 
-# Massive-STEPS raw data/ CSV ≥ Bandung (~57MB) on the GPU box (2026-11-26).
+# Massive-STEPS cities **≥ Bandung** by raw data/ CSV footprint (GPU box 2026-11-26).
+# f63 test protocol: these use Bandung-style mix top-512/epoch + final full-pool;
+# smaller cities use full constructed test every epoch.
 LARGE_CITIES = frozenset({
     "bandung",
     "kuwait_city",
@@ -186,9 +188,9 @@ def resolve_test_prior_top_m(args: Any, city: str | None = None) -> int:
     """Per-epoch test top-M (0 = full constructed pool).
 
     Explicit ``--test-prior-top-m`` wins. Otherwise, when train/val use the
-    final_negatives shortlist **and** ``large_city_fast`` is on for a LARGE
-    city, default to ``FAST_EVAL_POOL`` top-M (512) so Bandung-scale cities
-    can checkpoint every epoch without ~12k-pool scoring.
+    final_negatives shortlist and the city is **≥ Bandung** (``LARGE_CITIES``),
+    default to ``FAST_EVAL_POOL`` top-M (512) — same as Bandung. Smaller
+    cities default to 0 (full constructed test every epoch).
     """
     raw = getattr(args, "test_prior_top_m", None)
     if raw is not None and str(raw) != "":
@@ -197,7 +199,7 @@ def resolve_test_prior_top_m(args: Any, city: str | None = None) -> int:
     if final_neg <= 0 and int(getattr(args, "final_candidates", 0) or 0) <= 0:
         return 0
     city_name = city if city is not None else resolve_city_name(args)
-    if large_city_fast_enabled(args) and is_large_city(city_name):
+    if is_large_city(city_name):
         return int(FAST_EVAL_POOL["candidate_prior_top_m"])
     return 0
 

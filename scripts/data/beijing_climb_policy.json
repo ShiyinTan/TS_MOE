@@ -109,5 +109,5 @@
       }
     }
   ],
-  "notes": "beijing f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test)."
+  "notes": "beijing f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch"
 }

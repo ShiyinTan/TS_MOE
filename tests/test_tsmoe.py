@@ -488,9 +488,11 @@ class TestDesign(unittest.TestCase):
             candidate_prior_gravity_beta=1.0,
             test_prior_top_m=None, test_spatial_prior="auto",
             final_test_full_pool="auto",
-            large_city_fast="on", out="runs/bandung/x", cache="runs/bandung/c",
+            large_city_fast="off", out="runs/bandung/x", cache="runs/bandung/c",
         )
+        # ≥ Bandung → Bandung-style top-512 even without large_city_fast.
         self.assertEqual(resolve_test_prior_top_m(args, "bandung"), 512)
+        self.assertEqual(resolve_test_prior_top_m(args, "jakarta"), 512)
         test_kw = eval_pool_shrink_kwargs(args, split="test", city="bandung")
         self.assertEqual(test_kw.get("candidate_prior_top_m"), 512)
         self.assertEqual(test_kw.get("candidate_spatial_prior"), "mix")
@@ -498,6 +500,9 @@ class TestDesign(unittest.TestCase):
             args, split="test", city="bandung", force_full=True)
         self.assertNotIn("candidate_prior_top_m", full_kw)
         self.assertTrue(final_test_full_pool_enabled(args, "bandung"))
+        # Smaller than Bandung → full constructed test.
+        self.assertEqual(resolve_test_prior_top_m(args, "melbourne"), 0)
+        self.assertEqual(resolve_test_prior_top_m(args, "beijing"), 0)
         # Explicit override
         args.test_prior_top_m = 1024
         self.assertEqual(resolve_test_prior_top_m(args, "bandung"), 1024)
