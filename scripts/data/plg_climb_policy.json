@@ -9,7 +9,12 @@
   "stem_prefix": "climb_tsb20_f63",
   "stem_mid": "tgt",
   "ban_keys": [
-    "seed"
+    "seed",
+    "transition_2hop_bias",
+    "pop_score_bias",
+    "hour_pop_score_bias",
+    "min_history_length",
+    "gauss_geo_bias"
   ],
   "base": {
     "extends": "./climb_tsb20_f63.yaml",
@@ -47,16 +52,6 @@
       ]
     },
     {
-      "tag": "hmin",
-      "key": "min_history_length",
-      "values": [
-        1,
-        2,
-        3,
-        5
-      ]
-    },
-    {
       "tag": "ep",
       "key": "epochs",
       "values": [
@@ -78,13 +73,6 @@
   ],
   "combo_recipes": [
     {
-      "tag": "hmax80_hmin2",
-      "overrides": {
-        "history_max_length": 80,
-        "min_history_length": 2
-      }
-    },
-    {
       "tag": "hmax128_ep50_pat5",
       "overrides": {
         "history_max_length": 128,
@@ -99,15 +87,7 @@
         "epochs": 30,
         "early_stop_patience": 3
       }
-    },
-    {
-      "tag": "hmin2_ep50_pat5",
-      "overrides": {
-        "min_history_length": 2,
-        "epochs": 50,
-        "early_stop_patience": 5
-      }
     }
   ],
-  "notes": "palembang f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers"
+  "notes": "palembang f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers | ban min_history_length (neg ROI)"
 }

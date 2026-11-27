@@ -13,7 +13,8 @@
     "transition_2hop_bias",
     "pop_score_bias",
     "hour_pop_score_bias",
-    "gauss_geo_bias"
+    "gauss_geo_bias",
+    "min_history_length"
   ],
   "base": {
     "extends": "./climb_peak_soft010_f63.yaml",
@@ -61,16 +62,6 @@
       ]
     },
     {
-      "tag": "hmin",
-      "key": "min_history_length",
-      "values": [
-        1,
-        2,
-        3,
-        5
-      ]
-    },
-    {
       "tag": "ep",
       "key": "epochs",
       "values": [
@@ -110,20 +101,6 @@
   ],
   "combo_recipes": [
     {
-      "tag": "hmax80_hmin2",
-      "overrides": {
-        "history_max_length": 80,
-        "min_history_length": 2
-      }
-    },
-    {
-      "tag": "hmax100_hmin3",
-      "overrides": {
-        "history_max_length": 100,
-        "min_history_length": 3
-      }
-    },
-    {
       "tag": "hmax64_ep50_pat5",
       "overrides": {
         "history_max_length": 64,
@@ -140,33 +117,10 @@
       }
     },
     {
-      "tag": "hmin2_ep30_pat5",
-      "overrides": {
-        "min_history_length": 2,
-        "epochs": 30,
-        "early_stop_patience": 5
-      }
-    },
-    {
-      "tag": "hmin3_ep50_pat8",
-      "overrides": {
-        "min_history_length": 3,
-        "epochs": 50,
-        "early_stop_patience": 8
-      }
-    },
-    {
       "tag": "hmax80_soft12",
       "overrides": {
         "history_max_length": 80,
         "soft_target_beta": 0.12
-      }
-    },
-    {
-      "tag": "hmin2_bpr29",
-      "overrides": {
-        "min_history_length": 2,
-        "lambda_bpr": 0.29
       }
     },
     {
@@ -185,5 +139,5 @@
       }
     }
   ],
-  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | LARGE test: mix top-512/epoch; final full-pool ledger. | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers"
+  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | LARGE test: mix top-512/epoch; final full-pool ledger. | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers | ban min_history_length (neg ROI)"
 }

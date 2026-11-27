@@ -7,6 +7,8 @@
 /results/*/*
 !/results/*/README.md
 !/results/*/climb_path.md
+!/results/*/negative_levers.md
+!/results/*/negative_levers.json
 !/results/*/settings_summary.md
 !/results/*/settings_summary.csv
 !/results/*/mean_std.md
