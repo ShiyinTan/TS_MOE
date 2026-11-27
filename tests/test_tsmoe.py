@@ -465,12 +465,42 @@ class TestDesign(unittest.TestCase):
             final_candidates_seed=0, seed=42, history_max_length=128,
             candidate_spatial_prior="off", candidate_prior_top_m=0,
             candidate_prior_gravity_beta=1.0,
+            test_prior_top_m=0, test_spatial_prior="auto",
+            large_city_fast="off", out="runs/melbourne/x",
         )
-        val_kw = eval_pool_shrink_kwargs(args, split="validation")
-        test_kw = eval_pool_shrink_kwargs(args, split="test")
+        val_kw = eval_pool_shrink_kwargs(args, split="validation", city="melbourne")
+        test_kw = eval_pool_shrink_kwargs(args, split="test", city="melbourne")
         self.assertEqual(val_kw.get("final_negatives"), 63)
         self.assertNotIn("final_negatives", test_kw)
+        self.assertNotIn("candidate_prior_top_m", test_kw)
         self.assertEqual(test_kw.get("history_max_length"), 128)
+
+    def test_test_prior_top_m_large_city_default(self):
+        from types import SimpleNamespace
+        from tsmoe.city_scale import (
+            eval_pool_shrink_kwargs, final_test_full_pool_enabled,
+            resolve_test_prior_top_m,
+        )
+        args = SimpleNamespace(
+            final_negatives=63, final_extra_random=-1, final_candidates=0,
+            final_candidates_seed=0, seed=42, history_max_length=128,
+            candidate_spatial_prior="off", candidate_prior_top_m=0,
+            candidate_prior_gravity_beta=1.0,
+            test_prior_top_m=None, test_spatial_prior="auto",
+            final_test_full_pool="auto",
+            large_city_fast="on", out="runs/bandung/x", cache="runs/bandung/c",
+        )
+        self.assertEqual(resolve_test_prior_top_m(args, "bandung"), 512)
+        test_kw = eval_pool_shrink_kwargs(args, split="test", city="bandung")
+        self.assertEqual(test_kw.get("candidate_prior_top_m"), 512)
+        self.assertEqual(test_kw.get("candidate_spatial_prior"), "mix")
+        full_kw = eval_pool_shrink_kwargs(
+            args, split="test", city="bandung", force_full=True)
+        self.assertNotIn("candidate_prior_top_m", full_kw)
+        self.assertTrue(final_test_full_pool_enabled(args, "bandung"))
+        # Explicit override
+        args.test_prior_top_m = 1024
+        self.assertEqual(resolve_test_prior_top_m(args, "bandung"), 1024)
 
     def test_history_max_length_and_min_filter(self):
         from tsmoe.data import L_DIM, T_DIM, filter_indices_min_history, make_batch

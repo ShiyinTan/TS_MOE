@@ -1,6 +1,6 @@
 # Bandung · final-negatives=63 (+GT ⇒ ≤64) climb foundation
-# Train+val shortlist 63+GT; test = full constructed pool every epoch;
-# best.pt by test Acc@1 (checkpoint_split=test). Val shortlist Acc ≠ STHGCN.
+# Train+val shortlist 63+GT; per-epoch test = mix top-512+GT (ckpt/early-stop);
+# final best-ckpt test = full constructed pool (ledger). Val shortlist ≠ STHGCN.
 extends: ./climb_peak_soft010.yaml
 recipe_id: climb_peak_soft010_f63
 out: runs/bandung/climb_peak_soft010_f63
@@ -17,3 +17,8 @@ early_stop_patience: 5
 checkpoint_metric: acc1
 checkpoint_split: test
 eval_test_every_epoch: true
+# LARGE city: per-epoch test = mix top-512+GT for ckpt; final best-ckpt = full pool.
+test_prior_top_m: 512
+test_spatial_prior: mix
+final_test_full_pool: auto
+large_city_fast: "on"

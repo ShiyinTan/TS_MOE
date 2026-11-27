@@ -50,6 +50,9 @@ ORDERED_KEYS = (
     "early_stop_patience",
     "checkpoint_metric",
     "checkpoint_split",
+    "test_prior_top_m",
+    "test_spatial_prior",
+    "final_test_full_pool",
     "candidate_spatial_prior",
     "candidate_prior_top_m",
 )

@@ -144,17 +144,20 @@ def apply_large_city_fast(
             after[key] = new
 
     # Eval pool shrink defaults (do not override explicit user settings).
-    # Shared final-negatives+GT shortlist replaces mix top-M.
+    # final_negatives → train/val shortlist; test may still use test_prior_top_m.
     final_neg = resolve_final_negatives(args)
     prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
     top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
     eval_pool: dict[str, Any] = {}
     if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
+        test_m = resolve_test_prior_top_m(args, city)
         eval_pool = {
             "final_negatives": final_neg,
             "final_extra_random": int(getattr(args, "final_extra_random", -1)),
             "candidate_spatial_prior": "off",
             "candidate_prior_top_m": 0,
+            "test_prior_top_m": test_m,
+            "test_spatial_prior": resolve_test_spatial_prior(args, top_m=test_m),
         }
     elif prior in ("", "off", "none") and top_m <= 0:
         for key, new in FAST_EVAL_POOL.items():
@@ -179,12 +182,68 @@ def apply_large_city_fast(
     return report
 
 
-def eval_pool_shrink_kwargs(args: Any, *, split: str = "validation") -> dict[str, Any]:
+def resolve_test_prior_top_m(args: Any, city: str | None = None) -> int:
+    """Per-epoch test top-M (0 = full constructed pool).
+
+    Explicit ``--test-prior-top-m`` wins. Otherwise, when train/val use the
+    final_negatives shortlist **and** ``large_city_fast`` is on for a LARGE
+    city, default to ``FAST_EVAL_POOL`` top-M (512) so Bandung-scale cities
+    can checkpoint every epoch without ~12k-pool scoring.
+    """
+    raw = getattr(args, "test_prior_top_m", None)
+    if raw is not None and str(raw) != "":
+        return max(0, int(raw))
+    final_neg = resolve_final_negatives(args)
+    if final_neg <= 0 and int(getattr(args, "final_candidates", 0) or 0) <= 0:
+        return 0
+    city_name = city if city is not None else resolve_city_name(args)
+    if large_city_fast_enabled(args) and is_large_city(city_name):
+        return int(FAST_EVAL_POOL["candidate_prior_top_m"])
+    return 0
+
+
+def resolve_test_spatial_prior(args: Any, *, top_m: int | None = None) -> str:
+    """Spatial prior used with ``test_prior_top_m`` (default ``mix``)."""
+    m = int(top_m) if top_m is not None else resolve_test_prior_top_m(args)
+    if m < 1:
+        return "off"
+    raw = str(getattr(args, "test_spatial_prior", "") or "").lower()
+    if raw in ("", "auto"):
+        return str(FAST_EVAL_POOL["candidate_spatial_prior"])
+    return raw
+
+
+def final_test_full_pool_enabled(args: Any, city: str | None = None) -> bool:
+    """Whether the post-train best-ckpt eval should use the full constructed pool.
+
+    ``auto`` (default): full once when per-epoch test used top-M (ledger Acc).
+    """
+    raw = getattr(args, "final_test_full_pool", "auto")
+    if isinstance(raw, bool):
+        return raw
+    s = str(raw or "auto").lower()
+    if s in ("on", "true", "1", "yes", "full"):
+        return True
+    if s in ("off", "false", "0", "no", "top_m"):
+        return False
+    # auto
+    return resolve_test_prior_top_m(args, city) > 0
+
+
+def eval_pool_shrink_kwargs(
+    args: Any,
+    *,
+    split: str = "validation",
+    city: str | None = None,
+    force_full: bool = False,
+) -> dict[str, Any]:
     """Kwargs for ``evaluate()`` pool shrink (empty ⇒ full constructed pool).
 
     With ``final_negatives`` / ``final_candidates``:
     - **validation** (and train): shared 63+GT shortlist protocol.
-    - **test**: no shortlist — full constructed pool ("正常" test Acc).
+    - **test**: no shortlist; optional ``test_prior_top_m`` mix shrink for
+      large-city per-epoch checkpointing. ``force_full=True`` skips top-M
+      (used for the rare post-train full-pool ledger eval).
     """
     final_neg = resolve_final_negatives(args)
     out: dict[str, Any] = {}
@@ -192,19 +251,30 @@ def eval_pool_shrink_kwargs(args: Any, *, split: str = "validation") -> dict[str
     if hist_cap > 0:
         out["history_max_length"] = hist_cap
     split_l = str(split or "validation").lower()
-    # Test stays on the full constructed pool when the shortlist protocol is on.
     if split_l in ("test", "eval_test"):
+        if force_full:
+            return out
+        top_m = resolve_test_prior_top_m(args, city)
+        if top_m > 0:
+            prior = resolve_test_spatial_prior(args, top_m=top_m)
+            if prior not in ("", "off", "none"):
+                out.update({
+                    "candidate_spatial_prior": prior,
+                    "candidate_prior_top_m": top_m,
+                    "candidate_prior_gravity_beta": float(
+                        getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0),
+                })
+                return out
+        # Explicit shared val/test prior (legacy, when not in f63 shortlist mode).
         prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
-        top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
-        # Do not apply final_negatives on test. Also skip mix top-M when the
-        # shortlist protocol owns train/val (prior was forced off for that).
+        shared_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
         if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
             return out
-        if prior in ("", "off", "none") or top_m < 1:
+        if prior in ("", "off", "none") or shared_m < 1:
             return out
         out.update({
             "candidate_spatial_prior": prior,
-            "candidate_prior_top_m": top_m,
+            "candidate_prior_top_m": shared_m,
             "candidate_prior_gravity_beta": float(
                 getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0),
         })
@@ -228,14 +298,20 @@ def eval_pool_shrink_kwargs(args: Any, *, split: str = "validation") -> dict[str
     return out
 
 
-def val_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
+def val_pool_shrink_kwargs(args: Any, city: str | None = None) -> dict[str, Any]:
     """Val/eval shortlist kwargs (train+val share final_negatives when set)."""
-    return eval_pool_shrink_kwargs(args, split="validation")
+    return eval_pool_shrink_kwargs(args, split="validation", city=city)
 
 
-def test_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
-    """Test-pool kwargs: full constructed pool under the 63 shortlist protocol."""
-    return eval_pool_shrink_kwargs(args, split="test")
+def test_pool_shrink_kwargs(
+    args: Any,
+    city: str | None = None,
+    *,
+    force_full: bool = False,
+) -> dict[str, Any]:
+    """Test-pool kwargs: optional mix top-M; ``force_full`` → full constructed."""
+    return eval_pool_shrink_kwargs(
+        args, split="test", city=city, force_full=force_full)
 
 
 def checkpoint_on_climb_pb_enabled(args: Any) -> bool:

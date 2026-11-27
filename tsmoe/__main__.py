@@ -452,19 +452,32 @@ def main(argv=None):
     t.add_argument(
         "--large-city-fast", choices=ON_OFF, default="off",
         help="when on *and* city is Bandung-or-larger: shrink model structure "
-             "(dim128/heads4, transition-attn=bias, no last_slot/session) and "
-             "val+test candidate pool via mix top-M=512 (geo/pop/user/hist/hour; "
-             "GT always included). No-op on small cities. See tsmoe/city_scale.py")
+             "(dim128/heads4, transition-attn=bias, no last_slot/session). "
+             "With --final-negatives, also defaults per-epoch test to mix "
+             "top-M=512 (see --test-prior-top-m). No-op on small cities.")
     t.add_argument(
         "--candidate-spatial-prior", type=str, default="off",
         choices=("off", "geo", "gravity", "radiation", "mix"),
-        help="train val+test pool shrink (#10): keep top-M by geo/gravity/"
-             "radiation/mix (GT always included). large_city_fast defaults to "
-             "mix on Bandung-or-larger")
+        help="shared val(+legacy test) pool shrink (#10): keep top-M by "
+             "geo/gravity/radiation/mix (GT always included). Ignored for "
+             "val when --final-negatives is set (val uses the 63 shortlist)")
     t.add_argument(
         "--candidate-prior-top-m", type=int, default=0,
-        help="top-M for --candidate-spatial-prior (0 = off). "
-             "large_city_fast default on large cities: 512 for val+test")
+        help="top-M for --candidate-spatial-prior (0 = off)")
+    t.add_argument(
+        "--test-prior-top-m", type=int, default=None,
+        help="per-epoch TEST pool top-M (mix prior + GT). 0 = full constructed "
+             "pool. Default: when --final-negatives>0 and large_city_fast on a "
+             "LARGE city → 512; else 0. Use for Bandung-scale checkpointing")
+    t.add_argument(
+        "--test-spatial-prior", type=str, default="auto",
+        choices=("auto", "off", "geo", "gravity", "radiation", "mix"),
+        help="spatial prior for --test-prior-top-m (default auto→mix)")
+    t.add_argument(
+        "--final-test-full-pool", choices=("auto", "on", "off"), default="auto",
+        help="post-train best-ckpt test pool: auto = full constructed once "
+             "when per-epoch test used top-M (STHGCN-style ledger); on/off "
+             "force. Per-epoch checkpointing still uses --test-prior-top-m")
     t.add_argument(
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
@@ -673,6 +686,9 @@ def main(argv=None):
             root.error("--candidate-spatial-prior requires --candidate-prior-top-m >= 1")
         if ctop < 0:
             root.error("--candidate-prior-top-m must be nonnegative")
+        ttop = getattr(args, "test_prior_top_m", None)
+        if ttop is not None and int(ttop) < 0:
+            root.error("--test-prior-top-m must be nonnegative")
     if args.command == "evaluate":
         geo_ov = getattr(args, "geo_score_bias", None)
         rev_ov = getattr(args, "revisit_score_bias", None)

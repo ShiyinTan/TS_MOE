@@ -40,6 +40,8 @@ DEFAULT_BASE = {
     "early_stop_patience": 5,
     "checkpoint_metric": "acc1",
     "checkpoint_split": "test",
+    "test_prior_top_m": 0,
+    "final_test_full_pool": "off",
     "checkpoint_on_climb_pb": "on",
 }
 
@@ -109,6 +111,9 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "early_stop_patience",
         "checkpoint_metric",
         "checkpoint_split",
+        "test_prior_top_m",
+        "test_spatial_prior",
+        "final_test_full_pool",
         "epochs",
     ):
         if k in cfg:

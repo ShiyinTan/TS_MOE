@@ -40,8 +40,9 @@ from .prepare import digest_json, dump_json, verify_files
 from .resource_monitor import ResourceMonitor
 from .city_scale import (
     apply_large_city_fast, checkpoint_on_climb_pb_enabled, climb_lock_acc,
-    eval_pool_shrink_kwargs, extract_known_acc1, is_climb_breakthrough,
-    resolve_final_negatives,
+    eval_pool_shrink_kwargs, extract_known_acc1, final_test_full_pool_enabled,
+    is_climb_breakthrough, resolve_final_negatives, resolve_test_prior_top_m,
+    resolve_test_spatial_prior,
     resolve_city_name, test_pool_shrink_kwargs, val_pool_shrink_kwargs,
 )
 from .runtime import check_interrupt, install_interrupt_handler
@@ -2225,9 +2226,16 @@ def train(args):
     settings["final_candidates"] = int(getattr(args, "final_candidates", 0) or 0)
     settings["final_extra_random"] = int(getattr(args, "final_extra_random", -1))
     settings["early_stop_patience"] = int(getattr(args, "early_stop_patience", 0) or 0)
-    settings["eval_pool_shrink"] = bool(eval_pool_shrink_kwargs(args, split="validation"))
+    settings["eval_pool_shrink"] = bool(
+        eval_pool_shrink_kwargs(args, split="validation", city=_climb_city))
     settings["val_pool_shrink"] = settings["eval_pool_shrink"]  # alias
-    settings["test_pool_shrink"] = bool(eval_pool_shrink_kwargs(args, split="test"))
+    _test_top_m = resolve_test_prior_top_m(args, _climb_city)
+    settings["test_prior_top_m"] = _test_top_m
+    settings["test_spatial_prior"] = resolve_test_spatial_prior(args, top_m=_test_top_m)
+    settings["final_test_full_pool"] = (
+        "on" if final_test_full_pool_enabled(args, _climb_city) else "off")
+    settings["test_pool_shrink"] = bool(
+        eval_pool_shrink_kwargs(args, split="test", city=_climb_city))
     settings["dim"] = cfg.dim
     settings["heads"] = cfg.heads
     settings["layers"] = cfg.layers
@@ -2458,10 +2466,18 @@ def train(args):
     if min_hist > 1:
         print(f"min_history_length={min_hist} (train filter)", flush=True)
     if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
+        _tm = resolve_test_prior_top_m(args, _climb_city)
+        _tp = resolve_test_spatial_prior(args, top_m=_tm)
+        if _tm > 0:
+            test_note = f"test = {_tp} top-{_tm}+GT each epoch"
+            if final_test_full_pool_enabled(args, _climb_city):
+                test_note += "; final best-ckpt = full constructed pool"
+        else:
+            test_note = "test = full constructed pool"
         print(
             f"final_negatives={final_neg} (+GT ⇒ ≤{final_neg + 1}) "
             f"extra_random={final_extra} seed={final_seed} "
-            f"(train+validation shortlist; test = full constructed pool)",
+            f"(train+validation shortlist; {test_note})",
             flush=True,
         )
         if neg_sample == "adaptive_mix":
@@ -2625,8 +2641,8 @@ def train(args):
             train_end_state = online_tables.state_dict()
         # Pass category_frequency so val (and saved best) always include groups + Acc@1.
         # Train+val share final_negatives shortlist; test stays on the full constructed pool.
-        _val_pool_kw = val_pool_shrink_kwargs(args)
-        _test_pool_kw = test_pool_shrink_kwargs(args)
+        _val_pool_kw = val_pool_shrink_kwargs(args, _climb_city)
+        _test_pool_kw = test_pool_shrink_kwargs(args, _climb_city)
         _val_t0 = time.perf_counter()
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
                            category_frequency, desc=f"val ep{epoch}", count_tables=val_tables,
@@ -2780,16 +2796,25 @@ def train(args):
                 test_tables = replay_train_tables(
                     cache, cfg, data,
                     visit_bin_edges=None if edges is None else torch.tensor(edges))
+        _final_full = final_test_full_pool_enabled(args, _climb_city)
+        _final_test_kw = test_pool_shrink_kwargs(
+            args, _climb_city, force_full=_final_full)
         _final_test_t0 = time.perf_counter()
-        test_metrics = evaluate(model, final, test, cache, args.eval_batch_size,
-                                args.chunk, category_frequency, desc="eval test",
-                                count_tables=test_tables,
-                                **test_pool_shrink_kwargs(args))
+        test_metrics = evaluate(
+            model, final, test, cache, args.eval_batch_size,
+            args.chunk, category_frequency,
+            desc="eval test full" if _final_full else "eval test",
+            count_tables=test_tables,
+            **_final_test_kw)
         final_test_s = time.perf_counter() - _final_test_t0
         final_test_timing = {
             "test_s": round(final_test_s, 3),
             "test_hms": _format_hms(final_test_s),
             "selection": selection_tag,
+            "pool": "full_constructed" if _final_full else (
+                f"{settings.get('test_spatial_prior')}_top"
+                f"{settings.get('test_prior_top_m')}"
+            ),
         }
         test_acc = extract_known_acc1(test_metrics)
         ckpt_saved = False
