@@ -95,15 +95,38 @@ def register_lock(
         c["aggressive_configs"] = status == "STOPPED"
     if keep_wave is not None:
         c["keep_wave"] = keep_wave or None
-        # refresh results prefix for active wave
+        # refresh results prefix for active wave (results prune uses startswith)
         if keep_wave:
-            # derive common prefix from melbourne-style climb_*_w17_
-            prefixes = set(c.get("keep_results_prefixes") or [])
-            # generic: keep any existing prefixes that match wave id
-            wid = keep_wave[1:] if keep_wave.startswith("w") else keep_wave
-            prefixes = {p for p in prefixes if f"_w{wid}_" in p or p.endswith(f"_w{wid}_")}
-            # add a broad prefix if city uses climb_*_wN_
-            prefixes.add(f"_w{wid}_")  # matcher treats as substring via startswith on full tag — see sync
+            wave = str(keep_wave)
+            if not wave.startswith("w"):
+                wave = f"w{wave}"
+            wid = wave[1:]
+            needle = f"_w{wid}_"
+            prefixes = {
+                p
+                for p in (c.get("keep_results_prefixes") or [])
+                if isinstance(p, str) and needle in p and not p.startswith("_")
+            }
+            # Prefer full dir prefix through …_wN_ (e.g. climb_peak_soft010_f63_w1_).
+            # Bare "_w1_" is NOT valid: startswith("_w1_") never matches climb_* tags.
+            if results_tag and needle in str(results_tag):
+                tag = str(results_tag)
+                prefixes.add(tag[: tag.find(needle) + len(needle)])
+            # Policy stem_prefix → <stem>_wN_
+            try:
+                alias = {"melbourne": "mel", "bandung": "bdg", "beijing": "bj", "palembang": "plg"}.get(
+                    city, city[:3]
+                )
+                pol_path = Path(__file__).resolve().parents[1] / "scripts" / "data" / f"{alias}_climb_policy.json"
+                if pol_path.is_file():
+                    import json
+
+                    pol = json.loads(pol_path.read_text())
+                    stem = str(pol.get("stem_prefix") or "").strip()
+                    if stem:
+                        prefixes.add(f"{stem}_{wave}_")
+            except Exception:
+                pass
             c["keep_results_prefixes"] = sorted(prefixes)
             c["status"] = c.get("status") or "ACTIVE"
             c["aggressive_configs"] = False
@@ -113,6 +136,15 @@ def register_lock(
         # also keep win recipe_id stem without path
         tags.add(Path(lock_config).stem)
         c["keep_results"] = sorted(tags)
+        # If ACTIVE wave is set, ensure prefix covers this tag's wave stem.
+        wave = c.get("keep_wave")
+        if wave and f"_{wave}_" in str(results_tag):
+            prefs = set(c.get("keep_results_prefixes") or [])
+            tag = str(results_tag)
+            needle = f"_{wave}_"
+            prefs.add(tag[: tag.find(needle) + len(needle)])
+            prefs = {p for p in prefs if not str(p).startswith("_")}
+            c["keep_results_prefixes"] = sorted(prefs)
     cities[city] = c
     data["cities"] = cities
     save_retention(data, path)

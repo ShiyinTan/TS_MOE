@@ -109,16 +109,19 @@ cities:
     - base.yaml
     - climb_peak_soft010.yaml
     - climb_peak_soft010_bpr31_lock.yaml
+    - climb_peak_soft010_f63.yaml
+    - climb_peak_soft010_f63_w1_tgt_ep2_soft.yaml
     - peak.yaml
     - win.yaml
     keep_results:
     - climb_peak_soft010_bpr31_lock
-    - climb_peak_soft010_w1_tgt_bpr31
+    - climb_peak_soft010_f63_w1_tgt_ep2_soft
     keep_results_prefixes:
-    - _w1_
-    - climb_peak_soft010_w1_
-    lock_acc: 0.216742
-    lock_config: configs/bandung/climb_peak_soft010_bpr31_lock.yaml
+    - climb_peak_soft010_f63_w1_
+    lock_acc: 0.169037
+    lock_config: configs/bandung/climb_peak_soft010_f63_w1_tgt_ep2_soft.yaml
     target_acc: 0.222
-    notes: Interim lock Acc@1=0.216742 from w1 bpr31; densify continues toward ≥0.222
-      vs STHGCN 0.219.
+    notes: >-
+      Full-test ledger lock Acc@1=0.169037 (f63_w1 ep2_soft). keep-prefix must be
+      climb_peak_soft010_f63_w1_ (NOT climb_peak_soft010_w1_) so in-flight f63_w1
+      results survive sync.
