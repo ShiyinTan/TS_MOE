@@ -1,6 +1,6 @@
-# Bandung · final-negatives=63 (+GT ⇒ ≤64) shortlist climb foundation
-# Train+eval: constructed pool ∪ ~pool-sized random → sample 63 non-GT + GT.
-# Acc@1 is shortlist@≤64 — NOT full-pool / STHGCN-comparable.
+# Bandung · final-negatives=63 (+GT ⇒ ≤64) climb foundation
+# Train+val shortlist 63+GT; test = full constructed pool every epoch;
+# best.pt by test Acc@1 (checkpoint_split=test). Val shortlist Acc ≠ STHGCN.
 extends: ./climb_peak_soft010.yaml
 recipe_id: climb_peak_soft010_f63
 out: runs/bandung/climb_peak_soft010_f63
@@ -15,3 +15,5 @@ min_history_length: 1
 epochs: 50
 early_stop_patience: 5
 checkpoint_metric: acc1
+checkpoint_split: test
+eval_test_every_epoch: true

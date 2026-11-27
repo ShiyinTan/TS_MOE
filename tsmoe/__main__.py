@@ -226,9 +226,10 @@ def main(argv=None):
              "(0/1 = off; prepare already requires ≥1). Train-only filter")
     t.add_argument(
         "--final-negatives", type=int, default=0,
-        help="shared train+eval shortlist: sample this many non-GT candidates "
+        help="train+validation shortlist: sample this many non-GT candidates "
              "from (constructed pool ∪ extra random), then force-include GT "
-             "(total ≤ N+1, e.g. 63 → up to 64). 0 = legacy. Acc@1 is "
+             "(total ≤ N+1, e.g. 63 → up to 64). Test keeps the full "
+             "constructed pool. 0 = legacy. Val Acc@1 under this protocol is "
              "shortlist Acc (not full-pool / STHGCN comparable)")
     t.add_argument(
         "--final-candidates", type=int, default=0,
@@ -243,8 +244,8 @@ def main(argv=None):
         help="seed for final shortlist sampling (-1 = use --seed)")
     t.add_argument(
         "--early-stop-patience", type=int, default=0,
-        help="stop training if val checkpoint metric does not improve for N "
-             "epochs (0 = disabled). Use with large --epochs (e.g. 50)")
+        help="stop training if the --checkpoint-split metric does not improve "
+             "for N epochs (0 = disabled). Use with large --epochs (e.g. 50)")
     t.add_argument("--no-surd", action="store_true", help="context-only U/S MoE ablation: disable all statistical guidance")
     t.add_argument(
         "--causal-counts", dest="no_causal_counts", action="store_false",
@@ -497,17 +498,25 @@ def main(argv=None):
     t.add_argument("--seed", type=int, default=42)
     t.add_argument(
         "--checkpoint-metric", choices=("ndcg10", "acc1"), default="ndcg10",
-        help="validation metric used to select best.pt: ndcg10 (default, "
-             "all_targets NDCG@10) or acc1 (all_targets Acc@1). Experimental "
-             "Acc@1 hillclimbs may use acc1; default keeps historical protocol.")
+        help="metric used to select best.pt on --checkpoint-split: ndcg10 "
+             "(default, all_targets NDCG@10) or acc1 (all_targets Acc@1). "
+             "Experimental Acc@1 hillclimbs may use acc1; default keeps "
+             "historical protocol.")
+    t.add_argument(
+        "--checkpoint-split", choices=("validation", "test", "val", "eval"),
+        default="validation",
+        help="which split's --checkpoint-metric selects best.pt (default "
+             "validation). 'test' requires --eval-test-every-epoch and picks "
+             "the epoch with best full-pool test metric (f63 climb protocol).")
     t.add_argument(
         "--eval-test-every-epoch",
         action=argparse.BooleanOptionalAction, default=True,
         help="after each training epoch, also evaluate on the test split and write "
              "results/<run>/eval_test/epoch_*.json + results/<run>/history.json "
-             "(default: on). Checkpoint selection uses --checkpoint-metric "
-             "(default validation NDCG@10); final best-ckpt test still runs. "
-             "Use --no-eval-test-every-epoch to skip per-epoch test for speed.")
+             "(default: on). With --checkpoint-split test, best.pt follows "
+             "per-epoch test; otherwise checkpoint uses validation. Final "
+             "best-ckpt test still runs. Use --no-eval-test-every-epoch to "
+             "skip per-epoch test for speed.")
     t.set_defaults(func=train)
 
     e = commands.add_parser(

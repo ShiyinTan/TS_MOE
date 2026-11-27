@@ -13,3 +13,5 @@ min_history_length: 1
 epochs: 50
 early_stop_patience: 5
 checkpoint_metric: acc1
+checkpoint_split: test
+eval_test_every_epoch: true

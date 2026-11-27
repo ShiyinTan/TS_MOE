@@ -12,7 +12,7 @@ DEFAULT_BASE = {
     "extends": "./climb_peak_soft010_f63.yaml",
     "cache": "runs/bandung/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
-    "eval_test_every_epoch": False,
+    "eval_test_every_epoch": True,
     "batch_size": 48,
     "eval_batch_size": 32,
     "threads": 4,
@@ -35,6 +35,7 @@ DEFAULT_BASE = {
     "epochs": 50,
     "early_stop_patience": 5,
     "checkpoint_metric": "acc1",
+    "checkpoint_split": "test",
 }
 
 
@@ -107,6 +108,7 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "final_candidates_seed",
         "early_stop_patience",
         "checkpoint_metric",
+        "checkpoint_split",
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")

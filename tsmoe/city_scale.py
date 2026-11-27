@@ -179,13 +179,36 @@ def apply_large_city_fast(
     return report
 
 
-def eval_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
-    """Kwargs for ``evaluate()`` pool shrink on val *and* test (empty ⇒ full pool)."""
+def eval_pool_shrink_kwargs(args: Any, *, split: str = "validation") -> dict[str, Any]:
+    """Kwargs for ``evaluate()`` pool shrink (empty ⇒ full constructed pool).
+
+    With ``final_negatives`` / ``final_candidates``:
+    - **validation** (and train): shared 63+GT shortlist protocol.
+    - **test**: no shortlist — full constructed pool ("正常" test Acc).
+    """
     final_neg = resolve_final_negatives(args)
     out: dict[str, Any] = {}
     hist_cap = int(getattr(args, "history_max_length", 0) or 0)
     if hist_cap > 0:
         out["history_max_length"] = hist_cap
+    split_l = str(split or "validation").lower()
+    # Test stays on the full constructed pool when the shortlist protocol is on.
+    if split_l in ("test", "eval_test"):
+        prior = str(getattr(args, "candidate_spatial_prior", "off") or "off").lower()
+        top_m = int(getattr(args, "candidate_prior_top_m", 0) or 0)
+        # Do not apply final_negatives on test. Also skip mix top-M when the
+        # shortlist protocol owns train/val (prior was forced off for that).
+        if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
+            return out
+        if prior in ("", "off", "none") or top_m < 1:
+            return out
+        out.update({
+            "candidate_spatial_prior": prior,
+            "candidate_prior_top_m": top_m,
+            "candidate_prior_gravity_beta": float(
+                getattr(args, "candidate_prior_gravity_beta", 1.0) or 1.0),
+        })
+        return out
     if final_neg > 0 or int(getattr(args, "final_candidates", 0) or 0) > 0:
         out["final_negatives"] = final_neg
         out["final_extra_random"] = int(getattr(args, "final_extra_random", -1))
@@ -205,8 +228,14 @@ def eval_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
     return out
 
 
-# Back-compat alias.
-val_pool_shrink_kwargs = eval_pool_shrink_kwargs
+def val_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
+    """Val/eval shortlist kwargs (train+val share final_negatives when set)."""
+    return eval_pool_shrink_kwargs(args, split="validation")
+
+
+def test_pool_shrink_kwargs(args: Any) -> dict[str, Any]:
+    """Test-pool kwargs: full constructed pool under the 63 shortlist protocol."""
+    return eval_pool_shrink_kwargs(args, split="test")
 
 
 def checkpoint_on_climb_pb_enabled(args: Any) -> bool:

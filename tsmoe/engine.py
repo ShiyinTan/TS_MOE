@@ -42,7 +42,7 @@ from .city_scale import (
     apply_large_city_fast, checkpoint_on_climb_pb_enabled, climb_lock_acc,
     eval_pool_shrink_kwargs, extract_known_acc1, is_climb_breakthrough,
     resolve_final_negatives,
-    resolve_city_name, val_pool_shrink_kwargs,
+    resolve_city_name, test_pool_shrink_kwargs, val_pool_shrink_kwargs,
 )
 from .runtime import check_interrupt, install_interrupt_handler
 from .surd import ATOM_ORDER, EXPERT_ORDER, SOURCE_ORDER, FrozenSURDTable
@@ -1464,9 +1464,10 @@ def evaluate(model, table, data, cache, batch_size, chunk, cat_frequency=None, d
     Optional eval-only Acc levers: TTA (#36), Gaussian+feature calib (#34),
     coverage-safe spatial top-M pool shrink (#10), MC-dropout logit avg (#46).
 
-    ``final_negatives > 0`` applies the shared train/eval shortlist protocol:
+    ``final_negatives > 0`` applies the train/validation shortlist protocol:
     constructed pool ∪ extra random → sample N non-GT + force GT (total ≤ N+1).
-    That Acc@1 is shortlist Acc, not full-pool / STHGCN-comparable.
+    That Acc@1 is shortlist Acc, not full-pool / STHGCN-comparable. Training
+    leaves test on the full constructed pool via ``test_pool_shrink_kwargs``.
     """
     mc_n = int(mc_dropout or 0)
     if mc_n < 0:
@@ -2224,8 +2225,9 @@ def train(args):
     settings["final_candidates"] = int(getattr(args, "final_candidates", 0) or 0)
     settings["final_extra_random"] = int(getattr(args, "final_extra_random", -1))
     settings["early_stop_patience"] = int(getattr(args, "early_stop_patience", 0) or 0)
-    settings["eval_pool_shrink"] = bool(eval_pool_shrink_kwargs(args))
+    settings["eval_pool_shrink"] = bool(eval_pool_shrink_kwargs(args, split="validation"))
     settings["val_pool_shrink"] = settings["eval_pool_shrink"]  # alias
+    settings["test_pool_shrink"] = bool(eval_pool_shrink_kwargs(args, split="test"))
     settings["dim"] = cfg.dim
     settings["heads"] = cfg.heads
     settings["layers"] = cfg.layers
@@ -2315,15 +2317,41 @@ def train(args):
     if checkpoint_metric not in ("ndcg10", "acc1"):
         raise ValueError(f"unsupported --checkpoint-metric {checkpoint_metric!r}")
     settings["checkpoint_metric"] = checkpoint_metric
-    selection_tag = (
-        "best_checkpoint_by_Acc@1" if checkpoint_metric == "acc1"
-        else "best_checkpoint_by_NDCG@10")
+    checkpoint_split = str(getattr(args, "checkpoint_split", "validation") or "validation").lower()
+    if checkpoint_split in ("val", "eval"):
+        checkpoint_split = "validation"
+    if checkpoint_split not in ("validation", "test"):
+        raise ValueError(
+            f"unsupported --checkpoint-split {checkpoint_split!r} "
+            "(expected validation|test)")
+    if checkpoint_split == "test" and not eval_test_every_epoch:
+        raise ValueError(
+            "--checkpoint-split test requires --eval-test-every-epoch "
+            "(best.pt is chosen from per-epoch test metrics)")
+    settings["checkpoint_split"] = checkpoint_split
+    if checkpoint_metric == "acc1":
+        selection_tag = (
+            "best_checkpoint_by_test_Acc@1" if checkpoint_split == "test"
+            else "best_checkpoint_by_Acc@1"
+        )
+    else:
+        selection_tag = (
+            "best_checkpoint_by_test_NDCG@10" if checkpoint_split == "test"
+            else "best_checkpoint_by_NDCG@10"
+        )
     if eval_test_every_epoch:
-        print("eval_test_every_epoch=on (per-epoch test → results/.../eval_test/epoch_*.json; "
-              f"checkpoint selected by val {checkpoint_metric})", flush=True)
+        print(
+            "eval_test_every_epoch=on (per-epoch test → results/.../eval_test/epoch_*.json; "
+            f"checkpoint selected by {checkpoint_split} {checkpoint_metric})",
+            flush=True,
+        )
     else:
         print("eval_test_every_epoch=off (final best-ckpt test only)", flush=True)
-    print(f"checkpoint_metric={checkpoint_metric} → {selection_tag}", flush=True)
+    print(
+        f"checkpoint_metric={checkpoint_metric} checkpoint_split={checkpoint_split} "
+        f"→ {selection_tag}",
+        flush=True,
+    )
     # Persist pool-size audit under results/ (not beside checkpoints).
     stats_dir = results_run_dir(out)
     stats_dir.mkdir(parents=True, exist_ok=True)
@@ -2433,13 +2461,17 @@ def train(args):
         print(
             f"final_negatives={final_neg} (+GT ⇒ ≤{final_neg + 1}) "
             f"extra_random={final_extra} seed={final_seed} "
-            f"(shared train+eval shortlist)",
+            f"(train+validation shortlist; test = full constructed pool)",
             flush=True,
         )
         if neg_sample == "adaptive_mix":
             raise ValueError("--final-negatives is incompatible with --neg-sample adaptive_mix")
     if early_patience > 0:
-        print(f"early_stop_patience={early_patience} (val {checkpoint_metric})", flush=True)
+        print(
+            f"early_stop_patience={early_patience} "
+            f"({checkpoint_split} {checkpoint_metric})",
+            flush=True,
+        )
     epoch_bar = tqdm(range(1, args.epochs + 1), desc="epochs", dynamic_ncols=True)
     train_end_state = None
     results_history = []
@@ -2592,17 +2624,15 @@ def train(args):
         if cfg.causal_counts:
             train_end_state = online_tables.state_dict()
         # Pass category_frequency so val (and saved best) always include groups + Acc@1.
-        _eval_pool_kw = eval_pool_shrink_kwargs(args)
+        # Train+val share final_negatives shortlist; test stays on the full constructed pool.
+        _val_pool_kw = val_pool_shrink_kwargs(args)
+        _test_pool_kw = test_pool_shrink_kwargs(args)
         _val_t0 = time.perf_counter()
         metrics = evaluate(model, final, val, cache, args.eval_batch_size, args.chunk,
                            category_frequency, desc=f"val ep{epoch}", count_tables=val_tables,
-                           **_eval_pool_kw)
+                           **_val_pool_kw)
         val_s = time.perf_counter() - _val_t0
         row = metrics["all_targets"]
-        if checkpoint_metric == "acc1":
-            score = row["Acc@1"]
-        else:
-            score = row["NDCG@10"]
         record = dict(epoch=epoch, loss=loss_sum / len(data["end"]),
                       loss_terms=dict(zip(
                           ("rec", "surd", "balance", "bpr"),
@@ -2614,6 +2644,7 @@ def train(args):
             validation=primary_metric_snapshot(metrics),
         )
         test_s = None
+        epoch_test = None
         # Optional per-epoch test on *current* weights (not best ckpt); separate table clone.
         if eval_test_every_epoch:
             epoch_test_tables = online_tables.clone() if cfg.causal_counts else None
@@ -2621,7 +2652,7 @@ def train(args):
             epoch_test = evaluate(
                 model, final, test, cache, args.eval_batch_size, args.chunk,
                 category_frequency, desc=f"test ep{epoch}", count_tables=epoch_test_tables,
-                **_eval_pool_kw)
+                **_test_pool_kw)
             test_s = time.perf_counter() - _test_t0
             record["test"] = epoch_test
             results_epoch["test"] = primary_metric_snapshot(epoch_test)
@@ -2646,6 +2677,18 @@ def train(args):
                   f"test Acc@1={trow['Acc@1']:.4f} NDCG@1={trow['NDCG@1']:.4f} "
                   f"MRR={trow['MRR']:.4f}  Acc@10={trow['Acc@10']:.4f} "
                   f"NDCG@10={trow['NDCG@10']:.4f}", flush=True)
+        # Checkpoint / early-stop score: validation (default) or per-epoch test.
+        if checkpoint_split == "test":
+            assert epoch_test is not None
+            score_row = epoch_test["all_targets"]
+            score_metrics = epoch_test
+        else:
+            score_row = row
+            score_metrics = metrics
+        if checkpoint_metric == "acc1":
+            score = score_row["Acc@1"]
+        else:
+            score = score_row["NDCG@10"]
         timing = _epoch_timing_payload(epoch, train_s, val_s, test_s)
         record["timing"] = timing
         results_epoch["timing"] = timing
@@ -2654,14 +2697,21 @@ def train(args):
         results_history.append(results_epoch)
         if score > best:
             best = score
+            # Always keep the matching epoch's *validation* metrics for the val report
+            # (even when best.pt is selected by test).
             best_metrics = metrics
             epochs_without_improve = 0
             payload = dict(cache_id=cache.id, config=asdict(cfg), weights=model.state_dict(),
                            epoch=epoch, validation_ndcg10=row["NDCG@10"],
                            validation_acc1=row["Acc@1"],
                            checkpoint_metric=checkpoint_metric,
+                           checkpoint_split=checkpoint_split,
                            checkpoint_score=score,
                            training_args=settings)
+            if epoch_test is not None:
+                t_all = epoch_test["all_targets"]
+                payload["test_ndcg10"] = t_all["NDCG@10"]
+                payload["test_acc1"] = t_all["Acc@1"]
             if train_end_state is not None:
                 payload["count_tables"] = train_end_state
                 payload["visit_bin_edges"] = visit_bin_edges.tolist()
@@ -2677,6 +2727,7 @@ def train(args):
         dump_json({"training_args": settings, "candidate_pool_stats": pool_stats,
                    "eval_test_every_epoch": eval_test_every_epoch,
                    "checkpoint_metric": checkpoint_metric,
+                   "checkpoint_split": checkpoint_split,
                    "epochs": results_history}, stats_dir / "history.json")
         # Live per-epoch wall times under results/<city>/<config>/.
         _write_epoch_timings(stats_dir, epoch_timings)
@@ -2689,13 +2740,13 @@ def train(args):
         print(f"epoch={epoch} loss={record['loss']:.5f}  "
               f"val Acc@1={row['Acc@1']:.4f} NDCG@1={row['NDCG@1']:.4f} MRR={row['MRR']:.4f}  "
               f"Acc@10={row['Acc@10']:.4f} NDCG@10={row['NDCG@10']:.4f}  "
-              f"ckpt_score({checkpoint_metric})={score:.6f}  "
+              f"ckpt_score({checkpoint_split}/{checkpoint_metric})={score:.6f}  "
               f"time train={timing['train_hms']} val={timing['validation_hms']} "
               f"test={timing['test_hms'] or '—'} total={timing['epoch_hms']}",
               flush=True)
         if early_patience > 0 and epochs_without_improve >= early_patience:
             print(
-                f"early_stop: no val {checkpoint_metric} improve for "
+                f"early_stop: no {checkpoint_split} {checkpoint_metric} improve for "
                 f"{early_patience} epochs (best={best:.6f} at patience)",
                 flush=True,
             )
@@ -2733,7 +2784,7 @@ def train(args):
         test_metrics = evaluate(model, final, test, cache, args.eval_batch_size,
                                 args.chunk, category_frequency, desc="eval test",
                                 count_tables=test_tables,
-                                **eval_pool_shrink_kwargs(args))
+                                **test_pool_shrink_kwargs(args))
         final_test_s = time.perf_counter() - _final_test_t0
         final_test_timing = {
             "test_s": round(final_test_s, 3),
@@ -2898,9 +2949,19 @@ def evaluate_cli(args):
     mc_dropout = int(getattr(args, "mc_dropout", 0) or 0)
     mc_keep = bool(getattr(args, "mc_keep_train_dropout", False))
     hist_cap = int(getattr(args, "history_max_length", 0) or 0)
-    final_neg = resolve_final_negatives(args)
-    final_extra = int(getattr(args, "final_extra_random", -1))
-    final_seed = int(getattr(args, "final_candidates_seed", 0) or 0)
+    # Mirror train: validation may shortlist; test stays on the full constructed pool.
+    pool_kw = eval_pool_shrink_kwargs(args, split=str(args.split))
+    final_neg = int(pool_kw.get("final_negatives", 0) or 0)
+    final_extra = int(pool_kw.get("final_extra_random", getattr(args, "final_extra_random", -1)))
+    final_seed = int(pool_kw.get(
+        "final_candidates_seed",
+        getattr(args, "final_candidates_seed", 0)) or 0)
+    if "candidate_spatial_prior" in pool_kw:
+        cand_prior = str(pool_kw["candidate_spatial_prior"])
+        cand_top_m = int(pool_kw.get("candidate_prior_top_m", 0) or 0)
+        cand_gbeta = float(pool_kw.get("candidate_prior_gravity_beta", 1.0) or 1.0)
+    elif final_neg > 0:
+        cand_prior, cand_top_m = "off", 0
     if mc_dropout > 1:
         print(f"mc_dropout={mc_dropout} keep_train_dropout={mc_keep}", flush=True)
     metrics = evaluate(
@@ -2912,8 +2973,9 @@ def evaluate_cli(args):
         candidate_spatial_prior=cand_prior, candidate_prior_top_m=cand_top_m,
         candidate_prior_gravity_beta=cand_gbeta,
         mc_dropout=mc_dropout, mc_keep_train_dropout=mc_keep,
-        history_max_length=hist_cap, final_negatives=final_neg,
-        final_candidates=int(getattr(args, "final_candidates", 0) or 0),
+        history_max_length=hist_cap or pool_kw.get("history_max_length", 0),
+        final_negatives=final_neg,
+        final_candidates=0 if final_neg > 0 else int(getattr(args, "final_candidates", 0) or 0),
         final_extra_random=final_extra, final_candidates_seed=final_seed)
     payload = build_eval_payload(args, cache, metrics, device,
                                  checkpoint_path=args.checkpoint, checkpoint=checkpoint)

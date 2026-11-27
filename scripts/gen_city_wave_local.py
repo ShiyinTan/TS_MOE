@@ -49,6 +49,7 @@ ORDERED_KEYS = (
     "final_candidates_seed",
     "early_stop_patience",
     "checkpoint_metric",
+    "checkpoint_split",
     "candidate_spatial_prior",
     "candidate_prior_top_m",
 )

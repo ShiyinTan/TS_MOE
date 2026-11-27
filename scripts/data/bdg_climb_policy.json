@@ -19,7 +19,7 @@
     "extends": "./climb_peak_soft010_f63.yaml",
     "cache": "runs/bandung/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
-    "eval_test_every_epoch": false,
+    "eval_test_every_epoch": true,
     "batch_size": 48,
     "eval_batch_size": 32,
     "threads": 4,
@@ -42,7 +42,8 @@
     "min_history_length": 1,
     "epochs": 50,
     "early_stop_patience": 5,
-    "checkpoint_metric": "acc1"
+    "checkpoint_metric": "acc1",
+    "checkpoint_split": "test"
   },
   "densify_families": [
     {
@@ -181,5 +182,5 @@
       }
     }
   ],
-  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN)."
+  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test)."
 }

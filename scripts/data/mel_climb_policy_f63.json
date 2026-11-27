@@ -15,7 +15,7 @@
     "extends": "./climb_bpr020_soft010_f63.yaml",
     "cache": "runs/melbourne/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
-    "eval_test_every_epoch": false,
+    "eval_test_every_epoch": true,
     "batch_size": 48,
     "eval_batch_size": 32,
     "threads": 4,
@@ -32,7 +32,8 @@
     "epochs": 50,
     "early_stop_patience": 5,
     "checkpoint_metric": "acc1",
-    "checkpoint_on_climb_pb": "on"
+    "checkpoint_on_climb_pb": "on",
+    "checkpoint_split": "test"
   },
   "densify_families": [
     {
@@ -109,5 +110,5 @@
       }
     }
   ],
-  "notes": "MEL f63 protocol on L128; shortlist Acc; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN)."
+  "notes": "MEL f63 protocol on L128; shortlist Acc; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test)."
 }

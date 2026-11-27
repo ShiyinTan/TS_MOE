@@ -457,6 +457,21 @@ class TestDesign(unittest.TestCase):
         self.assertEqual(tiny[0], 3)
         self.assertLessEqual(len(tiny), 6)
 
+    def test_eval_pool_kwargs_val_shortlist_test_full(self):
+        from types import SimpleNamespace
+        from tsmoe.city_scale import eval_pool_shrink_kwargs
+        args = SimpleNamespace(
+            final_negatives=63, final_extra_random=-1, final_candidates=0,
+            final_candidates_seed=0, seed=42, history_max_length=128,
+            candidate_spatial_prior="off", candidate_prior_top_m=0,
+            candidate_prior_gravity_beta=1.0,
+        )
+        val_kw = eval_pool_shrink_kwargs(args, split="validation")
+        test_kw = eval_pool_shrink_kwargs(args, split="test")
+        self.assertEqual(val_kw.get("final_negatives"), 63)
+        self.assertNotIn("final_negatives", test_kw)
+        self.assertEqual(test_kw.get("history_max_length"), 128)
+
     def test_history_max_length_and_min_filter(self):
         from tsmoe.data import L_DIM, T_DIM, filter_indices_min_history, make_batch
         data = {

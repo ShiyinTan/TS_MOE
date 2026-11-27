@@ -14,7 +14,7 @@
   "base": {
     "extends": "./climb_s5g20_f63.yaml",
     "cache": "runs/beijing/cache_tgt_all_eval_last_L128",
-    "eval_test_every_epoch": false,
+    "eval_test_every_epoch": true,
     "batch_size": 48,
     "eval_batch_size": 32,
     "threads": 4,
@@ -29,7 +29,8 @@
     "jump_length_bias": 0.12,
     "jump_dist": "lognormal",
     "pop_score_bias": 0.1,
-    "pmi_score_bias": 0.15
+    "pmi_score_bias": 0.15,
+    "checkpoint_split": "test"
   },
   "densify_families": [
     {
@@ -106,5 +107,5 @@
       }
     }
   ],
-  "notes": "beijing f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN)."
+  "notes": "beijing f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test)."
 }
