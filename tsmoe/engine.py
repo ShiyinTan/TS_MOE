@@ -2797,13 +2797,15 @@ def train(args):
                     cache, cfg, data,
                     visit_bin_edges=None if edges is None else torch.tensor(edges))
         _final_full = final_test_full_pool_enabled(args, _climb_city)
+        # top_m=0 already means full constructed; treat as full for ledger labeling.
+        _ledger_full = _final_full or int(settings.get("test_prior_top_m") or 0) == 0
         _final_test_kw = test_pool_shrink_kwargs(
-            args, _climb_city, force_full=_final_full)
+            args, _climb_city, force_full=_final_full or _ledger_full)
         _final_test_t0 = time.perf_counter()
         test_metrics = evaluate(
             model, final, test, cache, args.eval_batch_size,
             args.chunk, category_frequency,
-            desc="eval test full" if _final_full else "eval test",
+            desc="eval test full" if _ledger_full else "eval test",
             count_tables=test_tables,
             **_final_test_kw)
         final_test_s = time.perf_counter() - _final_test_t0
@@ -2811,7 +2813,7 @@ def train(args):
             "test_s": round(final_test_s, 3),
             "test_hms": _format_hms(final_test_s),
             "selection": selection_tag,
-            "pool": "full_constructed" if _final_full else (
+            "pool": "full_constructed" if _ledger_full else (
                 f"{settings.get('test_spatial_prior')}_top"
                 f"{settings.get('test_prior_top_m')}"
             ),

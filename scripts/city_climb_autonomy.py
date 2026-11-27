@@ -187,19 +187,43 @@ def _fmt_tag_value(v: Any) -> str:
     return str(v).replace(".", "").replace("-", "m")
 
 
+def _is_full_pool_test_metrics(payload: dict[str, Any]) -> bool:
+    """Only STHGCN-comparable full constructed test Acc may lift lock_acc.
+
+    Rejects shortlist/top-M ledgers (e.g. historical test@≤64 contamination).
+    """
+    timing = payload.get("timing") or {}
+    if str(timing.get("pool") or "") == "full_constructed":
+        return True
+    args = payload.get("training_args") or {}
+    try:
+        top_m = int(args.get("test_prior_top_m") or 0)
+    except (TypeError, ValueError):
+        top_m = -1
+    # Legacy/small-city: every-epoch full test with top_m=0 and no pool tag.
+    if top_m == 0 and not timing.get("pool"):
+        return True
+    return False
+
+
 def scan_wave_metrics(city: str, wave: str) -> dict[str, Any]:
     recipes = load_overrides(city, wave)
     top = 0.0
     best = None
     done_n = 0
+    skipped_non_full = 0
     for stem in recipes:
         p = ROOT / "results" / city / stem / "eval_test" / "metrics.json"
         if not p.is_file():
             continue
         try:
-            a = (json.loads(p.read_text()).get("known_only") or {}).get("Acc@1")
+            payload = json.loads(p.read_text())
         except Exception:
             continue
+        if not _is_full_pool_test_metrics(payload):
+            skipped_non_full += 1
+            continue
+        a = (payload.get("known_only") or {}).get("Acc@1")
         if a is None:
             continue
         done_n += 1
@@ -213,6 +237,7 @@ def scan_wave_metrics(city: str, wave: str) -> dict[str, Any]:
         "n_done": done_n,
         "n_total": total,
         "n_pending": max(0, total - done_n),
+        "n_skipped_non_full_pool": skipped_non_full,
         "complete": total > 0 and done_n >= total,
     }
 

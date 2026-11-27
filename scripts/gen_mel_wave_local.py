@@ -41,7 +41,7 @@ DEFAULT_BASE = {
     "checkpoint_metric": "acc1",
     "checkpoint_split": "test",
     "test_prior_top_m": 0,
-    "final_test_full_pool": "off",
+    "final_test_full_pool": "on",
     "checkpoint_on_climb_pb": "on",
 }
 

@@ -1,7 +1,7 @@
 {
   "city": "melbourne",
   "lock_acc": 0.0,
-  "target_acc": 0.99,
+  "target_acc": 0.172,
   "sthgcn": 0.168,
   "active_wave": "w1",
   "wave_size": 20,
@@ -35,7 +35,7 @@
     "checkpoint_on_climb_pb": "on",
     "checkpoint_split": "test",
     "test_prior_top_m": 0,
-    "final_test_full_pool": "off"
+    "final_test_full_pool": "on"
   },
   "densify_families": [
     {
@@ -112,5 +112,5 @@
       }
     }
   ],
-  "notes": "MEL f63 protocol on L128; shortlist Acc; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch"
+  "notes": "MEL f63 protocol on L128; shortlist Acc; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers"
 }

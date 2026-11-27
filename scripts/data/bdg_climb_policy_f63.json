@@ -1,7 +1,7 @@
 {
   "city": "bandung",
   "lock_acc": 0.0,
-  "target_acc": 0.99,
+  "target_acc": 0.222,
   "sthgcn": 0.219,
   "active_wave": "w1",
   "wave_size": 28,
@@ -46,7 +46,7 @@
     "checkpoint_split": "test",
     "test_prior_top_m": 512,
     "test_spatial_prior": "mix",
-    "final_test_full_pool": "auto"
+    "final_test_full_pool": "on"
   },
   "densify_families": [
     {
@@ -185,5 +185,5 @@
       }
     }
   ],
-  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | LARGE test: mix top-512/epoch; final full-pool ledger. | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch"
+  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | LARGE test: mix top-512/epoch; final full-pool ledger. | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers"
 }

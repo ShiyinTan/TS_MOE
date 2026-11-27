@@ -1,7 +1,7 @@
 {
   "city": "palembang",
   "lock_acc": 0.0,
-  "target_acc": 0.99,
+  "target_acc": 0.249,
   "sthgcn": 0.246,
   "active_wave": "w1",
   "wave_size": 20,
@@ -32,7 +32,7 @@
     "session_summary": "on",
     "checkpoint_split": "test",
     "test_prior_top_m": 0,
-    "final_test_full_pool": "off"
+    "final_test_full_pool": "on"
   },
   "densify_families": [
     {
@@ -109,5 +109,5 @@
       }
     }
   ],
-  "notes": "palembang f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch"
+  "notes": "palembang f63 shortlist on L128; lock 0 until PB | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers"
 }

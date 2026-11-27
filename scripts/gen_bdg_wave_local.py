@@ -38,7 +38,7 @@ DEFAULT_BASE = {
     "checkpoint_split": "test",
     "test_prior_top_m": 512,
     "test_spatial_prior": "mix",
-    "final_test_full_pool": "auto",
+    "final_test_full_pool": "on",
 }
 
 
