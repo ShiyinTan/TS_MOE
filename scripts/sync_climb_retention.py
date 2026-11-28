@@ -51,9 +51,14 @@ def apply_city(city: str, data: dict, *, dry_run: bool, summarize_only: bool) ->
     py = sys.executable
 
     cfg_cmd = [py, "scripts/summarize_and_prune_configs.py", "--city", city]
+    waves: list[str] = []
+    if c.get("keep_waves"):
+        waves.extend(str(w) for w in c["keep_waves"] if w)
     wave = c.get("keep_wave")
-    if wave:
-        cfg_cmd += ["--keep-wave", str(wave)]
+    if wave and str(wave) not in waves:
+        waves.append(str(wave))
+    for w in waves:
+        cfg_cmd += ["--keep-wave", w]
     if c.get("aggressive_configs"):
         cfg_cmd.append("--aggressive")
     for name in c.get("keep_configs") or []:
