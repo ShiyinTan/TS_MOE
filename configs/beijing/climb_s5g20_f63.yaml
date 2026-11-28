@@ -1,0 +1,19 @@
+# Beijing · final_negatives=63+GT shortlist climb on L128 cache
+extends: ./climb_s5g20_all_gauss020_wd005_j12p10_pmi015_win.yaml
+recipe_id: climb_s5g20_f63
+out: runs/beijing/climb_s5g20_f63
+description: "beijing f63 shortlist · final_negatives=63+GT · L128"
+cache: runs/beijing/cache_tgt_all_eval_last_L128
+final_negatives: 63
+final_extra_random: -1
+candidate_spatial_prior: "off"
+candidate_prior_top_m: 0
+history_max_length: 128
+min_history_length: 1
+epochs: 50
+early_stop_patience: 5
+checkpoint_metric: acc1
+checkpoint_split: test
+eval_test_every_epoch: true
+test_prior_top_m: 0
+final_test_full_pool: on

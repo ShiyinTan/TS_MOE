@@ -17,12 +17,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "scripts" / "data" / "mel_climb_policy.json"
 
-# Fallback if policy missing (w17 WIN stack).
+# Fallback if policy missing (f63 shortlist on L128).
 DEFAULT_BASE = {
-    "extends": "./climb_bpr020_soft010.yaml",
-    "cache": "runs/melbourne/cache_tgt_all_eval_last",
+    "extends": "./climb_bpr020_soft010_f63.yaml",
+    "cache": "runs/melbourne/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
-    "eval_test_every_epoch": False,
+    "eval_test_every_epoch": True,
     "batch_size": 48,
     "eval_batch_size": 32,
     "threads": 4,
@@ -32,6 +32,17 @@ DEFAULT_BASE = {
     "jump_length_bias": 0.10,
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
+    "final_negatives": 63,
+    "final_extra_random": -1,
+    "history_max_length": 128,
+    "min_history_length": 1,
+    "epochs": 50,
+    "early_stop_patience": 5,
+    "checkpoint_metric": "acc1",
+    "checkpoint_split": "test",
+    "test_prior_top_m": 0,
+    "final_test_full_pool": "on",
+    "checkpoint_on_climb_pb": "on",
 }
 
 
@@ -93,6 +104,17 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "jump_length_bias",
         "jump_dist",
         "pmi_score_bias",
+        "history_max_length",
+        "min_history_length",
+        "final_negatives",
+        "final_extra_random",
+        "early_stop_patience",
+        "checkpoint_metric",
+        "checkpoint_split",
+        "test_prior_top_m",
+        "test_spatial_prior",
+        "final_test_full_pool",
+        "epochs",
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")

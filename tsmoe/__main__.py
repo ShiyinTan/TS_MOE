@@ -212,8 +212,40 @@ def main(argv=None):
     t.add_argument(
         "--max-train-candidates", type=int, default=-1,
         help="cap total training candidates per sample including the positive "
-             "(default -1 = no extra cap beyond --negatives); evaluation always "
-             "uses the full constructed pool")
+             "(default -1 = no extra cap beyond --negatives); ignored when "
+             "--final-candidates > 0")
+    t.add_argument(
+        "--history-max-length", type=int, default=0,
+        help="runtime history upper bound: keep only the last N events before "
+             "the target (0 = use prepare --max-length window as-is). "
+             "N may exceed 50 when the cache was prepared with a larger "
+             "--max-length (e.g. cache_*_L128)")
+    t.add_argument(
+        "--min-history-length", type=int, default=0,
+        help="drop train samples whose prepared history length is < N "
+             "(0/1 = off; prepare already requires ≥1). Train-only filter")
+    t.add_argument(
+        "--final-negatives", type=int, default=0,
+        help="train+validation shortlist: sample this many non-GT candidates "
+             "from (constructed pool ∪ extra random), then force-include GT "
+             "(total ≤ N+1, e.g. 63 → up to 64). Test keeps the full "
+             "constructed pool. 0 = legacy. Val Acc@1 under this protocol is "
+             "shortlist Acc (not full-pool / STHGCN comparable)")
+    t.add_argument(
+        "--final-candidates", type=int, default=0,
+        help="deprecated alias: if >0 and --final-negatives is 0, treated as "
+             "total shortlist size including GT (final_negatives = K-1)")
+    t.add_argument(
+        "--final-extra-random", type=int, default=-1,
+        help="extra uniform catalog POIs unioned before final sampling: "
+             ">0 fixed count; 0 off; <0 (default) ≈ constructed pool size")
+    t.add_argument(
+        "--final-candidates-seed", type=int, default=-1,
+        help="seed for final shortlist sampling (-1 = use --seed)")
+    t.add_argument(
+        "--early-stop-patience", type=int, default=0,
+        help="stop training if the --checkpoint-split metric does not improve "
+             "for N epochs (0 = disabled). Use with large --epochs (e.g. 50)")
     t.add_argument("--no-surd", action="store_true", help="context-only U/S MoE ablation: disable all statistical guidance")
     t.add_argument(
         "--causal-counts", dest="no_causal_counts", action="store_false",
@@ -420,19 +452,32 @@ def main(argv=None):
     t.add_argument(
         "--large-city-fast", choices=ON_OFF, default="off",
         help="when on *and* city is Bandung-or-larger: shrink model structure "
-             "(dim128/heads4, transition-attn=bias, no last_slot/session) and "
-             "val+test candidate pool via mix top-M=512 (geo/pop/user/hist/hour; "
-             "GT always included). No-op on small cities. See tsmoe/city_scale.py")
+             "(dim128/heads4, transition-attn=bias, no last_slot/session). "
+             "With --final-negatives, also defaults per-epoch test to mix "
+             "top-M=512 (see --test-prior-top-m). No-op on small cities.")
     t.add_argument(
         "--candidate-spatial-prior", type=str, default="off",
         choices=("off", "geo", "gravity", "radiation", "mix"),
-        help="train val+test pool shrink (#10): keep top-M by geo/gravity/"
-             "radiation/mix (GT always included). large_city_fast defaults to "
-             "mix on Bandung-or-larger")
+        help="shared val(+legacy test) pool shrink (#10): keep top-M by "
+             "geo/gravity/radiation/mix (GT always included). Ignored for "
+             "val when --final-negatives is set (val uses the 63 shortlist)")
     t.add_argument(
         "--candidate-prior-top-m", type=int, default=0,
-        help="top-M for --candidate-spatial-prior (0 = off). "
-             "large_city_fast default on large cities: 512 for val+test")
+        help="top-M for --candidate-spatial-prior (0 = off)")
+    t.add_argument(
+        "--test-prior-top-m", type=int, default=None,
+        help="per-epoch TEST pool top-M (mix prior + GT). 0 = full constructed "
+             "pool. Default with --final-negatives: cities ≥ Bandung → 512 "
+             "(Bandung settings); smaller cities → 0 (full test every epoch)")
+    t.add_argument(
+        "--test-spatial-prior", type=str, default="auto",
+        choices=("auto", "off", "geo", "gravity", "radiation", "mix"),
+        help="spatial prior for --test-prior-top-m (default auto→mix)")
+    t.add_argument(
+        "--final-test-full-pool", choices=("auto", "on", "off"), default="auto",
+        help="post-train best-ckpt test pool: auto = full constructed once "
+             "when per-epoch test used top-M (≥Bandung ledger); on/off force. "
+             "Smaller cities keep full constructed every epoch (top-M=0)")
     t.add_argument(
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
@@ -466,17 +511,25 @@ def main(argv=None):
     t.add_argument("--seed", type=int, default=42)
     t.add_argument(
         "--checkpoint-metric", choices=("ndcg10", "acc1"), default="ndcg10",
-        help="validation metric used to select best.pt: ndcg10 (default, "
-             "all_targets NDCG@10) or acc1 (all_targets Acc@1). Experimental "
-             "Acc@1 hillclimbs may use acc1; default keeps historical protocol.")
+        help="metric used to select best.pt on --checkpoint-split: ndcg10 "
+             "(default, all_targets NDCG@10) or acc1 (all_targets Acc@1). "
+             "Experimental Acc@1 hillclimbs may use acc1; default keeps "
+             "historical protocol.")
+    t.add_argument(
+        "--checkpoint-split", choices=("validation", "test", "val", "eval"),
+        default="validation",
+        help="which split's --checkpoint-metric selects best.pt (default "
+             "validation). 'test' requires --eval-test-every-epoch and picks "
+             "the epoch with best full-pool test metric (f63 climb protocol).")
     t.add_argument(
         "--eval-test-every-epoch",
         action=argparse.BooleanOptionalAction, default=True,
         help="after each training epoch, also evaluate on the test split and write "
              "results/<run>/eval_test/epoch_*.json + results/<run>/history.json "
-             "(default: on). Checkpoint selection uses --checkpoint-metric "
-             "(default validation NDCG@10); final best-ckpt test still runs. "
-             "Use --no-eval-test-every-epoch to skip per-epoch test for speed.")
+             "(default: on). With --checkpoint-split test, best.pt follows "
+             "per-epoch test; otherwise checkpoint uses validation. Final "
+             "best-ckpt test still runs. Use --no-eval-test-every-epoch to "
+             "skip per-epoch test for speed.")
     t.set_defaults(func=train)
 
     e = commands.add_parser(
@@ -537,6 +590,21 @@ def main(argv=None):
     e.add_argument(
         "--candidate-prior-gravity-beta", type=float, default=1.0,
         help="β in gravity prior log1p(pop)−β·log1p(km) (default 1)")
+    e.add_argument(
+        "--history-max-length", type=int, default=0,
+        help="runtime history upper bound (0 = prepared window)")
+    e.add_argument(
+        "--final-negatives", type=int, default=0,
+        help="shared shortlist non-GT count (0 = off); see train")
+    e.add_argument(
+        "--final-candidates", type=int, default=0,
+        help="deprecated total shortlist size incl. GT; see train")
+    e.add_argument(
+        "--final-extra-random", type=int, default=-1,
+        help="extra random catalog POIs (<0 ≈ pool size)")
+    e.add_argument(
+        "--final-candidates-seed", type=int, default=0,
+        help="seed for final shortlist sampling at evaluate")
     e.add_argument(
         "--mc-dropout", type=int, default=0,
         help="MC-dropout logit average at eval (#46): T stochastic forwards "
@@ -618,6 +686,9 @@ def main(argv=None):
             root.error("--candidate-spatial-prior requires --candidate-prior-top-m >= 1")
         if ctop < 0:
             root.error("--candidate-prior-top-m must be nonnegative")
+        ttop = getattr(args, "test_prior_top_m", None)
+        if ttop is not None and int(ttop) < 0:
+            root.error("--test-prior-top-m must be nonnegative")
     if args.command == "evaluate":
         geo_ov = getattr(args, "geo_score_bias", None)
         rev_ov = getattr(args, "revisit_score_bias", None)

@@ -947,6 +947,127 @@ def sample_candidates(targets: torch.Tensor, catalog_size: int, negatives: int,
     return padded, torch.zeros(len(targets), dtype=torch.long), mask
 
 
+def enrich_pool_with_extra_random(
+        pool: Sequence[int] | torch.Tensor, catalog_size: int, extra_random: int,
+        rng: random.Random) -> list[int]:
+    """Union a constructed pool with uniform catalog rows.
+
+    ``extra_random``:
+      * ``> 0`` — add up to that many new catalog rows
+      * ``0`` — no extras
+      * ``< 0`` — add about as many as the current pool size (``len(pool)``)
+    """
+    members = list(dict.fromkeys(int(x) for x in (
+        pool.tolist() if torch.is_tensor(pool) else pool)))
+    extra = int(extra_random or 0)
+    if extra < 0:
+        extra = len(members)
+    if extra <= 0 or catalog_size <= 0:
+        return members
+    existing = set(members)
+    candidates = [i for i in range(catalog_size) if i not in existing]
+    if not candidates:
+        return members
+    take = min(extra, len(candidates))
+    members.extend(rng.sample(candidates, take))
+    return members
+
+
+def finalize_candidate_pool(
+        members: Sequence[int], target: int, final_negatives: int,
+        rng: random.Random) -> list[int]:
+    """Force-include in-catalog GT, then sample ``final_negatives`` other rows.
+
+    Total size is ``≤ final_negatives + 1`` (GT + negatives). Example: 63
+    negatives → up to **64** candidates with GT first.
+    If the enriched pool is smaller, keeps everyone (GT first).
+    """
+    n_neg = int(final_negatives)
+    if n_neg < 0:
+        raise ValueError("final_negatives must be >= 0")
+    members = list(dict.fromkeys(int(x) for x in members))
+    if target >= 0 and target not in members:
+        members.append(target)
+    if target < 0:
+        # OOV target: cannot force-include; still cap to n_neg (no +1).
+        if len(members) <= n_neg:
+            return members
+        return rng.sample(members, n_neg) if n_neg else []
+    others = [row for row in members if row != target]
+    want = min(len(others), n_neg)
+    if want >= len(others):
+        chosen = others
+    else:
+        chosen = rng.sample(others, want)
+    return [target, *chosen]
+
+
+def build_final_pools(
+        pools: Sequence[torch.Tensor],
+        targets: Sequence[int] | torch.Tensor,
+        catalog_size: int,
+        *,
+        final_negatives: int,
+        extra_random: int = -1,
+        seed: int = 0,
+        sample_indices: Sequence[int] | None = None) -> list[torch.Tensor]:
+    """Eval-style pools ∪ extra random → sample ``final_negatives`` + GT.
+
+    ``extra_random < 0`` ⇒ add ~``len(pool)`` random catalog rows per sample.
+    Deterministic per sample via ``seed + sample_index``. Used for train and
+    eval/test so both share one shortlist protocol.
+    """
+    if torch.is_tensor(targets):
+        target_list = [int(x) for x in targets.tolist()]
+    else:
+        target_list = [int(x) for x in targets]
+    if len(pools) != len(target_list):
+        raise ValueError("pools must align with targets")
+    out: list[torch.Tensor] = []
+    for i, (pool, target) in enumerate(zip(pools, target_list)):
+        sample_i = int(sample_indices[i]) if sample_indices is not None else i
+        rng = random.Random(int(seed) + 10007 * sample_i + 17)
+        enriched = enrich_pool_with_extra_random(
+            pool, catalog_size, extra_random, rng)
+        final = finalize_candidate_pool(enriched, target, final_negatives, rng)
+        out.append(torch.tensor(final, dtype=torch.long))
+    return out
+
+
+def sample_final_candidates(
+        targets: torch.Tensor, catalog_size: int, final_negatives: int,
+        rng: random.Random, pools: Sequence[torch.Tensor],
+        *,
+        extra_random: int = -1,
+        seed: int = 0,
+        sample_indices: Sequence[int] | None = None):
+    """Train-time rows/labels/mask under the final-negatives+GT shortlist protocol."""
+    if pools is None:
+        raise ValueError("sample_final_candidates requires constructed pools")
+    finals = build_final_pools(
+        pools, targets, catalog_size,
+        final_negatives=final_negatives, extra_random=extra_random, seed=seed,
+        sample_indices=sample_indices)
+    # Rebuild with a shared RNG path already used above; rows put GT at col 0.
+    row_lists = []
+    for target, pool in zip(targets.tolist(), finals):
+        members = [int(x) for x in pool.tolist()]
+        if target >= 0:
+            others = [r for r in members if r != target]
+            row_lists.append([target, *others])
+        else:
+            row_lists.append(members)
+    width = max((len(r) for r in row_lists), default=0)
+    padded = torch.full((len(row_lists), width), -1, dtype=torch.long)
+    mask = torch.zeros(len(row_lists), width, dtype=torch.bool)
+    for i, row in enumerate(row_lists):
+        if not row:
+            continue
+        padded[i, :len(row)] = torch.tensor(row, dtype=torch.long)
+        mask[i, :len(row)] = True
+    return padded, torch.zeros(len(targets), dtype=torch.long), mask
+
+
 def candidate_construction_record(
         method: str, stats: dict, radius_km: float | None,
         coordinate_imputation: dict | None = None,

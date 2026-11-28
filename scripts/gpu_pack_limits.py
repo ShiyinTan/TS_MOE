@@ -5,7 +5,7 @@ Rules (prefs 2026-11-25; raised 2026-11-25 evening; large-city 2026-11-26):
   when the GPU is free of foreign users (ignore ``dl-box``).
 - If another user (e.g. camob) is on that GPU, cap is
   ``TSMOE_MAX_PER_GPU_SHARED`` (default **3**).
-- Bandung-or-larger datasets: ``TSMOE_MAX_PER_GPU_LARGE`` (default **2**) per GPU
+- Bandung-or-larger datasets: ``TSMOE_MAX_PER_GPU_LARGE`` (default **4**) per GPU
   (see ``LARGE_CITIES``).
 - Caps only gate **new** launches. Never kill running jobs (ours or foreign).
 - Also gate on host RAM, per-GPU free VRAM, and disk — these matter more than the
@@ -35,7 +35,9 @@ MAX_OUR_PER_GPU_FREE = int(os.environ.get("TSMOE_MAX_PER_GPU", "4"))
 MAX_OUR_PER_GPU_SHARED = int(os.environ.get("TSMOE_MAX_PER_GPU_SHARED", "3"))
 # Bandung-or-larger Massive-STEPS cities (raw data/ CSV ≥ Bandung ≈57MB): tighter
 # per-GPU cap to avoid host RAM / VRAM pressure. Override with TSMOE_MAX_PER_GPU_LARGE.
-MAX_OUR_PER_GPU_LARGE = int(os.environ.get("TSMOE_MAX_PER_GPU_LARGE", "2"))
+# Raised to 4 (2026-11-27): pack prior-city + f63 densify when VRAM allows;
+# host RAM / free-VRAM gates still apply. Override with TSMOE_MAX_PER_GPU_LARGE.
+MAX_OUR_PER_GPU_LARGE = int(os.environ.get("TSMOE_MAX_PER_GPU_LARGE", "4"))
 try:
     # Single source of truth with train-time large_city_fast gating.
     from tsmoe.city_scale import LARGE_CITIES as _LARGE_CITIES  # type: ignore

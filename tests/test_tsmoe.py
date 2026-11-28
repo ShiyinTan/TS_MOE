@@ -17,7 +17,8 @@ from tsmoe.__main__ import main
 from tsmoe.candidates import (
     build_user_frequent, candidate_construction_record, catalog_coordinates,
     catalog_visit_counts, consecutive_visit_distances, format_pool_size_line,
-    haversine_km, mix_adaptive_negatives, neighborhood_indices,
+    build_final_pools, finalize_candidate_pool, haversine_km,
+    mix_adaptive_negatives, neighborhood_indices,
     pick_popular_radius_km, pick_radius_km, popular_indices,
     resolve_candidate_pool, sample_candidates, shrink_pools_spatial_prior,
     summarize_distances, summarize_pool_sizes,
@@ -430,6 +431,100 @@ class TestDesign(unittest.TestCase):
             torch.tensor([0]), 4, -1, random.Random(0), pools=[rich], max_candidates=2)
         self.assertEqual(int(cap_mask[0].sum()), 2)
         self.assertEqual(int(capped[0, 0]), 0)
+
+    def test_final_candidates_force_gt_and_cap(self):
+        pool = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8], dtype=torch.long)
+        # 63-style: final_negatives=5 → GT + 5 = 6 total.
+        finals = build_final_pools(
+            [pool], [3], catalog_size=20,
+            final_negatives=5, extra_random=10, seed=0, sample_indices=[0])
+        rows = finals[0].tolist()
+        self.assertEqual(rows[0], 3)
+        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(set(rows)), 6)
+        # Deterministic across calls with same seed/index.
+        again = build_final_pools(
+            [pool], [3], catalog_size=20,
+            final_negatives=5, extra_random=10, seed=0, sample_indices=[0])[0].tolist()
+        self.assertEqual(rows, again)
+        # extra_random < 0 ≈ pool size
+        auto = build_final_pools(
+            [pool], [3], catalog_size=40,
+            final_negatives=63, extra_random=-1, seed=1, sample_indices=[0])[0]
+        self.assertEqual(int(auto[0]), 3)
+        self.assertLessEqual(int(auto.numel()), 64)
+        tiny = finalize_candidate_pool([3, 1], target=3, final_negatives=5, rng=random.Random(0))
+        self.assertEqual(tiny[0], 3)
+        self.assertLessEqual(len(tiny), 6)
+
+    def test_eval_pool_kwargs_val_shortlist_test_full(self):
+        from types import SimpleNamespace
+        from tsmoe.city_scale import eval_pool_shrink_kwargs
+        args = SimpleNamespace(
+            final_negatives=63, final_extra_random=-1, final_candidates=0,
+            final_candidates_seed=0, seed=42, history_max_length=128,
+            candidate_spatial_prior="off", candidate_prior_top_m=0,
+            candidate_prior_gravity_beta=1.0,
+            test_prior_top_m=0, test_spatial_prior="auto",
+            large_city_fast="off", out="runs/melbourne/x",
+        )
+        val_kw = eval_pool_shrink_kwargs(args, split="validation", city="melbourne")
+        test_kw = eval_pool_shrink_kwargs(args, split="test", city="melbourne")
+        self.assertEqual(val_kw.get("final_negatives"), 63)
+        self.assertNotIn("final_negatives", test_kw)
+        self.assertNotIn("candidate_prior_top_m", test_kw)
+        self.assertEqual(test_kw.get("history_max_length"), 128)
+
+    def test_test_prior_top_m_large_city_default(self):
+        from types import SimpleNamespace
+        from tsmoe.city_scale import (
+            eval_pool_shrink_kwargs, final_test_full_pool_enabled,
+            resolve_test_prior_top_m,
+        )
+        args = SimpleNamespace(
+            final_negatives=63, final_extra_random=-1, final_candidates=0,
+            final_candidates_seed=0, seed=42, history_max_length=128,
+            candidate_spatial_prior="off", candidate_prior_top_m=0,
+            candidate_prior_gravity_beta=1.0,
+            test_prior_top_m=None, test_spatial_prior="auto",
+            final_test_full_pool="auto",
+            large_city_fast="off", out="runs/bandung/x", cache="runs/bandung/c",
+        )
+        # ≥ Bandung → Bandung-style top-512 even without large_city_fast.
+        self.assertEqual(resolve_test_prior_top_m(args, "bandung"), 512)
+        self.assertEqual(resolve_test_prior_top_m(args, "jakarta"), 512)
+        test_kw = eval_pool_shrink_kwargs(args, split="test", city="bandung")
+        self.assertEqual(test_kw.get("candidate_prior_top_m"), 512)
+        self.assertEqual(test_kw.get("candidate_spatial_prior"), "mix")
+        full_kw = eval_pool_shrink_kwargs(
+            args, split="test", city="bandung", force_full=True)
+        self.assertNotIn("candidate_prior_top_m", full_kw)
+        self.assertTrue(final_test_full_pool_enabled(args, "bandung"))
+        # Smaller than Bandung → full constructed test.
+        self.assertEqual(resolve_test_prior_top_m(args, "melbourne"), 0)
+        self.assertEqual(resolve_test_prior_top_m(args, "beijing"), 0)
+        # Explicit override
+        args.test_prior_top_m = 1024
+        self.assertEqual(resolve_test_prior_top_m(args, "bandung"), 1024)
+
+    def test_history_max_length_and_min_filter(self):
+        from tsmoe.data import L_DIM, T_DIM, filter_indices_min_history, make_batch
+        data = {
+            "start": torch.tensor([0, 10, 20]),
+            "end": torch.tensor([8, 12, 25]),  # lengths 8, 2, 5
+            "poi_token": torch.arange(30) + 2,
+            "cat_token": torch.ones(30, dtype=torch.long),
+            "T": torch.zeros(30, T_DIM),
+            "L": torch.zeros(30, L_DIM),
+            "P": torch.arange(30),
+            "C": torch.ones(30, dtype=torch.long),
+        }
+        kept = filter_indices_min_history(data, torch.arange(3), min_history_length=5)
+        self.assertEqual(kept.tolist(), [0, 2])
+        history, valid, target = make_batch(
+            data, torch.tensor([0]), history_max_length=3)
+        self.assertEqual(int(valid.sum()), 3)
+        self.assertEqual(int(target[0]), int(data["poi_token"][8] - 2))
 
     def test_prepare_prints_coordinate_imputation_counts(self):
         """prepare logs per-source catalog coordinate counts from the imputation audit."""

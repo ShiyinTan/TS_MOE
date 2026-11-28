@@ -233,10 +233,42 @@ def build_split(groups, categories, catalog, cat_vocab, max_length, target_mode,
     return data, dict(skipped_unknown_targets=skipped_unknown_targets)
 
 
-def make_batch(data, indices, *, offline=False, labels=True):
-    """Gather once with a shared right-padding mask, resetting differences at the left edge."""
+def history_lengths(data, indices=None):
+    """Prefix lengths ``end - start`` for all samples or a subset of indices."""
+    if indices is None:
+        return data["end"] - data["start"]
+    idx = indices if torch.is_tensor(indices) else torch.as_tensor(indices, dtype=torch.long)
+    return data["end"][idx] - data["start"][idx]
+
+
+def filter_indices_min_history(data, indices, min_history_length: int):
+    """Keep samples whose prepared history length is ≥ ``min_history_length``.
+
+    ``min_history_length ≤ 1`` is a no-op (prepare already requires ≥1 history
+    event before a supervised target).
+    """
+    min_len = int(min_history_length or 0)
+    idx = indices if torch.is_tensor(indices) else torch.as_tensor(indices, dtype=torch.long)
+    if min_len <= 1:
+        return idx
+    lengths = history_lengths(data, idx)
+    keep = lengths >= min_len
+    return idx[keep]
+
+
+def make_batch(data, indices, *, offline=False, labels=True, history_max_length=None):
+    """Gather once with a shared right-padding mask, resetting differences at the left edge.
+
+    ``history_max_length`` (if ≥1) further truncates each prefix to its last N
+    events without re-prepare; cannot exceed the prepared window.
+    """
     start, end = data["start"][indices], data["end"][indices]
+    max_len = int(history_max_length or 0)
+    if max_len > 0:
+        start = torch.maximum(start, end - max_len)
     length = end - start
+    if int(length.max()) < 1:
+        raise ValueError("batch has empty history after history_max_length truncate")
     pos = torch.arange(int(length.max()))[None, :]
     mask = pos < length[:, None]
     ix = torch.minimum(start[:, None] + pos, end[:, None] - 1)

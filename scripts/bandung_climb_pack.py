@@ -44,7 +44,7 @@ STOP_SENTINEL = Path(
     os.environ.get("TSMOE_STOP_SENTINEL", str(ROOT / "logs" / "multicity" / "STOP"))
 )
 PACK_LOCK = PIDDIR / "packer_launch.lock"
-# Bandung is a LARGE_CITY → default 2/GPU (see gpu_pack_limits.LARGE_CITIES).
+# LARGE_CITY cap via gpu_pack_limits (default 4/GPU for f63 + prior-city pack).
 CITY_GPU_CAP = max_our_per_gpu(CITY, shared=False)
 
 

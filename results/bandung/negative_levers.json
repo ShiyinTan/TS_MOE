@@ -1,0 +1,64 @@
+{
+  "updated": "2026-11-28",
+  "city": "bandung",
+  "protocol": "f63_L128_full_test_ledger",
+  "negative_levers": [
+    {
+      "key": "min_history_length",
+      "tag": "hmin",
+      "decision": "ban",
+      "reason": "Clear negative ROI on Bandung f63_w1 epoch-test Acc: hmin runs are bottom-3 (0.165/0.156/0.132) vs wave median \u22480.179; raising min_history above 1 hurts.",
+      "evidence": {
+        "wave": "w1",
+        "metric": "per-epoch test Acc@1 (top-512 ckpt score)",
+        "wave_median": 0.1789,
+        "hmin_runs": [
+          {
+            "tag": "climb_peak_soft010_f63_w1_tgt_hmin2_bpr29",
+            "acc": 0.1647
+          },
+          {
+            "tag": "climb_peak_soft010_f63_w1_tgt_hmin2_ep30_pat5",
+            "acc": 0.1557
+          },
+          {
+            "tag": "climb_peak_soft010_f63_w1_tgt_hmin3_ep50_pat8",
+            "acc": 0.1317
+          }
+        ]
+      },
+      "keep_default": 1
+    },
+    {
+      "key": "seed",
+      "decision": "ban",
+      "reason": "Cross-city prior (MEL): seed sweeps rarely lift Acc; waste densify budget.",
+      "source": "scripts/data/climb_lever_priors.json"
+    },
+    {
+      "key": "transition_2hop_bias",
+      "decision": "ban",
+      "reason": "Cross-city prior (MEL): hop bias rarely helps.",
+      "source": "scripts/data/climb_lever_priors.json"
+    },
+    {
+      "key": "pop_score_bias",
+      "decision": "ban",
+      "reason": "Cross-city prior (MEL): pop score bias rarely helps.",
+      "source": "scripts/data/climb_lever_priors.json"
+    },
+    {
+      "key": "hour_pop_score_bias",
+      "decision": "ban",
+      "reason": "Cross-city prior (MEL): hour-pop bias rarely helps.",
+      "source": "scripts/data/climb_lever_priors.json"
+    },
+    {
+      "key": "gauss_geo_bias",
+      "decision": "ban",
+      "reason": "Optional early loser; keep geo_score_bias instead.",
+      "source": "scripts/data/climb_lever_priors.json ban_keys_optional_early"
+    }
+  ],
+  "notes": "Subsequent densify waves must not sweep banned keys. Fixed base min_history_length=1."
+}

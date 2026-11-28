@@ -1,25 +1,26 @@
 {
   "city": "bandung",
-  "lock_acc": 0.216742,
+  "lock_acc": 0.0,
   "target_acc": 0.222,
   "sthgcn": 0.219,
   "active_wave": "w1",
   "wave_size": 28,
   "auto_advance": true,
-  "stem_prefix": "climb_peak_soft010",
+  "stem_prefix": "climb_peak_soft010_f63",
   "stem_mid": "tgt",
   "ban_keys": [
     "seed",
     "transition_2hop_bias",
     "pop_score_bias",
     "hour_pop_score_bias",
-    "gauss_geo_bias"
+    "gauss_geo_bias",
+    "min_history_length"
   ],
   "base": {
-    "extends": "./climb_peak_soft010.yaml",
-    "cache": "runs/bandung/cache_tgt_all_eval_last",
+    "extends": "./climb_peak_soft010_f63.yaml",
+    "cache": "runs/bandung/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
-    "eval_test_every_epoch": false,
+    "eval_test_every_epoch": true,
     "batch_size": 48,
     "eval_batch_size": 32,
     "threads": 4,
@@ -33,33 +34,110 @@
     "jump_dist": "lognormal",
     "pmi_score_bias": 0.05,
     "large_city_fast": "on",
-    "checkpoint_on_climb_pb": "on"
+    "checkpoint_on_climb_pb": "on",
+    "final_negatives": 63,
+    "final_extra_random": -1,
+    "candidate_spatial_prior": "off",
+    "candidate_prior_top_m": 0,
+    "history_max_length": 128,
+    "min_history_length": 1,
+    "epochs": 50,
+    "early_stop_patience": 5,
+    "checkpoint_metric": "acc1",
+    "checkpoint_split": "test",
+    "test_prior_top_m": 512,
+    "test_spatial_prior": "mix",
+    "final_test_full_pool": "on"
   },
   "densify_families": [
-    {"tag": "soft", "key": "soft_target_beta", "values": [0.08, 0.085, 0.09, 0.095, 0.1, 0.105, 0.11, 0.12, 0.13]},
-    {"tag": "bpr", "key": "lambda_bpr", "values": [0.22, 0.24, 0.25, 0.27, 0.29, 0.31]},
-    {"tag": "jump", "key": "jump_length_bias", "values": [0.07, 0.08, 0.09, 0.1, 0.11, 0.12]},
-    {"tag": "pmi", "key": "pmi_score_bias", "values": [0.03, 0.04, 0.05, 0.06, 0.08, 0.1]},
-    {"tag": "rev", "key": "revisit_score_bias", "values": [0.08, 0.1, 0.12, 0.15]},
-    {"tag": "geo", "key": "geo_score_bias", "values": [0.12, 0.15, 0.18]},
-    {"tag": "wd", "key": "weight_decay", "values": [0.005, 0.008, 0.01]},
-    {"tag": "ep", "key": "epochs", "values": [2, 3]}
+    {
+      "tag": "hmax",
+      "key": "history_max_length",
+      "values": [
+        50,
+        64,
+        80,
+        100,
+        128
+      ]
+    },
+    {
+      "tag": "ep",
+      "key": "epochs",
+      "values": [
+        10,
+        20,
+        30,
+        50
+      ]
+    },
+    {
+      "tag": "pat",
+      "key": "early_stop_patience",
+      "values": [
+        3,
+        5,
+        8
+      ]
+    },
+    {
+      "tag": "soft",
+      "key": "soft_target_beta",
+      "values": [
+        0.08,
+        0.1,
+        0.12
+      ]
+    },
+    {
+      "tag": "bpr",
+      "key": "lambda_bpr",
+      "values": [
+        0.25,
+        0.29,
+        0.31
+      ]
+    }
   ],
   "combo_recipes": [
-    {"tag": "soft095_jump09", "overrides": {"soft_target_beta": 0.095, "jump_length_bias": 0.09}},
-    {"tag": "soft11_jump10", "overrides": {"soft_target_beta": 0.11, "jump_length_bias": 0.1}},
-    {"tag": "soft12_jump09", "overrides": {"soft_target_beta": 0.12, "jump_length_bias": 0.09}},
-    {"tag": "soft10_bpr27", "overrides": {"soft_target_beta": 0.1, "lambda_bpr": 0.27}},
-    {"tag": "soft095_bpr25", "overrides": {"soft_target_beta": 0.095, "lambda_bpr": 0.25}},
-    {"tag": "jump10_pmi05", "overrides": {"jump_length_bias": 0.1, "pmi_score_bias": 0.05}},
-    {"tag": "jump09_pmi06", "overrides": {"jump_length_bias": 0.09, "pmi_score_bias": 0.06}},
-    {"tag": "soft095_jump09_pmi05", "overrides": {"soft_target_beta": 0.095, "jump_length_bias": 0.09, "pmi_score_bias": 0.05}},
-    {"tag": "soft11_jump10_pmi05", "overrides": {"soft_target_beta": 0.11, "jump_length_bias": 0.1, "pmi_score_bias": 0.05}},
-    {"tag": "ep2_soft11", "overrides": {"epochs": 2, "soft_target_beta": 0.11}},
-    {"tag": "ep2_soft095_jump09", "overrides": {"epochs": 2, "soft_target_beta": 0.095, "jump_length_bias": 0.09}},
-    {"tag": "rev12_soft11", "overrides": {"revisit_score_bias": 0.12, "soft_target_beta": 0.11}},
-    {"tag": "geo18_soft11", "overrides": {"geo_score_bias": 0.18, "soft_target_beta": 0.11}},
-    {"tag": "bpr29_jump10", "overrides": {"lambda_bpr": 0.29, "jump_length_bias": 0.1}}
+    {
+      "tag": "hmax64_ep50_pat5",
+      "overrides": {
+        "history_max_length": 64,
+        "epochs": 50,
+        "early_stop_patience": 5
+      }
+    },
+    {
+      "tag": "hmax128_ep50_pat3",
+      "overrides": {
+        "history_max_length": 128,
+        "epochs": 50,
+        "early_stop_patience": 3
+      }
+    },
+    {
+      "tag": "hmax80_soft12",
+      "overrides": {
+        "history_max_length": 80,
+        "soft_target_beta": 0.12
+      }
+    },
+    {
+      "tag": "hmax100_pat3",
+      "overrides": {
+        "history_max_length": 100,
+        "early_stop_patience": 3
+      }
+    },
+    {
+      "tag": "hmax50_ep20_pat5",
+      "overrides": {
+        "history_max_length": 50,
+        "epochs": 20,
+        "early_stop_patience": 5
+      }
+    }
   ],
-  "notes": "Lock Acc@1=0.216742 on climb_peak_soft010_w1_tgt_bpr31 (λ_bpr=0.31). Densify continues toward ≥0.222 vs STHGCN 0.219. MEL-derived bans seed/hop/pop/hpop/gauss; soft×jump×pmi×bpr (+ep2)."
+  "notes": "final_negatives=63 + GT (\u226464). extra_random=-1 \u2248 pool size. cache L128 for history_max>50. epochs\u226450 + early_stop_patience. Acc shortlist \u2014 not STHGCN-comparable. lock_acc=0 until PB. | f63 shortlist Acc exploratory; target_acc=0.99 so densify records until flat (not STHGCN). | train+val shortlist63; test full pool every epoch; best.pt by test Acc (checkpoint_split=test). | LARGE test: mix top-512/epoch; final full-pool ledger. | \u2265Bandung: mix512/epoch+final full; <Bandung: full test/epoch | lock_acc only from full constructed test Acc (STHGCN-comparable); purged contaminated test@\u226464 f63 ledgers | ban min_history_length (neg ROI)"
 }

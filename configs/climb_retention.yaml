@@ -104,21 +104,28 @@ cities:
   bandung:
     status: ACTIVE
     aggressive_configs: false
-    keep_wave: w1
+    keep_wave: w2
+    keep_waves:
+    - w1
+    - w2
     keep_configs:
     - base.yaml
     - climb_peak_soft010.yaml
     - climb_peak_soft010_bpr31_lock.yaml
+    - climb_peak_soft010_f63.yaml
+    - climb_peak_soft010_f63_w2_tgt_ep3.yaml
     - peak.yaml
     - win.yaml
     keep_results:
     - climb_peak_soft010_bpr31_lock
-    - climb_peak_soft010_w1_tgt_bpr31
+    - climb_peak_soft010_f63_w1_tgt_hmax128_ep50_pat3
+    - climb_peak_soft010_f63_w2_tgt_ep3
     keep_results_prefixes:
-    - _w1_
-    - climb_peak_soft010_w1_
-    lock_acc: 0.216742
-    lock_config: configs/bandung/climb_peak_soft010_bpr31_lock.yaml
+    - climb_peak_soft010_f63_w1_
+    - climb_peak_soft010_f63_w2_
+    lock_acc: 0.195865
+    lock_config: configs/bandung/climb_peak_soft010_f63_w2_tgt_ep3.yaml
     target_acc: 0.222
-    notes: Interim lock Acc@1=0.216742 from w1 bpr31; densify continues toward ≥0.222
-      vs STHGCN 0.219.
+    notes: >-
+      Full-test ledger lock Acc@1=0.195865 (f63_w2 ep3). Keep both w1+w2 prefixes
+      while w1 still has pending trains.

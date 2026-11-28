@@ -9,10 +9,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "scripts" / "data" / "bdg_climb_policy.json"
 DEFAULT_BASE = {
-    "extends": "./climb_peak_soft010.yaml",
-    "cache": "runs/bandung/cache_tgt_all_eval_last",
+    "extends": "./climb_peak_soft010_f63.yaml",
+    "cache": "runs/bandung/cache_tgt_all_eval_last_L128",
     "session_summary": "on",
-    "eval_test_every_epoch": False,
+    "eval_test_every_epoch": True,
     "batch_size": 48,
     "eval_batch_size": 32,
     "threads": 4,
@@ -28,6 +28,17 @@ DEFAULT_BASE = {
     "pmi_score_bias": 0.05,
     "large_city_fast": "on",
     "checkpoint_on_climb_pb": "on",
+    "final_negatives": 63,
+    "final_extra_random": -1,
+    "history_max_length": 128,
+    "min_history_length": 1,
+    "epochs": 50,
+    "early_stop_patience": 5,
+    "checkpoint_metric": "acc1",
+    "checkpoint_split": "test",
+    "test_prior_top_m": 512,
+    "test_spatial_prior": "mix",
+    "final_test_full_pool": "on",
 }
 
 
@@ -92,6 +103,18 @@ def write_one(stem: str, overrides: dict, city_dir: Path, base: dict | None = No
         "epochs",
         "large_city_fast",
         "checkpoint_on_climb_pb",
+        "history_max_length",
+        "min_history_length",
+        "final_negatives",
+        "final_candidates",
+        "final_extra_random",
+        "final_candidates_seed",
+        "early_stop_patience",
+        "checkpoint_metric",
+        "checkpoint_split",
+        "test_prior_top_m",
+        "test_spatial_prior",
+        "final_test_full_pool",
     ):
         if k in cfg:
             lines.append(f"{k}: {_fmt(cfg.pop(k))}")
